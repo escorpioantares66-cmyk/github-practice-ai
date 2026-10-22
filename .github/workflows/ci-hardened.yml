@@ -14,10 +14,11 @@ jobs:
       - name: Install deps binary-only + build
         run: |
           pip install --upgrade pip
-          pip install --only-binary=:all: openai==1.40.0 httpx==0.27.0 cachetools pytest coverage build twine ruff -q
+          pip install --only-binary=:all: openai==1.40.0 httpx==0.27.0 cachetools pytest-asyncio pytest coverage build twine ruff -q
           pip install -e . --only-binary=:all: -q || pip install -e . -q
       - name: Ruff strict
-        run: ruff check .
+        run: |
+          ruff check .
       - name: Tests + Coverage 80% gate
         run: |
           PYTHONPATH=. CI=true OPENAI_API_KEY=sk-test-mocked coverage run -m pytest -q -o addopts=""
