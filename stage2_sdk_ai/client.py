@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import math
-from typing import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator
+from typing import Callable
 
 from cachetools import TTLCache
 
