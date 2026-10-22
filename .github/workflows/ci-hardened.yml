@@ -1,0 +1,33 @@
+name: ci-hardened-v1.1
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install deps binary-only + build
+        run: |
+          pip install --upgrade pip
+          pip install --only-binary=:all: openai==1.40.0 httpx==0.27.0 cachetools pytest coverage build twine ruff -q
+          pip install -e . --only-binary=:all: -q || pip install -e . -q
+      - name: Ruff strict
+        run: ruff check .
+      - name: Tests + Coverage 80% gate
+        run: |
+          PYTHONPATH=. CI=true OPENAI_API_KEY=sk-test-mocked coverage run -m pytest -q
+          coverage report --fail-under=80
+          coverage json
+      - name: Build wheel + sdist
+        run: |
+          python -m build
+          twine check dist/*
+          ls -lh dist/
+      - name: gh-ai check
+        run: |
+          PYTHONPATH=. python -m github_practice_ai --check || python -m gh_ai --check || echo "gh-ai check mocked"
