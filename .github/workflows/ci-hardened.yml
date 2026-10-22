@@ -20,7 +20,7 @@ jobs:
         run: ruff check .
       - name: Tests + Coverage 80% gate
         run: |
-          PYTHONPATH=. CI=true OPENAI_API_KEY=sk-test-mocked coverage run -m pytest -q
+          PYTHONPATH=. CI=true OPENAI_API_KEY=sk-test-mocked coverage run -m pytest -q -o addopts=""
           coverage report --fail-under=80
           coverage json
       - name: Build wheel + sdist
