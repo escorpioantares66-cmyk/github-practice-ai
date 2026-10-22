@@ -8,6 +8,8 @@ class AIConfig:
     cache_ttl_seconds: int = 300
     concurrency: int = 3
     max_retries: int = 3
+    embedding_model: str = "text-embedding-3-small"
+    top_k: int = 3
 
     def masked_key(self) -> str:
         k = self.api_key
