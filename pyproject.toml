@@ -1,35 +1,41 @@
 [project]
 name = "github-practice-ai"
-version = "0.1.0"
-description = "Senior production-ready AI SDK - README=Reality, strict CI, mocked tests"
+version = "1.0.0-senior"
+description = "Senior production-ready AI SDK - frozen AIConfig, semaphore 3, TTL cache, RAG, Agent, Tracing, Orchestrator, Swarm, GuardedEval - built mobile-first on Termux"
 readme = "README.md"
-requires-python = ">=3.10"
-license = {text = "【entity-MIT¦canonical_name=MIT】"}
+requires-python = ">=3.9"
+license = { text = "【entity-MIT¦canonical_name=MIT】" }
 dependencies = [
-    "github-practice==0.4.2",
-    "httpx==0.27.0",
     "openai==1.40.0",
+    "httpx==0.27.0",
+    "cachetools>=5.0",
+    "anyio>=4.0",
 ]
+
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "respx", "pytest-cov", "ruff"]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.9.0",
+]
 
 [project.scripts]
 gh-ai = "stage2_sdk_ai.cli:main"
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["stage2_sdk_ai"]
-
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py39"
 
 [tool.ruff.lint]
-select = ["E","F","I","B","C4"]
+select = ["E", "F", "I", "B", "C4", "UP", "B9"]
+ignore = []
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
-addopts = "--cov=stage2_sdk_ai --cov-fail-under=50"
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-v --cov=stage2_sdk_ai --cov-report=term --cov-fail-under=50"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
