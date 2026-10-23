@@ -1,6 +1,6 @@
 [project]
 name = "github-practice-ai"
-version = "1.0.0"
+version = "1.1.1"
 description = "Senior production-ready AI SDK - frozen AIConfig, semaphore 3, TTL cache, RAG, Agent, Tracing, Orchestrator, Swarm, GuardedEval - built mobile-first on Termux"
 readme = "README.md"
 requires-python = ">=3.9"
