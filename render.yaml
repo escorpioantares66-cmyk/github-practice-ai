@@ -1,0 +1,11 @@
+services:
+    - type: web
+    name: github-practice-ai
+    env: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+            - key: AGENT_API_KEYS
+        sync: false
+            - key: OPENAI_API_KEY
+        sync: false
