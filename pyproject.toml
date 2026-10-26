@@ -39,3 +39,5 @@ addopts = "-v --cov=stage2_sdk_ai --cov-report=term --cov-fail-under=50"
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
+[tool.setuptools]
+packages = ["stage2_sdk_ai"]

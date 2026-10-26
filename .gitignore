@@ -7,3 +7,7 @@ dist/
 build/
 .venv/
 venv/
+logs/
+approvals/
+notes/
+.test_*
