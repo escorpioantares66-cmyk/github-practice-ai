@@ -15,8 +15,7 @@ os.environ.setdefault("CI", "true")
 import pytest
 from fastapi.testclient import TestClient
 
-from stage2_sdk_ai import auth
-from stage2_sdk_ai import cost_guard
+from stage2_sdk_ai import auth, cost_guard
 from stage2_sdk_ai.api import app
 
 VALID_KEY = "test-key-123"
