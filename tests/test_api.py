@@ -3,9 +3,8 @@
 Unlike tests/test_rag_phase3.py (which calls query_compat() in-process and
 never touches auth, HTTP status codes, or the dependency chain), these use
 fastapi.testclient.TestClient to drive real requests through the app --
-including the X-API-Key header, auth failures, and rate limiting. This is
-the test that should have existed before api.py shipped: it would have
-caught auth.verify_api_key/check_rate_limit not existing immediately.
+including the X-API-Key header, auth failures, rate limiting, request-id
+tracing, and unhandled-exception handling.
 """
 import os
 
@@ -15,7 +14,7 @@ os.environ.setdefault("CI", "true")
 import pytest
 from fastapi.testclient import TestClient
 
-from stage2_sdk_ai import auth, cost_guard
+from stage2_sdk_ai import auth
 from stage2_sdk_ai.api import app
 
 VALID_KEY = "test-key-123"
@@ -25,10 +24,8 @@ VALID_KEY = "test-key-123"
 def _reset_auth_state(monkeypatch):
     monkeypatch.setenv("AGENT_API_KEYS", VALID_KEY)
     auth.reset_rate()
-    cost_guard.reset_cost()
     yield
     auth.reset_rate()
-    cost_guard.reset_cost()
 
 
 @pytest.fixture
@@ -98,3 +95,34 @@ def test_write_requires_approval(client):
 def test_write_without_api_key_is_401(client):
     resp = client.post("/write", json={"path": "x.md", "content": "y"})
     assert resp.status_code == 401
+
+
+def test_every_response_carries_a_request_id_header(client):
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+    assert "x-request-id" in resp.headers
+    assert len(resp.headers["x-request-id"]) > 0
+
+
+def test_unhandled_exception_returns_clean_json_not_a_traceback(client, monkeypatch):
+    """Before the Step B exception handler existed, this exact scenario --
+    an unexpected exception inside /query -- would have 500'd with a raw
+    stack trace leaked to the caller. Now it returns clean JSON with a
+    request_id the operator can grep for in the logs."""
+    import stage2_sdk_ai.api as api_mod
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated unexpected failure")
+
+    monkeypatch.setattr(api_mod, "run_agent", _boom)
+    resp = client.post(
+        "/query", json={"query": "hi"}, headers={"X-API-Key": VALID_KEY}
+    )
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["error"] == "internal_error"
+    assert "request_id" in body and body["request_id"]
+    assert "Traceback" not in resp.text
+    assert "RuntimeError" not in resp.text
+    assert "x-request-id" in resp.headers
+    assert resp.headers["x-request-id"] == body["request_id"]

@@ -1,17 +1,73 @@
-import pydantic
-
-if not hasattr(pydantic.BaseModel, "model_fields"):
-    pass
-
+import time
+import uuid
 from typing import Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+import pydantic
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from stage2_sdk_ai import auth, cost_guard, input_guard, output_guard
 from stage2_sdk_ai.agent_loop import run_agent
+from stage2_sdk_ai.logging_setup import get_logger
+
+if not hasattr(pydantic.BaseModel, "model_fields"):
+    pass
+
+logger = get_logger(__name__)
 
 app = FastAPI(title="github-practice-ai v7.0-prod")
+
+
+@app.middleware("http")
+async def add_request_id_and_log(request: Request, call_next):
+    """Tags every request with an id (returned as X-Request-ID and attached
+    to request.state), logs one structured line per request with its
+    outcome, and converts any unhandled exception into clean JSON instead
+    of leaking a stack trace.
+
+    Note: the exception handling lives HERE, in the middleware's own
+    try/except, rather than in a separate @app.exception_handler(Exception).
+    When a custom @app.middleware("http") is present, FastAPI's exception
+    handlers are not reliably invoked for exceptions raised deeper in the
+    stack -- Starlette's BaseHTTPMiddleware (which powers @app.middleware)
+    re-raises past them instead of letting them convert the exception to a
+    response. Catching it directly around call_next() here is the correct,
+    documented workaround for that interaction.
+    """
+    request_id = str(uuid.uuid4())
+    request.state.request_id = request_id
+    start = time.time()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        logger.error(
+            "unhandled exception",
+            exc_info=exc,
+            extra={
+                "request_id": request_id,
+                "path": request.url.path,
+                "method": request.method,
+            },
+        )
+        response = JSONResponse(
+            status_code=500,
+            content={"error": "internal_error", "request_id": request_id},
+        )
+    duration_ms = (time.time() - start) * 1000
+    response.headers["X-Request-ID"] = request_id
+    logger.info(
+        "request completed",
+        extra={
+            "request_id": request_id,
+            "path": request.url.path,
+            "method": request.method,
+            "status_code": response.status_code,
+            "duration_ms": round(duration_ms, 2),
+        },
+    )
+    return response
+
 
 class QueryReq(BaseModel):
     query: str

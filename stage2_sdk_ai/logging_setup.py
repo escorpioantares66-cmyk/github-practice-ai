@@ -5,14 +5,15 @@ service running under Docker/Render, since those platforms capture
 stdout as the log stream rather than a file. A bare `print()` gives
 you unstructured text with no level, no timestamp, and nothing to
 correlate across a request; this gives every log line a timestamp,
-a level, the logger name, and (when passed via `extra={"request_id": ...}`)
-a request id so a failure can be traced end to end.
+a level, the logger name, and any fields passed via `extra={...}`
+(request_id, path, status_code, duration_ms -- whatever the caller
+wants to attach) so a failure can be traced end to end.
 
 Usage:
     from stage2_sdk_ai.logging_setup import get_logger
     logger = get_logger(__name__)
-    logger.info("agent started", extra={"request_id": rid})
-    logger.exception("agent failed", extra={"request_id": rid})
+    logger.info("request completed", extra={"request_id": rid, "status_code": 200})
+    logger.error("request failed", exc_info=exc, extra={"request_id": rid})
 """
 from __future__ import annotations
 
@@ -20,6 +21,16 @@ import json
 import logging
 import sys
 import time
+
+# Attributes every LogRecord carries by default. Anything else found on a
+# record -- i.e. whatever a caller passed via extra={...} -- is assumed to
+# be deliberate structured context and gets included in the JSON output.
+_STANDARD_ATTRS = {
+    "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+    "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+    "created", "msecs", "relativeCreated", "thread", "threadName",
+    "processName", "process", "taskName", "message",
+}
 
 
 class _JsonFormatter(logging.Formatter):
@@ -30,11 +41,12 @@ class _JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        request_id = getattr(record, "request_id", None)
-        if request_id:
-            payload["request_id"] = request_id
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
+        for key, value in record.__dict__.items():
+            if key in _STANDARD_ATTRS or key in payload:
+                continue
+            payload[key] = value
         return json.dumps(payload, default=str)
 
 
