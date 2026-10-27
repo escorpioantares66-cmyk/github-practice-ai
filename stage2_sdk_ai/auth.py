@@ -27,3 +27,9 @@ def check_rate(api_key: str) -> dict[str, object]:
 
 def reset_rate() -> None:
     _rate.clear()
+
+def verify_api_key(api_key: str | None) -> bool:
+    return check_auth(api_key).get("is_ok", False)
+
+def check_rate_limit(api_key: str) -> bool:
+    return check_rate(api_key).get("is_ok", False)

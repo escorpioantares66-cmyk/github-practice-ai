@@ -25,7 +25,8 @@ class WriteReq(BaseModel):
 def _check_auth(x_api_key: Optional[str] = Header(None)):
     if not auth.verify_api_key(x_api_key or ""):
         raise HTTPException(status_code=401, detail="Invalid API key")
-    auth.check_rate_limit(x_api_key or "anon")
+    if not auth.check_rate_limit(x_api_key or "anon"):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
     return x_api_key
 
 @app.get("/healthz")
@@ -42,11 +43,11 @@ def query_endpoint(req: QueryReq, api_key: str = Depends(_check_auth)):
     chk = input_guard.check_input(q)
     if not chk.get("is_safe", True):
         return {"answer": "blocked by input_guard", "blocked": True}
-    if not cost_guard.check_budget(len(q)):
+    if not cost_guard.check_budget(api_key, q):
         return {"answer": "cost limit $1 exceeded", "blocked": True}
     res = run_agent(q, top_k=req.top_k or 5)
     out = output_guard.check_output(res.get("answer", ""), res.get("sources", []))
-    cost_guard.add_cost(len(q) + len(res.get("answer", "")))
+    cost_guard.add_cost(api_key, q + res.get("answer", ""))
     return {
         "answer": res.get("answer"),
         "confidence": out.get("confidence"),

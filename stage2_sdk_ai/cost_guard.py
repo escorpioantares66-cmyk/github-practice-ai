@@ -70,3 +70,6 @@ def check(api_key: str = "", text: str = "") -> dict:
 
 def is_over_limit(api_key: str = "test-key-123") -> bool:
     return COSTS.get(api_key, 0) > DAILY_LIMIT
+
+def check_budget(api_key: str, text: str = "") -> bool:
+    return check_cost(api_key, text).get("is_ok", False)
