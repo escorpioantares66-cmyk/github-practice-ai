@@ -4,7 +4,10 @@ import json
 import os
 from typing import Any
 
+from .logging_setup import get_logger
 from .tools import TOOL_REGISTRY, _is_mock
+
+logger = get_logger(__name__)
 
 
 def _mock_llm_pick_tool(query: str, step: int) -> dict[str, Any]:
@@ -22,7 +25,10 @@ def _real_llm_pick_tool(
     key = os.getenv("OPENAI_API_KEY", "").strip()
 
     if not key:
-        print("OPENAI_API_KEY is missing; using mock fallback.")
+        logger.warning(
+            "OPENAI_API_KEY missing; falling back to mock tool-picker",
+            extra={"event": "llm_fallback", "reason": "missing_api_key"},
+        )
         return _mock_llm_pick_tool(query, len(history))
 
     try:
@@ -60,11 +66,19 @@ def _real_llm_pick_tool(
         return result
 
     except ImportError:
-        print("OpenAI package unavailable; using mock fallback.")
+        logger.warning(
+            "openai package not installed; falling back to mock tool-picker",
+            extra={"event": "llm_fallback", "reason": "import_error"},
+        )
     except Exception as exc:
-        print(
-            f"OpenAI request failed: {type(exc).__name__}: {exc}; "
-            "using mock fallback."
+        logger.warning(
+            "OpenAI request failed; falling back to mock tool-picker",
+            exc_info=exc,
+            extra={
+                "event": "llm_fallback",
+                "reason": "request_failed",
+                "exception_type": type(exc).__name__,
+            },
         )
 
     return _mock_llm_pick_tool(query, len(history))
