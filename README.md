@@ -21,3 +21,4 @@ pip install github-practice-ai==1.1.1
 # Termux aarch64 Python 3.14 bypass jiter Rust hell:
 pip install github-practice-ai==1.1.1 --no-deps
 pip install --only-binary=:all: openai==1.40.0 httpx==0.27.0 cachetools anyio -q || true
+<- Chunking, metadata filter, hybrid, CI verification trigger: 2026-10-27T03:17:49Z -->
