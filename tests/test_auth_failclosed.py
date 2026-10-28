@@ -11,9 +11,7 @@ These tests verify:
      rejects every key -- fail closed.
   3. Production mode with AGENT_API_KEYS configured accepts only those keys.
 """
-import pytest
-
-from stage2_sdk_ai.auth import check_auth, _allowed_keys
+from stage2_sdk_ai.auth import _allowed_keys, check_auth
 
 
 def test_mock_mode_accepts_test_key(monkeypatch):
