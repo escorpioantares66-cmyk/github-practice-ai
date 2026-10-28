@@ -4,31 +4,21 @@ import os
 import time
 from collections import defaultdict
 
-from .tools import _is_mock
 
 _rate: dict[str, list[float]] = defaultdict(list)
 _MAX_PER_MIN = 10
 
 
 def _allowed_keys() -> list[str]:
-    """Return the list of valid API keys.
+    """Return explicitly configured API keys.
 
-    In mock/CI mode (no OPENAI_API_KEY set) we fall back to the well-known
-    test key so the test suite works without any environment setup.
-
-    In production mode (real OPENAI_API_KEY present) we require
-    AGENT_API_KEYS to be explicitly configured.  If it is missing or empty
-    we return an empty list, which means *every* request is rejected -- a
-    fail-closed posture that prevents a stale default from becoming an
-    unauthenticated back-door.
+    API authentication must not depend on AI mock mode or the presence
+    of OPENAI_API_KEY. Missing AGENT_API_KEYS fails closed.
     """
     raw = os.getenv("AGENT_API_KEYS", "").strip()
-    if raw:
-        return [k.strip() for k in raw.split(",") if k.strip()]
-    if _is_mock():
-        return ["test-key-123"]
-    # Production with no AGENT_API_KEYS configured: fail closed.
-    return []
+    if not raw:
+        return []
+    return [key.strip() for key in raw.split(",") if key.strip()]
 
 
 def check_auth(api_key: str | None) -> dict[str, object]:

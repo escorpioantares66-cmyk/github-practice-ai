@@ -14,11 +14,19 @@ These tests verify:
 from stage2_sdk_ai.auth import _allowed_keys, check_auth
 
 
-def test_mock_mode_accepts_test_key(monkeypatch):
-    """CI: no OPENAI_API_KEY → fall back to test-key-123 so tests pass."""
+def test_explicit_test_key_is_accepted(monkeypatch):
+    """A test key is accepted only when explicitly configured."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("AGENT_API_KEYS", "test-key-123")
+    assert check_auth("test-key-123")["is_ok"] is True
+
+
+def test_missing_keys_fails_closed_without_openai_key(monkeypatch):
+    """A missing OpenAI key must not enable a default API credential."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("AGENT_API_KEYS", raising=False)
-    assert check_auth("test-key-123")["is_ok"] is True
+    assert check_auth("test-key-123")["is_ok"] is False
+    assert _allowed_keys() == []
 
 
 def test_production_mode_no_agent_keys_fails_closed(monkeypatch):
