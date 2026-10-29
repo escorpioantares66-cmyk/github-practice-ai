@@ -39,7 +39,7 @@ def test_real_mode_unapproved_id_returns_current_status(monkeypatch):
 
 def test_real_mode_unknown_approval_id_returns_not_found(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
-    res = write_note("ghost.md", "content", approval_id="does-not-exist")
+    res = write_note("ghost.md", "content", approval_id="deadbeef")
     assert res["status"] == "not_found"
     assert res["is_mock"] is False
 

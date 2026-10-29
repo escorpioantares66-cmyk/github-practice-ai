@@ -7,6 +7,7 @@ from typing import Any
 from .approval import approve, check_approval, request_approval
 
 _notes_dir = Path("notes")
+MAX_NOTE_CHARS = 5_000
 
 def _is_mock() -> bool:
     key = os.getenv("OPENAI_API_KEY", "")
@@ -14,8 +15,18 @@ def _is_mock() -> bool:
 
 def write_note(path: str, content: str, approval_id: str | None = None) -> dict[str, Any]:
     safe_path = _notes_dir / Path(path).name
+    mock_mode = _is_mock()
 
-    if _is_mock():
+    if len(content) > MAX_NOTE_CHARS:
+        return {
+            "tool": "write_note",
+            "path": str(safe_path),
+            "status": "rejected",
+            "error": f"Content exceeds {MAX_NOTE_CHARS} characters",
+            "is_mock": mock_mode,
+        }
+
+    if mock_mode:
         return {
             "tool": "write_note",
             "path": str(safe_path),

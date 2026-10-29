@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from pathlib import Path
@@ -12,6 +13,15 @@ _audit_file = Path("logs/audit.jsonl")
 def _ensure_dirs() -> None:
     _approvals_dir.mkdir(exist_ok=True)
     _audit_file.parent.mkdir(exist_ok=True)
+
+def _approval_path(approval_id: str) -> Path | None:
+    """Return a path only for IDs matching the generated eight-hex format."""
+    if not isinstance(approval_id, str) or not re.fullmatch(
+        r"[0-9a-f]{8}", approval_id
+    ):
+        return None
+    return _approvals_dir / f"{approval_id}.json"
+
 
 def request_approval(
     tool: str, args: dict[str, Any], requester: str = "agent"
@@ -34,7 +44,9 @@ def request_approval(
 
 def check_approval(approval_id: str) -> dict[str, Any]:
     _ensure_dirs()
-    path = _approvals_dir / f"{approval_id}.json"
+    path = _approval_path(approval_id)
+    if path is None:
+        return {"status": "invalid_id", "id": approval_id}
     if not path.exists():
         return {"status": "not_found", "id": approval_id}
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -42,10 +54,18 @@ def check_approval(approval_id: str) -> dict[str, Any]:
 
 def approve(approval_id: str, approver: str = "human") -> dict[str, Any]:
     _ensure_dirs()
-    path = _approvals_dir / f"{approval_id}.json"
+    path = _approval_path(approval_id)
+    if path is None:
+        return {"status": "invalid_id", "id": approval_id}
     if not path.exists():
         return {"status": "not_found", "id": approval_id}
     data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("status") != "pending":
+        return {
+            "status": "invalid_transition",
+            "id": approval_id,
+            "current_status": data.get("status"),
+        }
     data["status"] = "approved"
     data["approver"] = approver
     data["approved_at"] = time.time()
@@ -55,10 +75,18 @@ def approve(approval_id: str, approver: str = "human") -> dict[str, Any]:
 
 def deny(approval_id: str, approver: str = "human", reason: str = "") -> dict[str, Any]:
     _ensure_dirs()
-    path = _approvals_dir / f"{approval_id}.json"
+    path = _approval_path(approval_id)
+    if path is None:
+        return {"status": "invalid_id", "id": approval_id}
     if not path.exists():
         return {"status": "not_found", "id": approval_id}
     data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("status") != "pending":
+        return {
+            "status": "invalid_transition",
+            "id": approval_id,
+            "current_status": data.get("status"),
+        }
     data["status"] = "denied"
     data["approver"] = approver
     data["reason"] = reason

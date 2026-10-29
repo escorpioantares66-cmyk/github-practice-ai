@@ -110,15 +110,30 @@ def query_endpoint(req: QueryReq, api_key: str = Depends(_check_auth)):
         "sources": res.get("sources", []),
     }
 
+
 @app.post("/write")
 def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
     from stage2_sdk_ai import approval as appr_mod
-    r = appr_mod.request_approval(req.path, req.content)
+    from stage2_sdk_ai.write_tools import MAX_NOTE_CHARS
+
+    if len(req.content) > MAX_NOTE_CHARS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Content exceeds {MAX_NOTE_CHARS} characters",
+        )
+
+    r = appr_mod.request_approval(
+        "write_note",
+        {"path": req.path, "content": req.content},
+    )
+    approval_id = r.get("id") or r.get("approval_id")
+
     return {
         "needs_approval": True,
-        "approval_id": r.get("id") or r.get("approval_id"),
+        "approval_id": approval_id,
         "id": r.get("id"),
     }
+
 
 @app.post("/approve")
 def approve_endpoint(approval_id: str, api_key: str = Depends(_check_auth)):
