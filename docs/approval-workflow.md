@@ -40,7 +40,19 @@ X-Approver-Key: <approver-secret>
 
 Only a configured approver key can perform this transition. Only `pending` records can be approved or denied. The normal API key is not accepted as an approver credential.
 
-### 3. Execute the approved write
+### 3. Deny a request when it should not proceed
+
+~~~http
+POST /deny
+X-Approver-Key: <approver-secret>
+Content-Type: application/json
+
+{"approval_id":"<approval-id>","reason":"Not authorized"}
+~~~
+
+Denial is a terminal transition. A denied request cannot be approved or executed.
+
+### 4. Execute the approved write
 
 ~~~http
 POST /write/execute
