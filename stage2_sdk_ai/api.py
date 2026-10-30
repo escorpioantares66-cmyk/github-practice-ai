@@ -102,9 +102,10 @@ def _check_approver_auth(
             status_code=403,
             detail="Invalid or missing approver credentials",
         )
-    if not auth.check_rate_limit(f"approver:{x_approver_key}"):
+    identity = auth.approver_identity(x_approver_key or "")
+    if not auth.check_rate_limit(identity):
         raise HTTPException(status_code=429, detail="Approver rate limit exceeded")
-    return "authenticated_approver"
+    return identity
 
 @app.get("/healthz")
 def healthz():
