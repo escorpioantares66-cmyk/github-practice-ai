@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
 from .approval import approve, consume_approval, consume_approval_request, request_approval
+from .secure_storage import ensure_private_directory, write_text_atomically
 
 _notes_dir = Path("notes")
 MAX_NOTE_CHARS = 5_000
@@ -27,19 +27,9 @@ def canonical_note_path(path: str) -> Path:
 
 
 def _atomic_write_note(path: Path, content: str) -> None:
-    _notes_dir.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=_notes_dir
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as temporary_file:
-            temporary_file.write(content)
-            temporary_file.flush()
-            os.fsync(temporary_file.fileno())
-        os.replace(temporary_name, path)
-    finally:
-        if os.path.exists(temporary_name):
-            os.unlink(temporary_name)
+    """Write a note without following a destination symlink."""
+    ensure_private_directory(_notes_dir)
+    write_text_atomically(path, content, _notes_dir)
 
 
 def _validate_note_payload(path: Any, content: Any) -> tuple[Path | None, str | None]:
@@ -47,6 +37,8 @@ def _validate_note_payload(path: Any, content: Any) -> tuple[Path | None, str | 
         return None, "Content must be text"
     if len(content) > MAX_NOTE_CHARS:
         return None, f"Content exceeds {MAX_NOTE_CHARS} characters"
+    if not isinstance(path, str):
+        return None, "Approved note path is not canonical"
     try:
         safe_path = canonical_note_path(path)
     except (TypeError, ValueError):
