@@ -7,9 +7,10 @@ import re
 import secrets
 import tempfile
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 _approvals_dir = Path("approvals")
 _audit_file = Path("logs/audit.jsonl")
