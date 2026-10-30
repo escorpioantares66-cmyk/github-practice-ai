@@ -297,3 +297,67 @@ def test_concurrent_execute_has_exactly_one_winner(client, monkeypatch, tmp_path
 
     assert sorted(response.status_code for response in responses) == [200, 409]
     assert (tmp_path / "notes" / "race.md").read_text(encoding="utf-8") == "one authorized write"
+
+
+
+def test_approver_can_deny_and_denied_request_cannot_execute(client, monkeypatch):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    requested = client.post(
+        "/write",
+        json={"path": "denied.md", "content": "must never be written"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    approval_id = requested.json()["approval_id"]
+
+    denied = client.post(
+        "/deny",
+        json={"approval_id": approval_id, "reason": "Not authorized for release"},
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    )
+    assert denied.status_code == 200
+    assert denied.json()["status"] == "denied"
+
+    executed = client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert executed.status_code == 409
+
+
+def test_deny_requires_separate_approver_credential(client):
+    requested = client.post(
+        "/write",
+        json={"path": "protected.md", "content": "protected"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    approval_id = requested.json()["approval_id"]
+
+    denied = client.post(
+        "/deny",
+        json={"approval_id": approval_id, "reason": "attempt"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert denied.status_code == 403
+
+
+def test_deny_rejects_oversized_reason(client, monkeypatch):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    requested = client.post(
+        "/write",
+        json={"path": "reason.md", "content": "content"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    approval_id = requested.json()["approval_id"]
+
+    denied = client.post(
+        "/deny",
+        json={"approval_id": approval_id, "reason": "x" * 501},
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    )
+    assert denied.status_code == 422
+    assert client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
+        headers={"X-API-Key": VALID_KEY},
+    ).status_code == 409
