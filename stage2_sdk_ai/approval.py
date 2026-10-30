@@ -138,10 +138,17 @@ def deny(
 
 
 
-def consume_approval(
-    approval_id: str, tool: str, args: dict[str, Any]
+def consume_approval_request(
+    approval_id: str,
+    tool: str,
+    args: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Atomically consume an approval for one exact operation, once only."""
+    """Atomically consume an approved operation and return its stored payload.
+
+    When args is supplied, it must exactly match the approved arguments.
+    Omitting args is reserved for trusted server-side execution that loads
+    the immutable approved payload from the record itself.
+    """
     _ensure_dirs()
     path = _approval_path(approval_id)
     if path is None:
@@ -161,7 +168,9 @@ def consume_approval(
                 "current_status": data.get("status"),
             }
 
-        if data.get("tool") != tool or data.get("args") != args:
+        if data.get("tool") != tool or (
+            args is not None and data.get("args") != args
+        ):
             return {"status": "approval_mismatch", "id": approval_id}
 
         data["status"] = "consumed"
@@ -170,6 +179,12 @@ def consume_approval(
         log_audit("consumed", data)
         return data
 
+
+def consume_approval(
+    approval_id: str, tool: str, args: dict[str, Any]
+) -> dict[str, Any]:
+    """Consume an approval only when the caller's exact args match."""
+    return consume_approval_request(approval_id, tool, args)
 
 def log_audit(action: str, record: dict[str, Any]) -> None:
     _ensure_dirs()
