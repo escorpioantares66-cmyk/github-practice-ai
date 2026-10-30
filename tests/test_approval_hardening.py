@@ -92,3 +92,27 @@ def test_legacy_8_character_approval_id_remains_supported(
 
     result = approval.approve(legacy_id, approver="test-human")
     assert result["status"] == "approved"
+
+
+
+def test_concurrent_approve_and_deny_have_one_winner(monkeypatch, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    setup_approval_dirs(monkeypatch, tmp_path)
+    request = approval.request_approval("write_note", {"path": "a.md"})
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        approve_future = executor.submit(approval.approve, request["id"])
+        deny_future = executor.submit(
+            approval.deny, request["id"], reason="concurrent denial"
+        )
+        results = [approve_future.result(), deny_future.result()]
+
+    statuses = sorted(result["status"] for result in results)
+    assert statuses in (
+        ["approved", "invalid_transition"],
+        ["denied", "invalid_transition"],
+    )
+    final_record = approval.check_approval(request["id"])
+    assert final_record["status"] in {"approved", "denied"}
+    assert sum(result["status"] == "invalid_transition" for result in results) == 1
