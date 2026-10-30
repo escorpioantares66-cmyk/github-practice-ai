@@ -109,6 +109,9 @@ def _check_approver_auth(
     if not auth.check_rate_limit(identity):
         raise HTTPException(status_code=429, detail="Approver rate limit exceeded")
     return x_approver_key or ""
+
+
+@app.get("/healthz")
 def healthz():
     return {"status": "ok", "version": "v7.0-prod", "tests": "39 passed"}
 

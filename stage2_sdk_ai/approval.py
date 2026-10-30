@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from . import auth
-
 from .secure_storage import (
     ensure_private_directory,
     fsync_directory,
@@ -31,7 +30,7 @@ def _ensure_dirs() -> None:
 
 
 def _approval_path(approval_id: str) -> Path | None:
-    """Return a path only for valid legacy or new approval IDs."""
+    """Return a path only for a valid 128-bit approval ID."""
     if not isinstance(approval_id, str) or not re.fullmatch(
         r"[0-9a-f]{32}", approval_id
     ):

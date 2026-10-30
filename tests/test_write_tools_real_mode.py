@@ -90,7 +90,7 @@ def test_approved_id_cannot_be_reused_for_different_content(
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
     request = write_tools.write_note("safe.md", "approved text")
-    approval.approve(request["approval_id"])
+    approval.approve(request["approval_id"], approver_key="test-approver-secret")
 
     result = write_tools.write_note(
         "safe.md", "replacement text", approval_id=request["approval_id"]
@@ -106,7 +106,7 @@ def test_approved_id_cannot_be_reused_for_different_path(
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
     request = write_tools.write_note("approved.md", "approved text")
-    approval.approve(request["approval_id"])
+    approval.approve(request["approval_id"], approver_key="test-approver-secret")
 
     result = write_tools.write_note(
         "other.md", "approved text", approval_id=request["approval_id"]
@@ -143,7 +143,7 @@ def test_approval_cannot_be_replayed_after_successful_write(
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
     request = write_tools.write_note("once.md", "one-time content")
-    approval.approve(request["approval_id"])
+    approval.approve(request["approval_id"], approver_key="test-approver-secret")
 
     first = write_tools.write_note(
         "once.md", "one-time content", approval_id=request["approval_id"]
@@ -169,7 +169,7 @@ def test_atomic_write_replaces_symlink_without_modifying_target(
     (notes_dir / "linked.md").symlink_to(outside_file)
 
     request = write_tools.write_note("linked.md", "approved note")
-    approval.approve(request["approval_id"])
+    approval.approve(request["approval_id"], approver_key="test-approver-secret")
     result = write_tools.write_note(
         "linked.md", "approved note", approval_id=request["approval_id"]
     )

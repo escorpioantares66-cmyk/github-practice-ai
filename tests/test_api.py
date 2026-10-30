@@ -142,7 +142,7 @@ def test_approve_without_approver_key_is_forbidden(client):
 
 def test_normal_api_key_cannot_approve(client):
     resp = client.post(
-        "/approve?approval_id=deadbeef",
+        "/approve?approval_id=" + "d" * 32,
         headers={"X-API-Key": VALID_KEY},
     )
     assert resp.status_code == 403
@@ -152,7 +152,7 @@ def test_wrong_approver_key_is_forbidden(client, monkeypatch):
     monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
 
     resp = client.post(
-        "/approve?approval_id=deadbeef",
+        "/approve?approval_id=" + "d" * 32,
         headers={"X-Approver-Key": "wrong-approver-secret"},
     )
     assert resp.status_code == 403
@@ -269,7 +269,7 @@ def test_execute_pending_approval_conflicts(client, monkeypatch):
 def test_approve_unknown_id_returns_not_found(client, monkeypatch):
     monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
     response = client.post(
-        "/approve?approval_id=deadbeef",
+        "/approve?approval_id=" + "d" * 32,
         headers={"X-Approver-Key": "correct-approver-secret"},
     )
     assert response.status_code == 404

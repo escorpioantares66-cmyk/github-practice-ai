@@ -47,7 +47,7 @@ def test_denied_request_cannot_be_approved(monkeypatch, tmp_path):
     result = approval.deny(request["id"], approver_key=APPROVER_KEY, reason="not permitted")
     assert result["status"] == "denied"
 
-    repeated = approval.approve(request["id"])
+    repeated = approval.approve(request["id"], approver_key=APPROVER_KEY)
     assert repeated["status"] == "invalid_transition"
     assert repeated["current_status"] == "denied"
     assert approval.check_approval(request["id"])["status"] == "denied"
