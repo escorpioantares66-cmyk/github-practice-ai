@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
 import time
@@ -65,3 +66,10 @@ def verify_approver_key(approver_key: str | None) -> bool:
         hmac.compare_digest(approver_key, key)
         for key in allowed
     )
+
+
+
+def approver_identity(approver_key: str) -> str:
+    """Return a non-secret stable audit/rate-limit identifier for a valid key."""
+    fingerprint = hashlib.sha256(approver_key.encode("utf-8")).hexdigest()[:12]
+    return f"approver-{fingerprint}"
