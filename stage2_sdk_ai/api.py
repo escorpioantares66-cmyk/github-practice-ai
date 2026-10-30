@@ -82,6 +82,11 @@ class WriteReq(BaseModel):
 class ExecuteWriteReq(BaseModel):
     approval_id: str
 
+
+class DenyApprovalReq(BaseModel):
+    approval_id: str
+    reason: str = ""
+
 def _check_auth(x_api_key: Optional[str] = Header(None)):
     if not auth.verify_api_key(x_api_key or ""):
         raise HTTPException(status_code=401, detail="Invalid API key")
@@ -164,6 +169,31 @@ def approve_endpoint(
     from stage2_sdk_ai import approval as appr_mod
 
     result = appr_mod.approve(approval_id, approver=approver)
+    status = result.get("status")
+    if status == "not_found":
+        raise HTTPException(status_code=404, detail="Approval not found")
+    if status == "invalid_id":
+        raise HTTPException(status_code=422, detail="Invalid approval ID")
+    if status == "invalid_transition":
+        raise HTTPException(status_code=409, detail="Approval is no longer pending")
+    return result
+
+
+@app.post("/deny")
+def deny_endpoint(
+    req: DenyApprovalReq,
+    approver: str = Depends(_check_approver_auth),
+):
+    """Reject a pending request using a separately authenticated approver."""
+    from stage2_sdk_ai import approval as appr_mod
+
+    if len(req.reason) > 500:
+        raise HTTPException(status_code=422, detail="Denial reason exceeds 500 characters")
+    result = appr_mod.deny(
+        req.approval_id,
+        approver=approver,
+        reason=req.reason,
+    )
     status = result.get("status")
     if status == "not_found":
         raise HTTPException(status_code=404, detail="Approval not found")
