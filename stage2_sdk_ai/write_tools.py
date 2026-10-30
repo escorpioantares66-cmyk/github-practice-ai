@@ -162,5 +162,6 @@ def execute_approved_write(approval_id: str) -> dict[str, Any]:
     }
 
 
-def approve_write(approval_id: str) -> dict[str, Any]:
-    return approve(approval_id)
+def approve_write(approval_id: str, approver_key: str) -> dict[str, Any]:
+    """Approve a request only with a configured approver credential."""
+    return approve(approval_id, approver_key=approver_key)

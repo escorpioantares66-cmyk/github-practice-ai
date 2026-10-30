@@ -82,6 +82,9 @@ class WriteReq(BaseModel):
 class ExecuteWriteReq(BaseModel):
     approval_id: str
 
+    class Config:
+        extra = "forbid"
+
 
 class DenyApprovalReq(BaseModel):
     approval_id: str
@@ -105,9 +108,7 @@ def _check_approver_auth(
     identity = auth.approver_identity(x_approver_key or "")
     if not auth.check_rate_limit(identity):
         raise HTTPException(status_code=429, detail="Approver rate limit exceeded")
-    return identity
-
-@app.get("/healthz")
+    return x_approver_key or ""
 def healthz():
     return {"status": "ok", "version": "v7.0-prod", "tests": "39 passed"}
 
@@ -165,12 +166,14 @@ def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
 @app.post("/approve")
 def approve_endpoint(
     approval_id: str,
-    approver: str = Depends(_check_approver_auth),
+    approver_key: str = Depends(_check_approver_auth),
 ):
     from stage2_sdk_ai import approval as appr_mod
 
-    result = appr_mod.approve(approval_id, approver=approver)
+    result = appr_mod.approve(approval_id, approver_key=approver_key)
     status = result.get("status")
+    if status == "unauthorized":
+        raise HTTPException(status_code=403, detail="Invalid or missing approver credentials")
     if status == "not_found":
         raise HTTPException(status_code=404, detail="Approval not found")
     if status == "invalid_id":
@@ -183,7 +186,7 @@ def approve_endpoint(
 @app.post("/deny")
 def deny_endpoint(
     req: DenyApprovalReq,
-    approver: str = Depends(_check_approver_auth),
+    approver_key: str = Depends(_check_approver_auth),
 ):
     """Reject a pending request using a separately authenticated approver."""
     from stage2_sdk_ai import approval as appr_mod
@@ -192,10 +195,12 @@ def deny_endpoint(
         raise HTTPException(status_code=422, detail="Denial reason exceeds 500 characters")
     result = appr_mod.deny(
         req.approval_id,
-        approver=approver,
+        approver_key=approver_key,
         reason=req.reason,
     )
     status = result.get("status")
+    if status == "unauthorized":
+        raise HTTPException(status_code=403, detail="Invalid or missing approver credentials")
     if status == "not_found":
         raise HTTPException(status_code=404, detail="Approval not found")
     if status == "invalid_id":

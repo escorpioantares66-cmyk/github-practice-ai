@@ -136,7 +136,7 @@ def test_unhandled_exception_returns_clean_json_not_a_traceback(client, monkeypa
 
 
 def test_approve_without_approver_key_is_forbidden(client):
-    resp = client.post("/approve?approval_id=deadbeef")
+    resp = client.post("/approve?approval_id=" + "d" * 32)
     assert resp.status_code == 403
 
 
@@ -211,13 +211,19 @@ def test_complete_approved_write_lifecycle(client, monkeypatch, tmp_path):
     assert approved.status_code == 200
     assert approved.json()["status"] == "approved"
 
-    executed = client.post(
+    tampered = client.post(
         "/write/execute",
         json={
             "approval_id": approval_id,
             "path": "reports/attacker.md",
             "content": "attacker-controlled replacement",
         },
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert tampered.status_code == 422
+    executed = client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
         headers={"X-API-Key": VALID_KEY},
     )
     assert executed.status_code == 200
@@ -339,6 +345,49 @@ def test_deny_requires_separate_approver_credential(client):
         headers={"X-API-Key": VALID_KEY},
     )
     assert denied.status_code == 403
+    wrong_key = client.post(
+        "/deny", json={"approval_id": approval_id, "reason": "attempt"},
+        headers={"X-Approver-Key": "wrong-approver-secret"},
+    )
+    assert wrong_key.status_code == 403
+
+
+def test_approval_state_transitions_are_terminal_at_api_boundary(client, monkeypatch):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    first = client.post(
+        "/write", json={"path": "terminal-approved.md", "content": "approved"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    approved_id = first.json()["approval_id"]
+    assert client.post(
+        f"/approve?approval_id={approved_id}",
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    ).status_code == 200
+    assert client.post(
+        f"/approve?approval_id={approved_id}",
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    ).status_code == 409
+    assert client.post(
+        "/deny", json={"approval_id": approved_id},
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    ).status_code == 409
+    second = client.post(
+        "/write", json={"path": "terminal-denied.md", "content": "denied"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    denied_id = second.json()["approval_id"]
+    assert client.post(
+        "/deny", json={"approval_id": denied_id, "reason": "rejected"},
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    ).status_code == 200
+    assert client.post(
+        f"/approve?approval_id={denied_id}",
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    ).status_code == 409
+    assert client.post(
+        "/deny", json={"approval_id": denied_id, "reason": "repeat"},
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    ).status_code == 409
 
 
 def test_deny_rejects_oversized_reason(client, monkeypatch):

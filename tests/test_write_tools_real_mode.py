@@ -10,6 +10,7 @@ def configure_paths(monkeypatch, tmp_path):
         approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
     )
     monkeypatch.setattr(write_tools, "_notes_dir", tmp_path / "notes")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
 
 
 def test_real_mode_no_approval_id_requests_bound_approval(
@@ -57,7 +58,7 @@ def test_real_mode_unknown_approval_id_returns_not_found(
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
 
     result = write_tools.write_note(
-        "ghost.md", "content", approval_id="deadbeef"
+        "ghost.md", "content", approval_id="d" * 32
     )
 
     assert result["status"] == "not_found"
@@ -70,7 +71,7 @@ def test_real_mode_approved_id_writes_only_approved_content(
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
     request = write_tools.write_note("final.md", "final content")
-    approval.approve(request["approval_id"])
+    approval.approve(request["approval_id"], approver_key="test-approver-secret")
 
     result = write_tools.write_note(
         "final.md", "final content", approval_id=request["approval_id"]
@@ -120,7 +121,7 @@ def test_approve_write_delegates_to_approval_module(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
     request = write_tools.write_note("delegated.md", "approved content")
 
-    result = write_tools.approve_write(request["approval_id"])
+    result = write_tools.approve_write(request["approval_id"], approver_key="test-approver-secret")
 
     assert result["status"] == "approved"
     assert approval.check_approval(request["approval_id"])["status"] == "approved"

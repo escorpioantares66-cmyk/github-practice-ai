@@ -38,7 +38,7 @@ POST /approve?approval_id=<approval-id>
 X-Approver-Key: <approver-secret>
 ~~~
 
-Only a configured approver key can perform this transition. Only `pending` records can be approved or denied. The normal API key is not accepted as an approver credential.
+Only a configured approver key can perform this transition. The approval store independently revalidates that credential before changing state and stores only a non-secret fingerprint as the approver identity. Only `pending` records can be approved or denied. The normal API key is not accepted as an approver credential. Approval IDs are 128-bit random values (32 lowercase hexadecimal characters); legacy 8-character IDs are rejected.
 
 ### 3. Deny a request when it should not proceed
 
@@ -70,7 +70,7 @@ The execution endpoint deliberately accepts no path or content fields. It loads 
 - `403`: missing or invalid approver key.
 - `404`: approval ID does not exist.
 - `409`: request is pending, denied, already consumed, mismatched, or otherwise cannot transition.
-- `422`: malformed approval ID or invalid note request.
+- `422`: malformed approval ID or invalid note request. The execute endpoint rejects client-supplied path/content fields.
 - `429`: requester or approver rate limit exceeded.
 
 ## Operational notes

@@ -11,6 +11,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from . import auth
+
 from .secure_storage import (
     ensure_private_directory,
     fsync_directory,
@@ -31,7 +33,7 @@ def _ensure_dirs() -> None:
 def _approval_path(approval_id: str) -> Path | None:
     """Return a path only for valid legacy or new approval IDs."""
     if not isinstance(approval_id, str) or not re.fullmatch(
-        r"(?:[0-9a-f]{8}|[0-9a-f]{32})", approval_id
+        r"[0-9a-f]{32}", approval_id
     ):
         return None
     return _approvals_dir / f"{approval_id}.json"
@@ -105,9 +107,12 @@ def check_approval(approval_id: str) -> dict[str, Any]:
 def _transition(
     approval_id: str,
     target_status: str,
-    approver: str,
+    approver_key: str,
     reason: str | None = None,
 ) -> dict[str, Any]:
+    if not auth.verify_approver_key(approver_key):
+        return {"status": "unauthorized", "id": approval_id}
+    approver = auth.approver_identity(approver_key)
     _ensure_dirs()
     path = _approval_path(approval_id)
     if path is None:
@@ -141,14 +146,16 @@ def _transition(
         return data
 
 
-def approve(approval_id: str, approver: str = "human") -> dict[str, Any]:
-    return _transition(approval_id, "approved", approver)
+def approve(approval_id: str, approver_key: str) -> dict[str, Any]:
+    """Approve a pending request using a configured approver credential."""
+    return _transition(approval_id, "approved", approver_key)
 
 
 def deny(
-    approval_id: str, approver: str = "human", reason: str = ""
+    approval_id: str, approver_key: str, reason: str = ""
 ) -> dict[str, Any]:
-    return _transition(approval_id, "denied", approver, reason)
+    """Deny a pending request using a configured approver credential."""
+    return _transition(approval_id, "denied", approver_key, reason)
 
 
 def consume_approval_request(

@@ -21,11 +21,14 @@ def test_boost_safety_report():
 
 def test_boost_write_and_approval():
     from stage2_sdk_ai import approval, write_tools
-    req = approval.request_approval("notes/prod.md", "final")
+    os.environ["AGENT_APPROVER_KEYS"] = "test-approver-secret"
+    req = approval.request_approval(
+        "write_note", {"path": str(write_tools._notes_dir / "prod.md"), "content": "final"}
+    )
     rid = req.get("id") or req.get("approval_id")
     assert rid
-    approval.approve(rid)
-    res = write_tools.write_note("notes/prod.md", "final", approval_id=rid)
+    approval.approve(rid, approver_key="test-approver-secret")
+    res = write_tools.write_note("prod.md", "final", approval_id=rid)
     assert isinstance(res, dict)
 
 def test_boost_vector_and_redteam():
