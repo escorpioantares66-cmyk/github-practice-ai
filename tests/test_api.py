@@ -172,3 +172,12 @@ def test_valid_approver_key_can_approve(client, monkeypatch, tmp_path):
     assert resp.status_code == 200
     assert resp.json()["status"] == "approved"
     assert resp.json()["approver"] == "authenticated_approver"
+
+
+def test_write_rejects_empty_note_path(client):
+    resp = client.post(
+        "/write",
+        json={"path": "", "content": "hello"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert resp.status_code == 422
