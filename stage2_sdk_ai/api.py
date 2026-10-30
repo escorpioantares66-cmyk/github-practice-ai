@@ -124,7 +124,7 @@ def query_endpoint(req: QueryReq, api_key: str = Depends(_check_auth)):
 @app.post("/write")
 def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
     from stage2_sdk_ai import approval as appr_mod
-    from stage2_sdk_ai.write_tools import MAX_NOTE_CHARS
+    from stage2_sdk_ai.write_tools import MAX_NOTE_CHARS, canonical_note_path
 
     if len(req.content) > MAX_NOTE_CHARS:
         raise HTTPException(
@@ -134,7 +134,7 @@ def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
 
     r = appr_mod.request_approval(
         "write_note",
-        {"path": req.path, "content": req.content},
+        {"path": str(canonical_note_path(req.path)), "content": req.content},
     )
     approval_id = r.get("id") or r.get("approval_id")
 
