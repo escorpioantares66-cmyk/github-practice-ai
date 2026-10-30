@@ -245,7 +245,7 @@ def test_execute_requires_normal_api_authentication(client, monkeypatch):
     monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
     request = client.post(
         "/write/execute",
-        json={"approval_id": "deadbeef"},
+        json={"approval_id": "d" * 32},
     )
     assert request.status_code == 401
 
