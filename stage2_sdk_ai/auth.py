@@ -25,7 +25,7 @@ def check_auth(api_key: str | None) -> dict[str, object]:
     allowed = _allowed_keys()
     if not api_key:
         return {"is_ok": False, "reason": "missing api key"}
-    if api_key not in allowed:
+    if not any(hmac.compare_digest(api_key, key) for key in allowed):
         return {"is_ok": False, "reason": "invalid key"}
     return {"is_ok": True, "reason": "ok"}
 
