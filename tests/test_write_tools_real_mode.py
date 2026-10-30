@@ -154,3 +154,26 @@ def test_approval_cannot_be_replayed_after_successful_write(
     assert first["status"] == "written"
     assert second["status"] == "invalid_transition"
     assert approval.check_approval(request["approval_id"])["status"] == "consumed"
+
+
+def test_atomic_write_replaces_symlink_without_modifying_target(
+    monkeypatch, tmp_path
+):
+    configure_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
+    notes_dir = tmp_path / "notes"
+    notes_dir.mkdir()
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("do not change", encoding="utf-8")
+    (notes_dir / "linked.md").symlink_to(outside_file)
+
+    request = write_tools.write_note("linked.md", "approved note")
+    approval.approve(request["approval_id"])
+    result = write_tools.write_note(
+        "linked.md", "approved note", approval_id=request["approval_id"]
+    )
+
+    assert result["status"] == "written"
+    assert outside_file.read_text(encoding="utf-8") == "do not change"
+    assert not (notes_dir / "linked.md").is_symlink()
+    assert (notes_dir / "linked.md").read_text(encoding="utf-8") == "approved note"
