@@ -134,3 +134,23 @@ def test_oversized_content_is_rejected(monkeypatch, tmp_path):
 
     assert result["status"] == "rejected"
     assert not (tmp_path / "notes").exists()
+
+
+def test_approval_cannot_be_replayed_after_successful_write(
+    monkeypatch, tmp_path
+):
+    configure_paths(monkeypatch, tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
+    request = write_tools.write_note("once.md", "one-time content")
+    approval.approve(request["approval_id"])
+
+    first = write_tools.write_note(
+        "once.md", "one-time content", approval_id=request["approval_id"]
+    )
+    second = write_tools.write_note(
+        "once.md", "one-time content", approval_id=request["approval_id"]
+    )
+
+    assert first["status"] == "written"
+    assert second["status"] == "invalid_transition"
+    assert approval.check_approval(request["approval_id"])["status"] == "consumed"
