@@ -136,6 +136,38 @@ def deny(
     return _transition(approval_id, "denied", approver, reason)
 
 
+
+def consume_approval(
+    approval_id: str, tool: str, args: dict[str, Any]
+) -> dict[str, Any]:
+    """Atomically consume an approval for one exact operation, once only."""
+    _ensure_dirs()
+    path = _approval_path(approval_id)
+    if path is None:
+        return {"status": "invalid_id", "id": approval_id}
+
+    with _locked_record(path):
+        if not path.exists():
+            return {"status": "not_found", "id": approval_id}
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("status") != "approved":
+            return {
+                "status": "invalid_transition",
+                "id": approval_id,
+                "current_status": data.get("status"),
+            }
+
+        if data.get("tool") != tool or data.get("args") != args:
+            return {"status": "approval_mismatch", "id": approval_id}
+
+        data["status"] = "consumed"
+        data["consumed_at"] = time.time()
+        _write_record_atomically(path, data)
+        log_audit("consumed", data)
+        return data
+
+
 def log_audit(action: str, record: dict[str, Any]) -> None:
     _ensure_dirs()
     entry = {"action": action, "time": time.time(), "record": record}
