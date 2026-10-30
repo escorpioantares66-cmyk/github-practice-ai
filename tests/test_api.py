@@ -29,7 +29,13 @@ def _reset_auth_state(monkeypatch):
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch, tmp_path):
+    from stage2_sdk_ai import approval
+
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(
+        approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
+    )
     return TestClient(app)
 
 
