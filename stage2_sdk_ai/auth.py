@@ -4,7 +4,6 @@ import os
 import time
 from collections import defaultdict
 
-
 _rate: dict[str, list[float]] = defaultdict(list)
 _MAX_PER_MIN = 10
 
