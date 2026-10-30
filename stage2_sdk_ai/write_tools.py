@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -75,3 +76,28 @@ def write_note(
             "is_mock": False,
         }
 
+    _notes_dir.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{safe_path.name}.", suffix=".tmp", dir=_notes_dir
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as temporary_file:
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_name, safe_path)
+    finally:
+        if os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+
+    return {
+        "tool": "write_note",
+        "path": str(safe_path),
+        "status": "written",
+        "approval_id": approval_id,
+        "is_mock": False,
+    }
+
+
+def approve_write(approval_id: str) -> dict[str, Any]:
+    return approve(approval_id)
