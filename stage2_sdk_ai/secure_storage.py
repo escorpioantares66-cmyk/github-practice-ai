@@ -33,7 +33,9 @@ def ensure_private_directory(path: Path) -> Path:
         except OSError as exc:
             raise UnsafeStoragePathError(f"Cannot inspect storage directory: {current}") from exc
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise UnsafeStoragePathError(f"Storage path component is not a real directory: {current}")
+            raise UnsafeStoragePathError(
+                f"Storage path component is not a real directory: {current}"
+            )
     try:
         os.chmod(target, 0o700, follow_symlinks=False)
     except (NotImplementedError, OSError) as exc:
@@ -73,7 +75,9 @@ def write_text_atomically(path: Path, content: str, directory: Path) -> None:
     """Write owner-only content and atomically replace a file in a safe directory."""
     safe_directory = ensure_private_directory(directory)
     if Path(path).parent != directory and Path(os.path.abspath(path)).parent != safe_directory:
-        raise UnsafeStoragePathError("Atomic-write destination must be directly inside its storage directory")
+        raise UnsafeStoragePathError(
+            "Atomic-write destination must be directly inside its storage directory"
+        )
     fd, temporary_name = tempfile.mkstemp(
         prefix=f".{Path(path).name}.", suffix=".tmp", dir=safe_directory
     )

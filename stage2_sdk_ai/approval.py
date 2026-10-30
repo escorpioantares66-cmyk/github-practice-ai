@@ -6,9 +6,10 @@ import os
 import re
 import secrets
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .secure_storage import (
     ensure_private_directory,
