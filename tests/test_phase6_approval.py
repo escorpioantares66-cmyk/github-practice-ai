@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from stage2_sdk_ai import approval, write_tools
