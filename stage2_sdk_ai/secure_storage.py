@@ -54,6 +54,15 @@ def open_private_file(path: Path, flags: int, mode: int = 0o600) -> int:
     return fd
 
 
+def fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes after creating or replacing data files."""
+    directory_fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
 def read_private_text(path: Path) -> str:
     fd = open_private_file(path, os.O_RDONLY)
     with os.fdopen(fd, "r", encoding="utf-8") as handle:
@@ -75,11 +84,7 @@ def write_text_atomically(path: Path, content: str, directory: Path) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_name, safe_directory / Path(path).name)
-        directory_fd = os.open(safe_directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        fsync_directory(safe_directory)
     finally:
         if os.path.exists(temporary_name):
             os.unlink(temporary_name)
