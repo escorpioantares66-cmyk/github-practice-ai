@@ -12,6 +12,7 @@ from typing import Any, Iterator
 
 from .secure_storage import (
     ensure_private_directory,
+    fsync_directory,
     open_private_file,
     read_private_text,
     write_text_atomically,
@@ -83,6 +84,7 @@ def request_approval(
             json.dump(record, approval_file, indent=2)
             approval_file.flush()
             os.fsync(approval_file.fileno())
+        fsync_directory(_approvals_dir)
         break
     log_audit("request", record)
     return record
@@ -205,7 +207,7 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
     with os.fdopen(fd, "a", encoding="utf-8") as audit_file:
         fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
         try:
-            audit_file.write(json.dumps(entry) + "\\n")
+            audit_file.write(json.dumps(entry) + "\n")
             audit_file.flush()
             os.fsync(audit_file.fileno())
         finally:
