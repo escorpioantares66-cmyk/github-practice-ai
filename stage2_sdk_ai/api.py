@@ -78,6 +78,10 @@ class WriteReq(BaseModel):
     path: str
     content: str
 
+
+class ExecuteWriteReq(BaseModel):
+    approval_id: str
+
 def _check_auth(x_api_key: Optional[str] = Header(None)):
     if not auth.verify_api_key(x_api_key or ""):
         raise HTTPException(status_code=401, detail="Invalid API key")
@@ -93,6 +97,8 @@ def _check_approver_auth(
             status_code=403,
             detail="Invalid or missing approver credentials",
         )
+    if not auth.check_rate_limit(f"approver:{x_approver_key}"):
+        raise HTTPException(status_code=429, detail="Approver rate limit exceeded")
     return "authenticated_approver"
 
 @app.get("/healthz")
@@ -156,7 +162,41 @@ def approve_endpoint(
     approver: str = Depends(_check_approver_auth),
 ):
     from stage2_sdk_ai import approval as appr_mod
-    return appr_mod.approve(approval_id, approver=approver)
+
+    result = appr_mod.approve(approval_id, approver=approver)
+    status = result.get("status")
+    if status == "not_found":
+        raise HTTPException(status_code=404, detail="Approval not found")
+    if status == "invalid_id":
+        raise HTTPException(status_code=422, detail="Invalid approval ID")
+    if status == "invalid_transition":
+        raise HTTPException(status_code=409, detail="Approval is no longer pending")
+    return result
+
+
+@app.post("/write/execute")
+def execute_write_endpoint(
+    req: ExecuteWriteReq,
+    api_key: str = Depends(_check_auth),
+):
+    """Execute a stored approved write; clients cannot submit replacement data."""
+    from stage2_sdk_ai.write_tools import execute_approved_write
+
+    result = execute_approved_write(req.approval_id)
+    status = result.get("status")
+    if status == "not_found":
+        raise HTTPException(status_code=404, detail="Approval not found")
+    if status == "invalid_id":
+        raise HTTPException(status_code=422, detail="Invalid approval ID")
+    if status == "pending":
+        raise HTTPException(status_code=409, detail="Approval is still pending")
+    if status == "invalid_transition":
+        raise HTTPException(status_code=409, detail="Approval was already consumed or denied")
+    if status == "approval_mismatch":
+        raise HTTPException(status_code=409, detail="Approval does not authorize this operation")
+    if status == "invalid_approved_payload":
+        raise HTTPException(status_code=409, detail=result.get("error", status))
+    return result
 
 
 def health():
