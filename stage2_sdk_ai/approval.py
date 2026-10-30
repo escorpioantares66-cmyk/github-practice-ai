@@ -152,6 +152,8 @@ def consume_approval(
             return {"status": "not_found", "id": approval_id}
 
         data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("status") == "pending":
+            return {"status": "pending", "id": approval_id}
         if data.get("status") != "approved":
             return {
                 "status": "invalid_transition",
