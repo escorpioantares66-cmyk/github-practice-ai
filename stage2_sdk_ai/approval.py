@@ -5,20 +5,25 @@ import json
 import os
 import re
 import secrets
-import tempfile
 import time
-from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+from .secure_storage import (
+    ensure_private_directory,
+    open_private_file,
+    read_private_text,
+    write_text_atomically,
+)
 
 _approvals_dir = Path("approvals")
 _audit_file = Path("logs/audit.jsonl")
 
 
 def _ensure_dirs() -> None:
-    _approvals_dir.mkdir(parents=True, exist_ok=True)
-    _audit_file.parent.mkdir(parents=True, exist_ok=True)
+    ensure_private_directory(_approvals_dir)
+    ensure_private_directory(_audit_file.parent)
 
 
 def _approval_path(approval_id: str) -> Path | None:
@@ -32,9 +37,10 @@ def _approval_path(approval_id: str) -> Path | None:
 
 @contextmanager
 def _locked_record(path: Path) -> Iterator[None]:
-    """Serialize state transitions for one approval record across processes."""
+    """Serialize state transitions using an owner-only, no-follow lock file."""
     lock_path = path.with_suffix(path.suffix + ".lock")
-    with lock_path.open("a+", encoding="utf-8") as lock_file:
+    fd = open_private_file(lock_path, os.O_RDWR | os.O_CREAT)
+    with os.fdopen(fd, "r+") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
             yield
@@ -43,38 +49,41 @@ def _locked_record(path: Path) -> Iterator[None]:
 
 
 def _write_record_atomically(path: Path, record: dict[str, Any]) -> None:
-    """Replace a record atomically so readers never observe partial JSON."""
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    """Replace a record atomically with mode 0600 and durable directory metadata."""
+    write_text_atomically(
+        path,
+        json.dumps(record, indent=2),
+        _approvals_dir,
     )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as temporary_file:
-            json.dump(record, temporary_file, indent=2)
-            temporary_file.flush()
-            os.fsync(temporary_file.fileno())
-        os.replace(temporary_name, path)
-    finally:
-        if os.path.exists(temporary_name):
-            os.unlink(temporary_name)
 
 
 def request_approval(
     tool: str, args: dict[str, Any], requester: str = "agent"
 ) -> dict[str, Any]:
     _ensure_dirs()
-    approval_id = secrets.token_hex(16)
     record = {
-        "id": approval_id,
         "tool": tool,
         "args": args,
         "requester": requester,
         "status": "pending",
         "created": time.time(),
     }
-    path = _approval_path(approval_id)
-    assert path is not None
-    with path.open("x", encoding="utf-8") as approval_file:
-        json.dump(record, approval_file, indent=2)
+    while True:
+        approval_id = secrets.token_hex(16)
+        path = _approval_path(approval_id)
+        assert path is not None
+        record["id"] = approval_id
+        try:
+            fd = open_private_file(
+                path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            )
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as approval_file:
+            json.dump(record, approval_file, indent=2)
+            approval_file.flush()
+            os.fsync(approval_file.fileno())
+        break
     log_audit("request", record)
     return record
 
@@ -84,9 +93,10 @@ def check_approval(approval_id: str) -> dict[str, Any]:
     path = _approval_path(approval_id)
     if path is None:
         return {"status": "invalid_id", "id": approval_id}
-    if not path.exists():
+    try:
+        return json.loads(read_private_text(path))
+    except FileNotFoundError:
         return {"status": "not_found", "id": approval_id}
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _transition(
@@ -101,10 +111,11 @@ def _transition(
         return {"status": "invalid_id", "id": approval_id}
 
     with _locked_record(path):
-        if not path.exists():
+        try:
+            data = json.loads(read_private_text(path))
+        except FileNotFoundError:
             return {"status": "not_found", "id": approval_id}
 
-        data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("status") != "pending":
             return {
                 "status": "invalid_transition",
@@ -137,7 +148,6 @@ def deny(
     return _transition(approval_id, "denied", approver, reason)
 
 
-
 def consume_approval_request(
     approval_id: str,
     tool: str,
@@ -155,10 +165,11 @@ def consume_approval_request(
         return {"status": "invalid_id", "id": approval_id}
 
     with _locked_record(path):
-        if not path.exists():
+        try:
+            data = json.loads(read_private_text(path))
+        except FileNotFoundError:
             return {"status": "not_found", "id": approval_id}
 
-        data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("status") == "pending":
             return {"status": "pending", "id": approval_id}
         if data.get("status") != "approved":
@@ -186,18 +197,28 @@ def consume_approval(
     """Consume an approval only when the caller's exact args match."""
     return consume_approval_request(approval_id, tool, args)
 
+
 def log_audit(action: str, record: dict[str, Any]) -> None:
     _ensure_dirs()
     entry = {"action": action, "time": time.time(), "record": record}
-    with _audit_file.open("a", encoding="utf-8") as audit_file:
-        audit_file.write(json.dumps(entry) + "\n")
+    fd = open_private_file(_audit_file, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+    with os.fdopen(fd, "a", encoding="utf-8") as audit_file:
+        fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
+        try:
+            audit_file.write(json.dumps(entry) + "\\n")
+            audit_file.flush()
+            os.fsync(audit_file.fileno())
+        finally:
+            fcntl.flock(audit_file.fileno(), fcntl.LOCK_UN)
 
 
 def list_pending() -> list[dict[str, Any]]:
     _ensure_dirs()
     pending = []
     for path in _approvals_dir.glob("*.json"):
-        data = json.loads(path.read_text(encoding="utf-8"))
+        if path.is_symlink():
+            continue
+        data = json.loads(read_private_text(path))
         if data.get("status") == "pending":
             pending.append(data)
     return pending
