@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .approval import approve, consume_approval, request_approval
+from .approval import approve, consume_approval, consume_approval_request, request_approval
 
 _notes_dir = Path("notes")
 MAX_NOTE_CHARS = 5_000
@@ -18,10 +18,44 @@ def _is_mock() -> bool:
 
 def canonical_note_path(path: str) -> Path:
     """Resolve note paths to the single filename location used by the writer."""
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("A note filename is required")
     filename = Path(path).name
     if filename in {"", ".", ".."}:
         raise ValueError("A note filename is required")
     return _notes_dir / filename
+
+
+def _atomic_write_note(path: Path, content: str) -> None:
+    _notes_dir.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=_notes_dir
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as temporary_file:
+            temporary_file.write(content)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_name, path)
+    finally:
+        if os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+
+
+def _validate_note_payload(path: Any, content: Any) -> tuple[Path | None, str | None]:
+    if not isinstance(content, str):
+        return None, "Content must be text"
+    if len(content) > MAX_NOTE_CHARS:
+        return None, f"Content exceeds {MAX_NOTE_CHARS} characters"
+    try:
+        safe_path = canonical_note_path(path)
+    except (TypeError, ValueError):
+        return None, "A note filename is required"
+    # The stored path must already be canonical. Do not silently reinterpret
+    # an altered or legacy payload during execution.
+    if str(safe_path) != path:
+        return None, "Approved note path is not canonical"
+    return safe_path, None
 
 
 def write_note(
@@ -81,20 +115,52 @@ def write_note(
             "is_mock": False,
         }
 
-    _notes_dir.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{safe_path.name}.", suffix=".tmp", dir=_notes_dir
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as temporary_file:
-            temporary_file.write(content)
-            temporary_file.flush()
-            os.fsync(temporary_file.fileno())
-        os.replace(temporary_name, safe_path)
-    finally:
-        if os.path.exists(temporary_name):
-            os.unlink(temporary_name)
+    _atomic_write_note(safe_path, content)
+    return {
+        "tool": "write_note",
+        "path": str(safe_path),
+        "status": "written",
+        "approval_id": approval_id,
+        "is_mock": False,
+    }
 
+
+def execute_approved_write(approval_id: str) -> dict[str, Any]:
+    """Execute only the exact payload persisted in a valid approved record.
+
+    The caller cannot supply a path or content. The approval is consumed
+    atomically before any filesystem side effect, so concurrent requests
+    cannot both execute the same authorization.
+    """
+    consumed = consume_approval_request(approval_id, "write_note")
+    if consumed.get("status") != "consumed":
+        return {
+            "tool": "write_note",
+            "status": consumed.get("status", "not_found"),
+            "approval_id": approval_id,
+            "is_mock": False,
+        }
+
+    args = consumed.get("args")
+    if not isinstance(args, dict):
+        return {
+            "tool": "write_note",
+            "status": "invalid_approved_payload",
+            "approval_id": approval_id,
+            "is_mock": False,
+        }
+
+    safe_path, error = _validate_note_payload(args.get("path"), args.get("content"))
+    if error or safe_path is None:
+        return {
+            "tool": "write_note",
+            "status": "invalid_approved_payload",
+            "error": error or "Invalid approved payload",
+            "approval_id": approval_id,
+            "is_mock": False,
+        }
+
+    _atomic_write_note(safe_path, args["content"])
     return {
         "tool": "write_note",
         "path": str(safe_path),
