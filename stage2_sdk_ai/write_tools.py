@@ -31,11 +31,16 @@ def write_note(
     mock_mode = _is_mock()
 
     if not isinstance(content, str) or len(content) > MAX_NOTE_CHARS:
+        error = (
+            "Content must be text"
+            if not isinstance(content, str)
+            else f"Content exceeds {MAX_NOTE_CHARS} characters"
+        )
         return {
             "tool": "write_note",
             "path": str(safe_path),
             "status": "rejected",
-            "error": f"Content must be text no longer than {MAX_NOTE_CHARS} characters",
+            "error": error,
             "is_mock": mock_mode,
         }
 
