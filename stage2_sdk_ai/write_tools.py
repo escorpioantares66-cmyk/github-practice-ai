@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .approval import approve, check_approval, request_approval
+from .approval import approve, consume_approval, request_approval
 
 _notes_dir = Path("notes")
 MAX_NOTE_CHARS = 5_000
@@ -61,41 +61,17 @@ def write_note(
             "is_mock": False,
         }
 
-    approval_record = check_approval(approval_id)
-    if approval_record.get("status") != "approved":
+    consumed = consume_approval(
+        approval_id,
+        "write_note",
+        {"path": str(safe_path), "content": content},
+    )
+    if consumed.get("status") != "consumed":
         return {
             "tool": "write_note",
             "path": str(safe_path),
-            "status": approval_record.get("status", "not_found"),
+            "status": consumed.get("status", "not_found"),
             "approval_id": approval_id,
             "is_mock": False,
         }
 
-    approved_args = approval_record.get("args")
-    if (
-        approval_record.get("tool") != "write_note"
-        or not isinstance(approved_args, dict)
-        or approved_args.get("path") != str(safe_path)
-        or approved_args.get("content") != content
-    ):
-        return {
-            "tool": "write_note",
-            "path": str(safe_path),
-            "status": "approval_mismatch",
-            "approval_id": approval_id,
-            "is_mock": False,
-        }
-
-    _notes_dir.mkdir(parents=True, exist_ok=True)
-    safe_path.write_text(content, encoding="utf-8")
-    return {
-        "tool": "write_note",
-        "path": str(safe_path),
-        "status": "written",
-        "approval_id": approval_id,
-        "is_mock": False,
-    }
-
-
-def approve_write(approval_id: str) -> dict[str, Any]:
-    return approve(approval_id)
