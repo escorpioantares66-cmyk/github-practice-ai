@@ -30,8 +30,9 @@ def _reset_auth_state(monkeypatch):
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
-    from stage2_sdk_ai import approval
+    from stage2_sdk_ai import approval, write_tools
 
+    monkeypatch.setattr(write_tools, "_notes_dir", tmp_path / "notes")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(
         approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
@@ -187,3 +188,112 @@ def test_write_rejects_empty_note_path(client):
         headers={"X-API-Key": VALID_KEY},
     )
     assert resp.status_code == 422
+
+
+
+def test_complete_approved_write_lifecycle(client, monkeypatch, tmp_path):
+    from pathlib import Path
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+
+    requested = client.post(
+        "/write",
+        json={"path": "reports/approved.md", "content": "approved body"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert requested.status_code == 200
+    approval_id = requested.json()["approval_id"]
+
+    approved = client.post(
+        f"/approve?approval_id={approval_id}",
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    )
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "approved"
+
+    executed = client.post(
+        "/write/execute",
+        json={
+            "approval_id": approval_id,
+            "path": "reports/attacker.md",
+            "content": "attacker-controlled replacement",
+        },
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert executed.status_code == 200
+    body = executed.json()
+    assert body["status"] == "written"
+    assert body["path"] == str(tmp_path / "notes" / "approved.md")
+    assert Path(body["path"]).read_text(encoding="utf-8") == "approved body"
+    assert not (tmp_path / "notes" / "attacker.md").exists()
+
+    replay = client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert replay.status_code == 409
+
+
+def test_execute_requires_normal_api_authentication(client, monkeypatch):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    request = client.post(
+        "/write/execute",
+        json={"approval_id": "deadbeef"},
+    )
+    assert request.status_code == 401
+
+
+def test_execute_pending_approval_conflicts(client, monkeypatch):
+    requested = client.post(
+        "/write",
+        json={"path": "pending.md", "content": "not yet approved"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    approval_id = requested.json()["approval_id"]
+
+    response = client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert response.status_code == 409
+
+
+def test_approve_unknown_id_returns_not_found(client, monkeypatch):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    response = client.post(
+        "/approve?approval_id=deadbeef",
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    )
+    assert response.status_code == 404
+
+
+def test_concurrent_execute_has_exactly_one_winner(client, monkeypatch, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    requested = client.post(
+        "/write",
+        json={"path": "race.md", "content": "one authorized write"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    approval_id = requested.json()["approval_id"]
+    approved = client.post(
+        f"/approve?approval_id={approval_id}",
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    )
+    assert approved.status_code == 200
+
+    def execute():
+        return client.post(
+            "/write/execute",
+            json={"approval_id": approval_id},
+            headers={"X-API-Key": VALID_KEY},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _: execute(), range(2)))
+
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    assert (tmp_path / "notes" / "race.md").read_text(encoding="utf-8") == "one authorized write"
