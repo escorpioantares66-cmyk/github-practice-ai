@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 import time
 from collections import defaultdict
@@ -50,3 +51,18 @@ def verify_api_key(api_key: str | None) -> bool:
 
 def check_rate_limit(api_key: str) -> bool:
     return check_rate(api_key).get("is_ok", False)
+
+def verify_approver_key(approver_key: str | None) -> bool:
+    """Accept only explicitly configured approval credentials."""
+    if not approver_key:
+        return False
+
+    raw = os.getenv("AGENT_APPROVER_KEYS", "").strip()
+    if not raw:
+        return False
+
+    allowed = [key.strip() for key in raw.split(",") if key.strip()]
+    return any(
+        hmac.compare_digest(approver_key, key)
+        for key in allowed
+    )

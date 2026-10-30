@@ -1,3 +1,4 @@
+import json
 from stage2_sdk_ai import approval
 
 
@@ -53,3 +54,40 @@ def test_unknown_well_formed_id_remains_not_found(monkeypatch, tmp_path):
 
     result = approval.check_approval("deadbeef")
     assert result["status"] == "not_found"
+
+
+def test_new_approval_ids_are_32_hex_characters(monkeypatch, tmp_path):
+    setup_approval_dirs(monkeypatch, tmp_path)
+
+    request = approval.request_approval("write_note", {"path": "a.md"})
+    approval_id = request["id"]
+
+    assert len(approval_id) == 32
+    assert all(char in "0123456789abcdef" for char in approval_id)
+
+
+def test_legacy_8_character_approval_id_remains_supported(
+    monkeypatch, tmp_path
+):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    approvals_dir = tmp_path / "approvals"
+    approvals_dir.mkdir(parents=True, exist_ok=True)
+
+    legacy_id = "deadbeef"
+    record = {
+        "id": legacy_id,
+        "tool": "write_note",
+        "args": {"path": "legacy.md"},
+        "requester": "agent",
+        "status": "pending",
+    }
+
+    (approvals_dir / f"{legacy_id}.json").write_text(
+        json.dumps(record), encoding="utf-8"
+    )
+
+    checked = approval.check_approval(legacy_id)
+    assert checked["status"] == "pending"
+
+    result = approval.approve(legacy_id, approver="test-human")
+    assert result["status"] == "approved"

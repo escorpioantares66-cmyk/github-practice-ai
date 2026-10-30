@@ -85,6 +85,16 @@ def _check_auth(x_api_key: Optional[str] = Header(None)):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     return x_api_key
 
+def _check_approver_auth(
+    x_approver_key: Optional[str] = Header(None, alias="X-Approver-Key"),
+):
+    if not auth.verify_approver_key(x_approver_key):
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or missing approver credentials",
+        )
+    return "authenticated_approver"
+
 @app.get("/healthz")
 def healthz():
     return {"status": "ok", "version": "v7.0-prod", "tests": "39 passed"}
@@ -136,9 +146,13 @@ def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
 
 
 @app.post("/approve")
-def approve_endpoint(approval_id: str, api_key: str = Depends(_check_auth)):
+def approve_endpoint(
+    approval_id: str,
+    approver: str = Depends(_check_approver_auth),
+):
     from stage2_sdk_ai import approval as appr_mod
-    return appr_mod.approve(approval_id)
+    return appr_mod.approve(approval_id, approver=approver)
+
 
 def health():
     return healthz()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import secrets
 import uuid
 from pathlib import Path
 from typing import Any
@@ -14,10 +15,11 @@ def _ensure_dirs() -> None:
     _approvals_dir.mkdir(exist_ok=True)
     _audit_file.parent.mkdir(exist_ok=True)
 
+
 def _approval_path(approval_id: str) -> Path | None:
-    """Return a path only for IDs matching the generated eight-hex format."""
+    """Return a path only for valid legacy or new approval IDs."""
     if not isinstance(approval_id, str) or not re.fullmatch(
-        r"[0-9a-f]{8}", approval_id
+        r"(?:[0-9a-f]{8}|[0-9a-f]{32})", approval_id
     ):
         return None
     return _approvals_dir / f"{approval_id}.json"
@@ -27,7 +29,7 @@ def request_approval(
     tool: str, args: dict[str, Any], requester: str = "agent"
 ) -> dict[str, Any]:
     _ensure_dirs()
-    approval_id = str(uuid.uuid4())[:8]
+    approval_id = secrets.token_hex(16)
     record = {
         "id": approval_id,
         "tool": tool,
@@ -41,6 +43,7 @@ def request_approval(
     )
     log_audit("request", record)
     return record
+
 
 def check_approval(approval_id: str) -> dict[str, Any]:
     _ensure_dirs()

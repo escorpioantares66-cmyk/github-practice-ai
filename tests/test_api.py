@@ -126,3 +126,49 @@ def test_unhandled_exception_returns_clean_json_not_a_traceback(client, monkeypa
     assert "RuntimeError" not in resp.text
     assert "x-request-id" in resp.headers
     assert resp.headers["x-request-id"] == body["request_id"]
+
+
+def test_approve_without_approver_key_is_forbidden(client):
+    resp = client.post("/approve?approval_id=deadbeef")
+    assert resp.status_code == 403
+
+
+def test_normal_api_key_cannot_approve(client):
+    resp = client.post(
+        "/approve?approval_id=deadbeef",
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert resp.status_code == 403
+
+
+def test_wrong_approver_key_is_forbidden(client, monkeypatch):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+
+    resp = client.post(
+        "/approve?approval_id=deadbeef",
+        headers={"X-Approver-Key": "wrong-approver-secret"},
+    )
+    assert resp.status_code == 403
+
+
+def test_valid_approver_key_can_approve(client, monkeypatch, tmp_path):
+    from stage2_sdk_ai import approval
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(
+        approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
+    )
+
+    request = approval.request_approval(
+        "write_note", {"path": "notes/security-test.md"}
+    )
+
+    resp = client.post(
+        f"/approve?approval_id={request['id']}",
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+    assert resp.json()["approver"] == "authenticated_approver"
