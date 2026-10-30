@@ -132,9 +132,14 @@ def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
             detail=f"Content exceeds {MAX_NOTE_CHARS} characters",
         )
 
+    try:
+        safe_path = canonical_note_path(req.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     r = appr_mod.request_approval(
         "write_note",
-        {"path": str(canonical_note_path(req.path)), "content": req.content},
+        {"path": str(safe_path), "content": req.content},
     )
     approval_id = r.get("id") or r.get("approval_id")
 
