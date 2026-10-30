@@ -78,6 +78,7 @@ The execution endpoint deliberately accepts no path or content fields. It loads 
 - Configure separate, random secrets for requester and approver roles.
 - Rotate credentials by temporarily allowing old and new keys, then removing the old key.
 - Back up the `approvals/`, `logs/`, and `notes/` data directories according to the deployment's retention policy.
-- Treat approval records and audit logs as sensitive: they contain note contents and operation metadata.
+- Treat approval records and audit logs as sensitive: they contain note contents and operation metadata. Storage directories are restricted to mode `0700`; approval, lock, audit, and note files are restricted to mode `0600`.
+- Storage paths reject symlinked directory components, and sensitive files are opened with no-follow semantics. Note writes use a same-directory temporary file, `fsync`, atomic replacement, and directory `fsync`. Keep the storage root writable only by the service account; these checks are defense in depth, not protection against a hostile process running as that same account.
 - The approval store currently uses local filesystem locks (`fcntl.flock`). Deploy it on a filesystem with reliable advisory-lock and atomic-rename semantics; do not share this file-backed store across hosts or network filesystems without validating those guarantees.
 - The consume-before-write sequence is intentionally at-most-once. If the process crashes after consuming an approval but before the atomic file replacement completes, an operator must create a new request rather than replay the consumed approval.
