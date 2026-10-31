@@ -22,16 +22,14 @@ def _is_mock() -> bool:
 
 
 def canonical_note_path(path: str, requester: str | None = None) -> Path:
-    """Resolve a filename into its owner-only note directory when authenticated."""
+    """Resolve a filename into an isolated directory for a required owner."""
     if not isinstance(path, str) or not path.strip():
         raise ValueError("A note filename is required")
+    if not isinstance(requester, str) or not requester.strip():
+        raise ValueError("A valid requester identity is required")
     filename = Path(path).name
     if filename in {"", ".", ".."}:
         raise ValueError("A note filename is required")
-    if requester is None:
-        return _notes_dir / filename
-    if not isinstance(requester, str) or not requester.strip():
-        raise ValueError("A valid requester identity is required")
     owner_dir = _notes_dir / hashlib.sha256(requester.encode("utf-8")).hexdigest()
     return owner_dir / filename
 
@@ -55,14 +53,9 @@ def _validate_note_payload(
         safe_path = canonical_note_path(Path(path).name, requester=requester)
     except (TypeError, ValueError):
         return None, "A note filename is required"
-    # The stored path must already be canonical. Keep the legacy direct-SDK
-    # default ("agent") compatible with its historical shared notes/ path;
-    # authenticated API identities always use their isolated hashed directory.
+    # Stored approval payloads must bind to the exact requester-scoped path.
     if str(safe_path) != path:
-        legacy_path = canonical_note_path(Path(path).name)
-        if requester != "agent" or str(legacy_path) != path:
-            return None, "Approved note path is not canonical"
-        safe_path = legacy_path
+        return None, "Approved note path is not canonical"
     return safe_path, None
 
 
@@ -166,8 +159,17 @@ def write_note(
     approval_id: str | None = None,
     requester: str | None = None,
 ) -> dict[str, Any]:
-    safe_path = canonical_note_path(path, requester=requester)
     mock_mode = _is_mock()
+    try:
+        safe_path = canonical_note_path(path, requester=requester)
+    except ValueError as exc:
+        return {
+            "tool": "write_note",
+            "path": "",
+            "status": "rejected",
+            "error": str(exc),
+            "is_mock": mock_mode,
+        }
 
     if not isinstance(content, str) or len(content) > MAX_NOTE_CHARS:
         error = (
@@ -197,7 +199,7 @@ def write_note(
         request = request_approval(
             "write_note",
             {"path": str(safe_path), "content": content},
-            requester=requester or "agent",
+            requester=requester,
         )
         return {
             "tool": "write_note",
@@ -211,7 +213,7 @@ def write_note(
         approval_id,
         "write_note",
         {"path": str(safe_path), "content": content},
-        requester=requester or "agent",
+        requester=requester,
     )
     if consumed.get("status") != "consumed":
         return {
@@ -255,6 +257,15 @@ def execute_approved_write(
     atomically before any filesystem side effect, so concurrent requests
     cannot both execute the same authorization.
     """
+    if not isinstance(requester, str) or not requester.strip():
+        return {
+            "tool": "write_note",
+            "status": "rejected",
+            "approval_id": approval_id,
+            "error": "A valid requester identity is required",
+            "is_mock": False,
+        }
+
     consumed = consume_approval_request(
         approval_id, "write_note", requester=requester
     )
