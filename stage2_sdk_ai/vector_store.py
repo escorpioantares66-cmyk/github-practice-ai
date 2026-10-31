@@ -220,7 +220,12 @@ class RealVectorStore:
         self.texts.extend(chunk for chunk, _, _ in staged_embeddings)
         self.metadatas.extend(metadata for _, metadata, _ in staged_embeddings)
         self.embeddings.extend(embedding for _, _, embedding in staged_embeddings)
-        if self._faiss_index is not None and staged_embeddings and NUMPY_AVAILABLE and np is not None:
+        if (
+            self._faiss_index is not None
+            and staged_embeddings
+            and NUMPY_AVAILABLE
+            and np is not None
+        ):
             try:
                 matrix = np.vstack(
                     [np.asarray(item[2], dtype=np.float32) for item in staged_embeddings]
