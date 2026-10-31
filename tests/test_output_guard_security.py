@@ -53,3 +53,29 @@ def test_redacts_international_and_local_phone_formats():
         assert result["filtered"] is True
         assert number not in result["text"]
         assert not contains_pii(result["text"])
+
+
+
+def test_redacts_pii_from_metadata_keys_and_preserves_colliding_values():
+    result = check_output(
+        "Safe response",
+        sources=[{
+            "alice@example.com": "private contact",
+            "[REDACTED:EMAIL]": "already-redacted key",
+        }],
+    )
+    rendered = str(result["sources"])
+    assert "alice@example.com" not in rendered
+    assert result["filtered"] is True
+    assert "private contact" in rendered
+    assert "already-redacted key" in rendered
+
+
+def test_unsupported_metadata_values_are_not_exposed():
+    class SecretObject:
+        def __str__(self):
+            return "should-not-leak"
+
+    result = check_output("Safe response", sources=[{"metadata": SecretObject()}])
+    assert "should-not-leak" not in str(result["sources"])
+    assert "[REDACTED:UNSUPPORTED_VALUE]" in str(result["sources"])
