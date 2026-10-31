@@ -159,3 +159,17 @@ def test_malformed_approver_config_fails_closed(monkeypatch):
     monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=secret-a,reviewer=secret-b")
     assert auth.verify_approver_key("secret-a") is False
     assert auth.verify_approver_key("secret-b") is False
+
+
+def test_requester_and_approver_credentials_must_be_distinct(monkeypatch):
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=shared-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=shared-secret")
+    assert auth.verify_api_key("shared-secret") is False
+    assert auth.verify_approver_key("shared-secret") is False
+
+
+def test_distinct_requester_and_approver_credentials_are_accepted(monkeypatch):
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=requester-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=approver-secret")
+    assert auth.verify_api_key("requester-secret") is True
+    assert auth.verify_approver_key("approver-secret") is True
