@@ -652,6 +652,7 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
                     "archive through operator procedure"
                 )
             sequence, previous_hash, _ = _audit_chain_state(existing)
+            _validate_audit_event(entry, sequence + 1)
             entry["seq"] = sequence + 1
             entry["previous_hash"] = previous_hash
             entry["hash"] = hashlib.sha256(_canonical_audit_entry(entry)).hexdigest()
