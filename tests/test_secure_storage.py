@@ -101,3 +101,31 @@ def test_filesystem_root_is_never_used_as_private_storage():
 
     with pytest.raises(UnsafeStoragePathError, match="filesystem root"):
         ensure_private_directory(Path("/"))
+
+
+def test_read_note_rejects_symlink_to_external_file(monkeypatch, tmp_path):
+    notes = tmp_path / "notes"
+    notes.mkdir(mode=0o700)
+    outside = tmp_path / "private.txt"
+    outside.write_text("sensitive external content", encoding="utf-8")
+    (notes / "linked.md").symlink_to(outside)
+    monkeypatch.setattr(write_tools, "_notes_dir", notes)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
+
+    with pytest.raises(OSError):
+        write_tools.read_note("linked.md")
+
+    assert outside.read_text(encoding="utf-8") == "sensitive external content"
+
+
+def test_read_note_rejects_symlinked_notes_directory(monkeypatch, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "note.md").write_text("external", encoding="utf-8")
+    notes_link = tmp_path / "notes"
+    notes_link.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(write_tools, "_notes_dir", notes_link)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
+
+    with pytest.raises(UnsafeStoragePathError):
+        write_tools.read_note("note.md")
