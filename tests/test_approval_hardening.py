@@ -199,7 +199,10 @@ def test_audit_hash_chain_verifies_and_detects_entry_tampering(monkeypatch, tmp_
     second = approval.request_approval("write_note", {"path": "two.md"})
 
     audit_path = tmp_path / "logs" / "audit.jsonl"
-    entries = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    entries = [
+        json.loads(line)
+        for line in audit_path.read_text(encoding="utf-8").splitlines()
+    ]
     assert [entry["seq"] for entry in entries] == [1, 2]
     assert entries[0]["previous_hash"] == "0" * 64
     assert entries[1]["previous_hash"] == entries[0]["hash"]
@@ -253,7 +256,10 @@ def test_audit_hash_chain_anchors_legacy_prefix(monkeypatch, tmp_path):
         "time": 1.0,
         "record": {"id": "a" * 32, "tool": "write_note"},
     }
-    audit_path.write_text(json.dumps(legacy, separators=(",", ":")) + chr(10), encoding="utf-8")
+    audit_path.write_text(
+        json.dumps(legacy, separators=(",", ":")) + chr(10),
+        encoding="utf-8",
+    )
 
     approval.log_audit("request", {"id": "b" * 32, "tool": "write_note"})
     assert approval.verify_audit_log()["entries"] == 2
@@ -261,8 +267,10 @@ def test_audit_hash_chain_anchors_legacy_prefix(monkeypatch, tmp_path):
     legacy["record"]["tool"] = "changed"
     chained = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[1])
     audit_path.write_text(
-        json.dumps(legacy, separators=(",", ":")) + chr(10)
-        + json.dumps(chained, separators=(",", ":")) + chr(10),
+        json.dumps(legacy, separators=(",", ":"))
+        + chr(10)
+        + json.dumps(chained, separators=(",", ":"))
+        + chr(10),
         encoding="utf-8",
     )
     try:
