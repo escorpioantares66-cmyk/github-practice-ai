@@ -62,7 +62,7 @@ class RequestBodyLimitMiddleware:
                 )
                 return
             approver_identity = auth.approver_identity(approver_key)
-            if not auth.check_rate_limit(approver_identity):
+            if not auth.check_rate_limit(approver_identity, role="approver"):
                 await self._json_error(scope, send, 429, "Approver rate limit exceeded")
                 return
 
@@ -249,16 +249,24 @@ def query_endpoint(req: QueryReq, api_key: str = Depends(_check_auth)):
     chk = input_guard.check_input(q)
     if not isinstance(chk, dict) or chk.get("is_safe") is not True:
         return {"answer": "blocked by input_guard", "blocked": True}
-    if not cost_guard.reserve_cost(api_key, q):
-        return {"answer": "cost limit $1 exceeded", "blocked": True}
     requester = auth.requester_identity(api_key)
     if requester is None:
         raise HTTPException(status_code=401, detail="Invalid API key identity")
-    res = run_agent(q, top_k=req.top_k or 5, requester=requester)
+    reservation_id = uuid.uuid4().hex
+    try:
+        reserved = cost_guard.reserve_request(requester, reservation_id)
+    except Exception as exc:
+        logger.error("cost quota storage unavailable", exc_info=exc)
+        raise HTTPException(status_code=503, detail="Cost quota storage unavailable") from exc
+    if not reserved:
+        return {"answer": "daily cost limit $1 exceeded", "blocked": True}
+    try:
+        res = run_agent(q, top_k=req.top_k or 5, requester=requester)
+    finally:
+        cost_guard.release_request(reservation_id)
     out = output_guard.check_output(res.get("answer", ""), res.get("sources", []))
     safe_answer = out.get("text", "")
     safe_sources = out.get("sources", [])
-    cost_guard.add_cost(api_key, safe_answer)
     return {
         "answer": safe_answer,
         "confidence": out.get("confidence"),
