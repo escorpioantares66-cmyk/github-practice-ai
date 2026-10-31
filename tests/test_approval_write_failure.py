@@ -1,4 +1,5 @@
 """Approved write failures remain consumed and are operator-recoverable."""
+import hashlib
 import json
 
 from stage2_sdk_ai import approval, write_tools
@@ -15,7 +16,7 @@ def test_failed_write_records_operator_recovery_context_without_replay(
     )
     monkeypatch.setattr(write_tools, "_notes_dir", tmp_path / "notes")
 
-    request = write_tools.write_note("recover-me.md", "approved payload")
+    request = write_tools.write_note("recover-me.md", "approved payload", requester="agent")
     approval_id = request["approval_id"]
     approval.approve(approval_id, approver_key="test-approver-secret")
 
@@ -61,7 +62,7 @@ def _approved_request(monkeypatch, tmp_path):
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
     monkeypatch.setattr(write_tools, "_notes_dir", tmp_path / "notes")
-    request = write_tools.write_note("fault-case.md", "approved payload")
+    request = write_tools.write_note("fault-case.md", "approved payload", requester="agent")
     approval.approve(request["approval_id"], approver_key="test-approver-secret")
     return request["approval_id"]
 
@@ -126,7 +127,9 @@ def test_directory_fsync_failure_after_replace_requires_destination_inspection(
     from stage2_sdk_ai import secure_storage
 
     approval_id = _approved_request(monkeypatch, tmp_path)
-    notes_dir = tmp_path / "notes"
+    notes_dir = (
+        tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest()
+    )
     notes_dir.mkdir(parents=True, exist_ok=True)
     destination = notes_dir / "fault-case.md"
     destination.write_text("old contents", encoding="utf-8")
@@ -160,7 +163,7 @@ def test_consumed_audit_failure_prevents_write_and_records_recovery(
     result = write_tools.execute_approved_write(approval_id, requester="agent")
 
     assert result["status"] == "consumption_audit_incomplete"
-    assert not (tmp_path / "notes" / "fault-case.md").exists()
+    assert not (tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "fault-case.md").exists()
     record = approval.check_approval(approval_id)
     assert record["status"] == "consumed"
     assert record["execution_failure"]["error_type"] == "RuntimeError"
@@ -200,7 +203,7 @@ def test_approval_audit_failure_blocks_execution_and_preserves_consumed_safety(
     )
     monkeypatch.setattr(write_tools, "_notes_dir", tmp_path / "notes")
 
-    request = write_tools.write_note("approval-audit.md", "must not be written")
+    request = write_tools.write_note("approval-audit.md", "must not be written", requester="agent")
     approval_id = request["approval_id"]
     real_log_audit = approval.log_audit
 
@@ -225,7 +228,7 @@ def test_approval_audit_failure_blocks_execution_and_preserves_consumed_safety(
         approval_id, requester="agent"
     )
     assert execution["status"] == "approval_audit_incomplete"
-    assert not (tmp_path / "notes" / "approval-audit.md").exists()
+    assert not (tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "approval-audit.md").exists()
     assert approval.check_approval(approval_id)["status"] == "approved"
 
 
@@ -240,7 +243,7 @@ def test_approval_audit_record_update_failure_leaves_approval_unexecutable(
     )
     monkeypatch.setattr(write_tools, "_notes_dir", tmp_path / "notes")
 
-    request = write_tools.write_note("approval-audit-persist.md", "payload")
+    request = write_tools.write_note("approval-audit-persist.md", "payload", requester="agent")
     approval_id = request["approval_id"]
     real_write = approval._write_record_atomically
     calls = 0
@@ -269,7 +272,7 @@ def test_approval_audit_record_update_failure_leaves_approval_unexecutable(
         approval_id, requester="agent"
     )
     assert execution["status"] == "approval_audit_incomplete"
-    assert not (tmp_path / "notes" / "approval-audit-persist.md").exists()
+    assert not (tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "approval-audit-persist.md").exists()
 
 
 def test_denial_audit_failure_keeps_denial_terminal_and_reports_incomplete_audit(
