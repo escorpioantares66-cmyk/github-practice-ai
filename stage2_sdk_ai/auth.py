@@ -103,3 +103,14 @@ def approver_identity(approver_key: str) -> str:
     """Return a non-secret stable audit/rate-limit identifier for a valid key."""
     fingerprint = hashlib.sha256(approver_key.encode("utf-8")).hexdigest()[:12]
     return f"approver-{fingerprint}"
+
+
+def requester_rate_limit_identity(api_key: str | None) -> str | None:
+    """Use the configured requester identity, not its rotating secret, for limits."""
+    return requester_identity(api_key)
+
+
+def check_requester_rate_limit(api_key: str | None) -> bool:
+    """Apply the requester rate limit to its stable configured identity."""
+    identity = requester_rate_limit_identity(api_key)
+    return bool(identity and check_rate_limit(identity))
