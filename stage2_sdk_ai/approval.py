@@ -144,7 +144,7 @@ def _requester_usage(requester: str, now: float) -> tuple[int, int]:
     return pending, daily
 
 
-def _write_record_atomically(path: Path, record: dict[str, Any]) -> None
+def _write_record_atomically(path: Path, record: dict[str, Any]) -> None:
     """Replace a record atomically with mode 0600 and durable directory metadata."""
     write_text_atomically(
         path,
