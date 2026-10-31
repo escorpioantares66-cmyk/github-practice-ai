@@ -18,6 +18,14 @@ class UnsafeStoragePathError(ValueError):
     """Raised when a configured storage path is not a safe local directory."""
 
 
+class AtomicWriteDurabilityError(OSError):
+    """The replacement happened, but its directory entry was not confirmed durable."""
+
+    def __init__(self, path: Path):
+        super().__init__(f"replacement completed but directory fsync failed: {path}")
+        self.path = path
+
+
 def _open_directory_chain(path: Path, create: bool = False) -> int:
     """Open a directory from the nearest accessible ancestor using dirfds."""
     target = Path(os.path.abspath(os.fspath(path)))
@@ -169,7 +177,13 @@ def write_text_atomically(path: Path, content: str, directory: Path) -> None:
             src_dir_fd=directory_fd,
             dst_dir_fd=directory_fd,
         )
-        fsync_directory(safe_directory)
+        try:
+            fsync_directory(safe_directory)
+        except OSError as exc:
+            # os.replace already made the new contents visible. Do not report
+            # this as an ordinary failed write: durability is uncertain and
+            # the caller must inspect the destination before recovery.
+            raise AtomicWriteDurabilityError(destination) from exc
     finally:
         if fd >= 0:
             os.close(fd)
