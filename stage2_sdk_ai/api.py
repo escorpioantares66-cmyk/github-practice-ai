@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from stage2_sdk_ai import auth, cost_guard, input_guard, output_guard
-from stage2_sdk_ai.agent_loop import run_agent
+from stage2_sdk_ai.agent_loop import UsageAccountingError, run_agent
 from stage2_sdk_ai.logging_setup import get_logger
 
 if not hasattr(pydantic.BaseModel, "model_fields"):
@@ -262,7 +262,11 @@ def query_endpoint(req: QueryReq, api_key: str = Depends(_check_auth)):
         return {"answer": "daily cost limit $1 exceeded", "blocked": True}
     try:
         res = run_agent(q, top_k=req.top_k or 5, requester=requester)
-    finally:
+    except UsageAccountingError:
+        # Keep the worst-case reservation when provider usage is unknown or
+        # could not be durably stored. It expires only after the recovery TTL.
+        raise
+    else:
         cost_guard.release_request(reservation_id)
     out = output_guard.check_output(res.get("answer", ""), res.get("sources", []))
     safe_answer = out.get("text", "")
