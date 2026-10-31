@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from typing import Any
 
@@ -97,8 +98,10 @@ def _sanitize_value(value: Any) -> tuple[Any, bool]:
             output[unique_key] = safe_item
             changed = changed or key_changed or item_changed
         return output, changed
-    if value is None or isinstance(value, (bool, int, float)):
+    if value is None or isinstance(value, (bool, int)):
         return value, False
+    if isinstance(value, float):
+        return (value, False) if math.isfinite(value) else ("[REDACTED:NON_FINITE_NUMBER]", True)
     # Unknown objects are not safe to serialize or expose as metadata.
     return "[REDACTED:UNSUPPORTED_VALUE]", True
 
