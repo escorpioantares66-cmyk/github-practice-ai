@@ -487,3 +487,25 @@ def test_audit_log_invalid_complete_line_is_not_rewritten(
         raise AssertionError("invalid audit history must block appends")
 
     assert audit_path.read_bytes() == damaged
+
+
+
+def test_corrupt_record_is_rejected_by_approve_and_consume(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=approver-secret")
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
+    approval._ensure_dirs()
+    approval_id = "f" * 32
+    path = tmp_path / "approvals" / f"{approval_id}.json"
+    path.write_text(json.dumps({"id": approval_id, "status": "pending"}), encoding="utf-8")
+
+    approved = approval.approve(approval_id, "approver-secret")
+    consumed = approval.consume_approval_request(
+        approval_id, "write_note", {}, requester="worker"
+    )
+
+    assert approved["status"] == "corrupt_record"
+    assert consumed["status"] == "corrupt_record"
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "id": approval_id, "status": "pending"
+    }
