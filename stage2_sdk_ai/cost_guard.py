@@ -87,6 +87,10 @@ def release_request(reservation_id: str) -> None:
     quota_store.release_budget(reservation_id)
 
 
+def verify_request_reservation(requester: str, reservation_id: str) -> bool:
+    return quota_store.has_reservation(requester, _utc_day(), reservation_id)
+
+
 def record_model_usage(
     requester: str,
     input_tokens: int,
