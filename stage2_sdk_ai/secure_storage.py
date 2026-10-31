@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 import stat
-import tempfile
 from pathlib import Path
 
 
@@ -21,7 +20,12 @@ class UnsafeStoragePathError(ValueError):
 def _open_directory_chain(path: Path, create: bool = False) -> int:
     """Open a directory by walking each component relative to verified dirfds."""
     target = Path(os.path.abspath(os.fspath(path)))
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     fd = os.open(target.anchor, flags)
     try:
         for part in target.parts[1:]:
