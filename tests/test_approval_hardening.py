@@ -191,3 +191,83 @@ def test_pending_scan_uses_complete_record_validation(monkeypatch, tmp_path):
         encoding="utf-8",
     )
     assert [record["id"] for record in approval.list_pending()] == [valid["id"]]
+
+
+def test_audit_hash_chain_verifies_and_detects_entry_tampering(monkeypatch, tmp_path):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    first = approval.request_approval("write_note", {"path": "one.md"})
+    second = approval.request_approval("write_note", {"path": "two.md"})
+
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    entries = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    assert [entry["seq"] for entry in entries] == [1, 2]
+    assert entries[0]["previous_hash"] == "0" * 64
+    assert entries[1]["previous_hash"] == entries[0]["hash"]
+    assert approval.verify_audit_log()["valid"] is True
+
+    entries[0]["record"]["tool"] = "tampered_tool"
+    audit_path.write_text(
+        "".join(json.dumps(entry, separators=(",", ":")) + "\\n" for entry in entries),
+        encoding="utf-8",
+    )
+    try:
+        approval.verify_audit_log()
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("tampered audit entry was accepted")
+
+    assert first["id"] != second["id"]
+
+
+def test_audit_hash_chain_detects_deleted_or_reordered_entries(monkeypatch, tmp_path):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    approval.request_approval("write_note", {"path": "one.md"})
+    approval.request_approval("write_note", {"path": "two.md"})
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    lines = audit_path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+    audit_path.write_text(lines[1], encoding="utf-8")
+    try:
+        approval.verify_audit_log()
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("deleted audit history was accepted")
+
+    audit_path.write_text("".join(reversed(lines)), encoding="utf-8")
+    try:
+        approval.verify_audit_log()
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("reordered audit history was accepted")
+
+
+def test_audit_hash_chain_anchors_legacy_prefix(monkeypatch, tmp_path):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    approval._ensure_dirs()
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    legacy = {
+        "action": "request",
+        "time": 1.0,
+        "record": {"id": "a" * 32, "tool": "write_note"},
+    }
+    audit_path.write_text(json.dumps(legacy, separators=(",", ":")) + "\\n", encoding="utf-8")
+
+    approval.log_audit("request", {"id": "b" * 32, "tool": "write_note"})
+    assert approval.verify_audit_log()["entries"] == 2
+
+    legacy["record"]["tool"] = "changed"
+    chained = json.loads(audit_path.read_text(encoding="utf-8").splitlines()[1])
+    audit_path.write_text(
+        json.dumps(legacy, separators=(",", ":")) + "\\n"
+        + json.dumps(chained, separators=(",", ":")) + "\\n",
+        encoding="utf-8",
+    )
+    try:
+        approval.verify_audit_log()
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("modified legacy prefix was accepted")
