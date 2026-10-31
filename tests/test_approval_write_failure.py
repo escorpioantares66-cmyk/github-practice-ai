@@ -143,9 +143,14 @@ def test_directory_fsync_failure_after_replace_requires_destination_inspection(
     monkeypatch.setattr(secure_storage, "fsync_directory", fail_notes_directory)
     result = write_tools.execute_approved_write(approval_id, requester="agent")
 
-    assert result["status"] == "execution_failed"
+    assert result["status"] == "execution_outcome_uncertain"
     assert destination.read_text(encoding="utf-8") == "approved payload"
-    assert approval.check_approval(approval_id)["status"] == "consumed"
+    record = approval.check_approval(approval_id)
+    assert record["status"] == "consumed"
+    assert record["execution_failure"]["error_type"] == "AtomicWriteDurabilityError"
+    assert "replacement completed" in record["execution_failure"]["error_message"]
+    replay = write_tools.execute_approved_write(approval_id, requester="agent")
+    assert replay["status"] == "invalid_transition"
 
 
 def test_consumed_audit_failure_prevents_write_and_records_recovery(

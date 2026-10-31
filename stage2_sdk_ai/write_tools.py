@@ -237,7 +237,16 @@ def write_note(
     try:
         _atomic_write_note(safe_path, content)
     except Exception as exc:
-        return _report_execution_failure(approval_id, safe_path, exc)
+        return _report_execution_failure(
+            approval_id,
+            safe_path,
+            exc,
+            result_status=(
+                "execution_outcome_uncertain"
+                if isinstance(exc, AtomicWriteDurabilityError)
+                else "execution_failed"
+            ),
+        )
 
     return {
         "tool": "write_note",
