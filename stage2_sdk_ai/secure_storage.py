@@ -70,8 +70,8 @@ def open_private_file(path: Path, flags: int, mode: int = 0o600) -> int:
 
 
 def fsync_directory(path: Path) -> None:
-    """Persist directory-entry changes after creating or replacing data files."""
-    directory_fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    """Persist directory-entry changes through a no-follow directory descriptor."""
+    directory_fd = _open_directory_chain(path, create=False)
     try:
         os.fsync(directory_fd)
     finally:
