@@ -132,3 +132,18 @@ def test_pii_evaluator_requires_redacted_output():
         lambda payload: output_guard.check_output(payload, sources=[])
     )
     assert result["pass_rate"] == 1
+
+
+def test_cost_and_approval_evaluator_exceptions_are_failures():
+    cost_result = eval_cost_guard(
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("cost add failed")),
+        lambda *_args: {"blocked": True},
+    )
+    assert cost_result["pass"] is False
+    assert cost_result["spike_blocked"] is False
+
+    approval_result = eval_approval_bypass(
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("approval failed"))
+    )
+    assert approval_result["pass_rate"] == 0
+    assert all(item["blocked"] is False for item in approval_result["details"])
