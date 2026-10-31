@@ -45,3 +45,14 @@ def test_missing_api_key_does_not_enable_mock_mode(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("STAGE2_SDK_AI_MOCK_MODE", raising=False)
     assert tools._is_mock() is False
+
+
+def test_get_store_rejects_corrupt_existing_persistence(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tools, "_store", None)
+    store_path = tmp_path / "data" / "faiss_store"
+    store_path.mkdir(parents=True)
+    (store_path / "store.json").write_text('{"texts":[', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="failed validation"):
+        tools.get_store()
