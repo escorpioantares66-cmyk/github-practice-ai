@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import threading
 import time
 from collections import defaultdict
 
 _rate: dict[str, list[float]] = defaultdict(list)
 _MAX_PER_MIN = 10
+_rate_lock = threading.Lock()
 
 
 def _configured_requester_keys() -> list[tuple[str, str]]:
@@ -62,17 +64,20 @@ def requester_identity(api_key: str | None) -> str | None:
 
 
 def check_rate(api_key: str) -> dict[str, object]:
+    """Atomically enforce a per-process sliding-window limit."""
     now = time.time()
-    window = [t for t in _rate[api_key] if now - t < 60]
-    _rate[api_key] = window
-    if len(window) >= _MAX_PER_MIN:
-        return {"is_ok": False, "reason": f"rate limit {_MAX_PER_MIN}/min"}
-    _rate[api_key].append(now)
-    return {"is_ok": True, "reason": "ok"}
+    with _rate_lock:
+        window = [t for t in _rate[api_key] if now - t < 60]
+        _rate[api_key] = window
+        if len(window) >= _MAX_PER_MIN:
+            return {"is_ok": False, "reason": f"rate limit {_MAX_PER_MIN}/min"}
+        window.append(now)
+        return {"is_ok": True, "reason": "ok"}
 
 
 def reset_rate() -> None:
-    _rate.clear()
+    with _rate_lock:
+        _rate.clear()
 
 
 def verify_api_key(api_key: str | None) -> bool:
