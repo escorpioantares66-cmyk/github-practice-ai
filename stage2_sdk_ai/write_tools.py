@@ -8,7 +8,11 @@ from typing import Any
 from . import approval
 from .approval import approve, consume_approval, consume_approval_request, request_approval
 from .logging_setup import get_logger
-from .secure_storage import ensure_private_directory, write_text_atomically
+from .secure_storage import (
+    AtomicWriteDurabilityError,
+    ensure_private_directory,
+    write_text_atomically,
+)
 
 logger = get_logger(__name__)
 
@@ -324,7 +328,16 @@ def execute_approved_write(
     except Exception as exc:
         # Never restore consumed authorization; secondary reporting failures
         # must not hide the original filesystem exception.
-        return _report_execution_failure(approval_id, safe_path, exc)
+        return _report_execution_failure(
+            approval_id,
+            safe_path,
+            exc,
+            result_status=(
+                "execution_outcome_uncertain"
+                if isinstance(exc, AtomicWriteDurabilityError)
+                else "execution_failed"
+            ),
+        )
 
     return {
         "tool": "write_note",
