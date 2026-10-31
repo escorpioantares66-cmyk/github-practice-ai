@@ -34,7 +34,7 @@ def test_redacts_pii_recursively_from_source_metadata():
 
 
 def test_does_not_flag_non_luhn_number_as_payment_card():
-    original = "Reference number 1234 5678 9012 3456"
+    original = "Reference number 1234567890123456"
     redacted, changed = redact_pii(original)
     assert changed is False
     assert redacted == original
