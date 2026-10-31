@@ -7,7 +7,6 @@ already covers the fallback behavior itself).
 """
 import logging
 
-
 from stage2_sdk_ai.agent_loop import _real_llm_pick_tool
 from tests.test_agent_loop_real_mode import _install_fake_openai
 
