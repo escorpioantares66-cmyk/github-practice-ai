@@ -88,9 +88,7 @@ def _real_llm_pick_tool(
             "OPENAI_API_KEY missing; refusing real-mode model call",
             extra={"event": "llm_fallback", "reason": "missing_api_key"},
         )
-        raise UsageAccountingError(
-            "OPENAI_API_KEY is required for real-mode model usage accounting"
-        )
+        return {"tool": "final", "args": {"answer": "I could not safely process that request."}}
 
     if not isinstance(requester, str) or not requester.strip():
         raise UsageAccountingError(
@@ -130,7 +128,9 @@ def _real_llm_pick_tool(
                 "exception_type": type(exc).__name__,
             },
         )
-        return {"tool": "final", "args": {"answer": "I could not safely process that request."}}
+        raise UsageAccountingError(
+            "provider request outcome is unknown; quota reservation must be retained"
+        ) from exc
 
     usage = getattr(response, "usage", None)
     if usage is None:
