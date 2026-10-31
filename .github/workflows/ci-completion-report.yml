@@ -18,7 +18,7 @@ jobs:
           CI_CONCLUSION: ${{ github.event.workflow_run.conclusion || 'manual' }}
           CI_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
           CI_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-          CI_URL: ${{ github.event.workflow_run.html_url || github.server_url }}
+          CI_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
           CI_RUN_ID: ${{ github.event.workflow_run.id || github.run_id }}
         run: |
           {
