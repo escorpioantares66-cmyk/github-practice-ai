@@ -88,7 +88,8 @@ def test_failure_metadata_write_error_does_not_hide_original_or_enable_replay(
     assert result["status"] == "execution_failure_recording_failed"
     assert approval.check_approval(approval_id)["status"] == "consumed"
     assert any("approved note write failed" in r.message for r in caplog.records)
-    assert write_tools.execute_approved_write(approval_id, requester="agent")["status"] == "invalid_transition"
+    replay = write_tools.execute_approved_write(approval_id, requester="agent")
+    assert replay["status"] == "invalid_transition"
 
 
 def test_audit_append_failure_is_distinguished_from_record_failure(
