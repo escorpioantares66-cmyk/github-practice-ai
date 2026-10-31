@@ -541,6 +541,21 @@ def _validate_audit_event(entry: Any, line_number: int) -> None:
 
     action = entry["action"]
     status = record.get("status")
+    base_fields = {
+        "id", "tool", "args", "requester", "status",
+        "request_audit_status", "created",
+    }
+    action_fields = {
+        "request": set(),
+        "approved": {"approval_audit_status", "approver", "approved_at"},
+        "denied": {
+            "approval_audit_status", "approver", "denied_at", "reason",
+        },
+        "consumed": {"approval_audit_status", "consumed_at"},
+        "execution_failed": {"approval_audit_status", "consumed_at", "execution_failure"},
+    }
+    if set(record) != base_fields | action_fields[action]:
+        invalid()
     if action == "request":
         if status != "pending":
             invalid()
@@ -697,6 +712,7 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int, int, dict[int, s
                 ).hexdigest()
                 if legacy_lines else "0" * 64
             )
+            chain_hashes[0] = expected_previous
         else:
             expected_previous = previous_hash
         if not hmac.compare_digest(entry["previous_hash"], expected_previous):
