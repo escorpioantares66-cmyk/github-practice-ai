@@ -187,3 +187,121 @@ def test_invalid_approved_payload_is_recorded_for_operator_review(
     assert not (tmp_path / "outside.md").exists()
     replay = write_tools.execute_approved_write(approval_id, requester="agent")
     assert replay["status"] == "invalid_transition"
+
+
+def test_approval_audit_failure_blocks_execution_and_preserves_consumed_safety(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(
+        approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
+    )
+    monkeypatch.setattr(write_tools, "_notes_dir", tmp_path / "notes")
+
+    request = write_tools.write_note("approval-audit.md", "must not be written")
+    approval_id = request["approval_id"]
+    real_log_audit = approval.log_audit
+
+    def fail_approval_audit(action, record):
+        if action == "approved":
+            raise OSError("approval audit volume unavailable")
+        return real_log_audit(action, record)
+
+    monkeypatch.setattr(approval, "log_audit", fail_approval_audit)
+    approved = approval.approve(
+        approval_id, approver_key="test-approver-secret"
+    )
+
+    assert approved["status"] == "approval_audit_incomplete"
+    assert approved["approval_status"] == "approved"
+    record = approval.check_approval(approval_id)
+    assert record["status"] == "approved"
+    assert record["approval_audit_status"] == "failed"
+    assert record["approval_audit_error_type"] == "OSError"
+
+    execution = write_tools.execute_approved_write(
+        approval_id, requester="agent"
+    )
+    assert execution["status"] == "approval_audit_incomplete"
+    assert not (tmp_path / "notes" / "approval-audit.md").exists()
+    assert approval.check_approval(approval_id)["status"] == "approved"
+
+
+def test_approval_audit_record_update_failure_leaves_approval_unexecutable(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(
+        approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
+    )
+    monkeypatch.setattr(write_tools, "_notes_dir", tmp_path / "notes")
+
+    request = write_tools.write_note("approval-audit-persist.md", "payload")
+    approval_id = request["approval_id"]
+    real_write = approval._write_record_atomically
+    calls = 0
+
+    def fail_second_record_write(path, record):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("approval record update unavailable")
+        return real_write(path, record)
+
+    monkeypatch.setattr(approval, "_write_record_atomically", fail_second_record_write)
+    approved = approval.approve(
+        approval_id, approver_key="test-approver-secret"
+    )
+
+    assert approved["status"] == "approval_audit_incomplete"
+    assert approved["approval_status"] == "approved"
+    assert approval.check_approval(approval_id)["approval_audit_status"] == "pending"
+    assert any(
+        json.loads(line)["action"] == "approved"
+        for line in (tmp_path / "logs" / "audit.jsonl").read_text().splitlines()
+    )
+
+    execution = write_tools.execute_approved_write(
+        approval_id, requester="agent"
+    )
+    assert execution["status"] == "approval_audit_incomplete"
+    assert not (tmp_path / "notes" / "approval-audit-persist.md").exists()
+
+
+def test_denial_audit_failure_keeps_denial_terminal_and_reports_incomplete_audit(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(
+        approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
+    )
+    request = approval.request_approval(
+        "write_note", {"path": "denied-audit.md", "content": "never write"}
+    )
+    real_log_audit = approval.log_audit
+
+    def fail_denial_audit(action, record):
+        if action == "denied":
+            raise OSError("denial audit volume unavailable")
+        return real_log_audit(action, record)
+
+    monkeypatch.setattr(approval, "log_audit", fail_denial_audit)
+    denied = approval.deny(
+        request["id"],
+        approver_key="test-approver-secret",
+        reason="not authorized",
+    )
+
+    assert denied["status"] == "approval_audit_incomplete"
+    assert denied["approval_status"] == "denied"
+    record = approval.check_approval(request["id"])
+    assert record["status"] == "denied"
+    assert record["approval_audit_status"] == "failed"
+    assert approval.approve(
+        request["id"], approver_key="test-approver-secret"
+    )["status"] == "invalid_transition"
