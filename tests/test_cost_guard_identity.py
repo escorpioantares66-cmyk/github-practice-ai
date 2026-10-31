@@ -1,4 +1,4 @@
-from stage2_sdk_ai import auth, cost_guard
+from stage2_sdk_ai import cost_guard
 
 
 def test_cost_budget_is_shared_across_secret_rotation(monkeypatch):
