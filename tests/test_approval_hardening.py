@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 from stage2_sdk_ai import approval
@@ -300,8 +301,22 @@ def test_audit_hash_chain_rejects_duplicate_json_keys(monkeypatch, tmp_path):
 
 
 def _process_append_audit_event(index):
-    approval.request_approval("write_note", {"path": f"process-{index}.md"})
+    approval.request_approval(
+        "write_note", {"path": f"process-{index}.md"},
+        requester=f"process-requester-{index}",
+    )
     return index
+
+
+def _process_limited_approval_request(index):
+    try:
+        approval.request_approval(
+            "write_note", {"path": f"limited-{index}.md"},
+            requester="shared-requester",
+        )
+    except approval.ApprovalLimitError as exc:
+        return exc.limit
+    return "created"
 
 
 def test_audit_writes_are_serialized_across_processes(monkeypatch, tmp_path):
@@ -538,3 +553,66 @@ def test_request_approval_accepts_valid_json_payload_and_logs_it(
     assert approval.check_approval(request["id"])["args"] == {
         "path": "safe.md", "content": "hello"
     }
+    audit_record = json.loads(
+        (tmp_path / "logs" / "audit.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )["record"]
+    assert "args" not in audit_record
+    assert audit_record["args_sha256"] == hashlib.sha256(
+        json.dumps(
+            {"path": "safe.md", "content": "hello"},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert "hello" not in (tmp_path / "logs" / "audit.jsonl").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_pending_approval_limit_is_released_after_decision(monkeypatch, tmp_path):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(approval, "MAX_PENDING_APPROVALS_PER_REQUESTER", 2)
+    monkeypatch.setattr(approval, "MAX_APPROVAL_REQUESTS_PER_UTC_DAY", 20)
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", APPROVER_KEY)
+    first = approval.request_approval("write_note", {"path": "one.md"}, "same")
+    approval.request_approval("write_note", {"path": "two.md"}, "same")
+    try:
+        approval.request_approval("write_note", {"path": "three.md"}, "same")
+    except approval.ApprovalLimitError as exc:
+        assert exc.limit == "pending_approval_limit"
+    else:
+        raise AssertionError("pending request limit was bypassed")
+
+    assert approval.approve(first["id"], APPROVER_KEY)["status"] == "approved"
+    third = approval.request_approval("write_note", {"path": "three.md"}, "same")
+    assert third["status"] == "pending"
+
+
+def test_daily_approval_limit_counts_decided_requests(monkeypatch, tmp_path):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(approval, "MAX_PENDING_APPROVALS_PER_REQUESTER", 20)
+    monkeypatch.setattr(approval, "MAX_APPROVAL_REQUESTS_PER_UTC_DAY", 2)
+    approval.request_approval("write_note", {"path": "one.md"}, "same")
+    approval.request_approval("write_note", {"path": "two.md"}, "same")
+    try:
+        approval.request_approval("write_note", {"path": "three.md"}, "same")
+    except approval.ApprovalLimitError as exc:
+        assert exc.limit == "daily_approval_limit"
+    else:
+        raise AssertionError("daily approval limit was bypassed")
+
+
+def test_pending_limit_cannot_be_bypassed_by_concurrent_processes(
+    monkeypatch, tmp_path
+):
+    import multiprocessing
+
+    setup_approval_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(approval, "MAX_PENDING_APPROVALS_PER_REQUESTER", 5)
+    monkeypatch.setattr(approval, "MAX_APPROVAL_REQUESTS_PER_UTC_DAY", 100)
+    context = multiprocessing.get_context("fork")
+    with context.Pool(processes=8) as pool:
+        results = pool.map(_process_limited_approval_request, range(20))
+
+    assert results.count("created") == 5
+    assert results.count("pending_approval_limit") == 15
+    assert len(approval.list_pending()) == 5

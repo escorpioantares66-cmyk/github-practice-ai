@@ -71,14 +71,15 @@ The execution endpoint deliberately accepts no path or content fields. The authe
 - `404`: approval ID does not exist.
 - `409`: request is pending, denied, already consumed, mismatched, or otherwise cannot transition.
 - `422`: malformed approval ID or invalid note request. The execute endpoint rejects client-supplied path/content fields.
-- `429`: requester or approver rate limit exceeded.
+- `429`: requester or approver rate limit exceeded, or the requester reached an approval-creation quota.
+ - `503`: approval-store integrity prevents safe quota enforcement; new requests are paused for operator review.
 
 ## Operational notes
 
 - Configure separate, random secrets for requester and approver roles.
 - Rotate credentials by temporarily allowing old and new keys, then removing the old key.
 - Back up the `approvals/`, `logs/`, and `notes/` data directories according to the deployment's retention policy.
-- Treat approval records and audit logs as sensitive: they contain note contents and operation metadata. Storage directories are restricted to mode `0700`; approval, lock, audit, and note files are restricted to mode `0600`.
+- Treat approval records as sensitive: they contain note contents and operation metadata. New audit events store a SHA-256 fingerprint of the canonical operation arguments instead of the arguments themselves. Older audit entries may still contain note contents, so existing audit history remains sensitive. Storage directories are restricted to mode `0700`; approval, lock, audit, and note files are restricted to mode `0600`.
 - Storage paths reject symlinked directory components, and sensitive files are opened with no-follow semantics. Note writes use a same-directory temporary file, `fsync`, atomic replacement, and directory `fsync`. Keep the storage root writable only by the service account; these checks are defense in depth, not protection against a hostile process running as that same account.
 - The approval store currently uses local filesystem locks (`fcntl.flock`). Deploy it on a filesystem with reliable advisory-lock and atomic-rename semantics; do not share this file-backed store across hosts or network filesystems without validating those guarantees.
 - The consume-before-write sequence is intentionally at-most-once. A consumed approval is never reset to approved, including when note writing or failure reporting fails. A failed write returns an operator-review status; if failure metadata cannot be saved, the original failure is still logged and the approval remains consumed. If failure metadata is saved but its audit append fails, the response distinguishes that incomplete audit state.
@@ -111,6 +112,18 @@ Audit history is append-only. Before appending, the writer takes the audit-file 
 
 If an in-process append fails after writing only part of an event, the writer attempts to truncate back to the original file length while holding the exclusive lock and fsyncs that rollback. If rollback itself fails, treat the audit log as requiring operator review. A process crash can still leave an incomplete final line; the next writer detects it and refuses to append.
 
+## Approval creation quotas
+
+Approval creation is limited per authenticated requester identity:
+
+- At most **10 active pending approvals** at a time. A pending approval stops counting after it is approved, denied, or expires.
+- At most **100 approval requests per UTC calendar day**. Approved, denied, consumed, expired, and audit-incomplete requests all count toward this daily quota; deciding a request does not reset it.
+- Quota checks and record reservation run under a filesystem lock, so concurrent threads and worker processes cannot race past the limits.
+- If the approval directory contains a corrupt, unreadable, symlinked, or future-dated record, new requests fail closed with HTTP 503 rather than risk under-counting usage. Operators must inspect the store before accepting new requests.
+- Quota exhaustion returns HTTP 429. The response identifies the limit without exposing stored operation data.
+
+The limits are constants in `stage2_sdk_ai.approval` and can be adjusted deliberately after reviewing workload and storage capacity. They are per requester identity, not per API secret; use stable labelled credentials so rotation does not reset the quota.
+
 ## Identity-based rate limiting
 
 Configure requester credentials using stable identity labels, for example `AGENT_API_KEYS=worker-a=secret-one,worker-b=secret-two`. Configure approvers the same way with `AGENT_APPROVER_KEYS=reviewer-a=secret-three`. Rate-limit buckets use the identity label, not the secret, so rotating a secret while retaining its identity does not reset the requester's or approver's rate limit. Legacy bare secrets remain accepted for compatibility, but their derived fingerprint identity changes when the secret changes; migrate to labelled credentials to preserve buckets across rotation.
@@ -122,6 +135,6 @@ Every state-changing approval operation validates the JSON record schema, filena
 
 Rate-limit check-and-increment and reset operations are synchronized within a Python process. This prevents concurrent threads in one worker from exceeding the configured window. The limiter remains process-local: multi-worker or multi-host deployments must put a shared atomic limiter (for example Redis with a single atomic script) in front of the API; do not claim a global limit from the in-memory implementation.
 
-Audit events are checked for an exact event envelope, allowed action, numeric timestamp, and a record object containing a valid approval ID. Validation is bounded to 64 MiB; once the active audit file reaches that size, appends fail closed. Operators should archive/rotate only through an explicit, documented procedure that preserves the original immutable segment and verifies its integrity before creating a new active segment. This bound limits per-append parsing cost but is not a substitute for implementing segmented audit storage before sustained high-volume production use.
+Audit events are checked for an exact event envelope, allowed action, numeric timestamp, and a record object containing a valid approval ID plus either legacy arguments or a SHA-256 argument fingerprint. New events never persist note content in the audit log. Validation is bounded to 64 MiB; once the active audit file reaches that size, appends fail closed. Operators should archive/rotate only through an explicit, documented procedure that preserves the original immutable segment and verifies its integrity before creating a new active segment. This bound limits per-append parsing cost but is not a substitute for implementing segmented audit storage before sustained high-volume production use.
 
 Private storage operations now walk directory components with no-follow directory descriptors and perform file opens, temporary-file creation, replacement, and directory fsync relative to the verified directory descriptor. This reduces pathname substitution races. The storage root must still be owned by the service account and not writable by untrusted users; it does not defend against a malicious process with the same account privileges.

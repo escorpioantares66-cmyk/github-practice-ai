@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 # Pending/approved write requests are valid for 15 minutes from creation.
 APPROVAL_TTL_SECONDS = 15 * 60
+MAX_PENDING_APPROVALS_PER_REQUESTER = 10
+MAX_APPROVAL_REQUESTS_PER_UTC_DAY = 100
 # A persisted wall-clock timestamp this far ahead of the current clock is
 # treated as invalid. This makes significant clock rollback fail closed.
 MAX_APPROVAL_CLOCK_SKEW_SECONDS = 60
@@ -59,6 +61,18 @@ class ApprovalAuditError(RuntimeError):
         self.approval_id = approval_id
 
 
+class ApprovalLimitError(RuntimeError):
+    """A requester reached an approval creation quota."""
+
+    def __init__(self, limit: str):
+        super().__init__(limit)
+        self.limit = limit
+
+
+class ApprovalStoreIntegrityError(RuntimeError):
+    """The approval store cannot be safely scanned for quota enforcement."""
+
+
 def _ensure_dirs() -> None:
     ensure_private_directory(_approvals_dir)
     ensure_private_directory(_audit_file.parent)
@@ -86,6 +100,50 @@ def _locked_record(path: Path) -> Iterator[None]:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+@contextmanager
+def _locked_request_creation() -> Iterator[None]:
+    """Serialize requester quota checks across threads and worker processes."""
+    lock_path = _approvals_dir / ".request.lock"
+    fd = open_private_file(lock_path, os.O_RDWR | os.O_CREAT)
+    with os.fdopen(fd, "r+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _requester_usage(requester: str, now: float) -> tuple[int, int]:
+    """Count active pending and all same-UTC-day requests for one identity."""
+    day_start = int(now // 86_400) * 86_400
+    day_end = day_start + 86_400
+    pending = 0
+    daily = 0
+    for path in _approvals_dir.glob("*.json"):
+        if path.is_symlink():
+            raise ApprovalStoreIntegrityError(
+                "approval store contains a symlink; operator review required"
+            )
+        try:
+            record = _load_approval_record(path, path.stem)
+        except (OSError, CorruptApprovalRecordError) as exc:
+            raise ApprovalStoreIntegrityError(
+                "approval store contains an unreadable record; operator review required"
+            ) from exc
+        if record["requester"] != requester:
+            continue
+        created = float(record["created"])
+        if created > now + MAX_APPROVAL_CLOCK_SKEW_SECONDS:
+            raise ApprovalStoreIntegrityError(
+                "approval store contains a future-dated record; operator review required"
+            )
+        if day_start <= created < day_end:
+            daily += 1
+        if record["status"] == "pending" and not _approval_expired(created, now):
+            pending += 1
+    return pending, daily
+
+
 def _write_record_atomically(path: Path, record: dict[str, Any]) -> None:
     """Replace a record atomically with mode 0600 and durable directory metadata."""
     write_text_atomically(
@@ -110,42 +168,49 @@ def request_approval(
     except (TypeError, ValueError) as exc:
         raise ValueError("Approval arguments must be finite JSON data") from exc
     _ensure_dirs()
+    now = time.time()
     record = {
         "tool": tool,
         "args": args,
         "requester": requester,
         "status": "pending",
         "request_audit_status": "pending",
-        "created": time.time(),
+        "created": now,
     }
-    while True:
-        approval_id = secrets.token_hex(16)
-        path = _approval_path(approval_id)
-        assert path is not None
-        record["id"] = approval_id
-        try:
-            fd = open_private_file(
-                path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
-            )
-        except FileExistsError:
-            continue
-        # Reserve the random identifier without exposing a partially written
-        # JSON record. The placeholder is fail-closed if the process crashes;
-        # the complete record becomes visible in one atomic replacement.
-        os.close(fd)
-        try:
-            _write_record_atomically(path, record)
-        except Exception:
+    with _locked_request_creation():
+        pending_count, daily_count = _requester_usage(requester, now)
+        if pending_count >= MAX_PENDING_APPROVALS_PER_REQUESTER:
+            raise ApprovalLimitError("pending_approval_limit")
+        if daily_count >= MAX_APPROVAL_REQUESTS_PER_UTC_DAY:
+            raise ApprovalLimitError("daily_approval_limit")
+        while True:
+            approval_id = secrets.token_hex(16)
+            path = _approval_path(approval_id)
+            assert path is not None
+            record["id"] = approval_id
             try:
-                path.unlink(missing_ok=True)
-                fsync_directory(_approvals_dir)
-            except OSError:
-                logger.exception(
-                    "failed to clean incomplete approval reservation",
-                    extra={"approval_id": approval_id},
+                fd = open_private_file(
+                    path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
                 )
-            raise
-        break
+            except FileExistsError:
+                continue
+            # Reserve the random identifier without exposing a partially written
+            # JSON record. The placeholder is fail-closed if the process crashes;
+            # the complete record becomes visible in one atomic replacement.
+            os.close(fd)
+            try:
+                _write_record_atomically(path, record)
+            except Exception:
+                try:
+                    path.unlink(missing_ok=True)
+                    fsync_directory(_approvals_dir)
+                except OSError:
+                    logger.exception(
+                        "failed to clean incomplete approval reservation",
+                        extra={"approval_id": approval_id},
+                    )
+                raise
+            break
     # The request is not approvable until its audit append and durable
     # status marker both succeed. The initial pending marker fails closed.
     try:
@@ -689,7 +754,14 @@ def _validate_audit_event(entry: Any, line_number: int) -> None:
         or not isinstance(record.get("tool"), str)
         or not record["tool"].strip()
         or len(record["tool"]) > 120
-        or not isinstance(record.get("args"), dict)
+        or (
+            not isinstance(record.get("args"), dict)
+            and not (
+                isinstance(record.get("args_sha256"), str)
+                and re.fullmatch(r"[0-9a-f]{64}", record["args_sha256"])
+            )
+        )
+        or ("args" in record and "args_sha256" in record)
         or not isinstance(record.get("requester"), str)
         or not record["requester"].strip()
         or len(record["requester"]) > 256
@@ -703,8 +775,9 @@ def _validate_audit_event(entry: Any, line_number: int) -> None:
     action = entry["action"]
     status = record.get("status")
     base_fields = {
-        "id", "tool", "args", "requester", "status",
+        "id", "tool", "requester", "status",
         "request_audit_status", "created",
+        "args" if "args" in record else "args_sha256",
     }
     action_fields = {
         "request": set(),
@@ -968,8 +1041,27 @@ def _validate_audit_bytes(contents: bytes) -> None:
 MAX_AUDIT_LOG_BYTES = 64 * 1024 * 1024
 
 
+def _audit_safe_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Replace potentially sensitive operation arguments with a stable digest."""
+    safe_record = dict(record)
+    args = safe_record.pop("args", None)
+    if not isinstance(args, dict):
+        raise AuditLogIntegrityError("audit record is missing operation arguments")
+    try:
+        canonical_args = json.dumps(
+            args, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise AuditLogIntegrityError(
+            "audit record arguments cannot be fingerprinted"
+        ) from exc
+    safe_record["args_sha256"] = hashlib.sha256(canonical_args).hexdigest()
+    return safe_record
+
+
 def log_audit(action: str, record: dict[str, Any]) -> None:
-    """Append one durable JSONL event; refuse corrupt or oversized histories."""
+    """Append one durable JSONL event without storing operation payloads."""
     _ensure_dirs()
     entry = {"action": action, "time": time.time(), "record": record}
     fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
@@ -984,6 +1076,7 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
                     "archive through operator procedure"
                 )
             sequence, previous_hash, _, _, _ = _audit_chain_state(existing)
+            entry["record"] = _audit_safe_record(record)
             _validate_audit_event(entry, sequence + 1)
             entry["seq"] = sequence + 1
             entry["previous_hash"] = previous_hash
