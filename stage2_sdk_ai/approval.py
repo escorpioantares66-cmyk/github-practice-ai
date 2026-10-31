@@ -155,7 +155,7 @@ def _load_approval_record(path: Path, approval_id: str) -> dict[str, Any]:
         data = json.loads(read_private_text(path))
     except FileNotFoundError:
         raise
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
         raise CorruptApprovalRecordError("approval record is malformed") from exc
     if not isinstance(data, dict) or data.get("id") != approval_id:
         raise CorruptApprovalRecordError("approval record identity mismatch")
@@ -522,6 +522,15 @@ def _validate_audit_event(entry: Any, line_number: int) -> None:
         )
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
 def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
     """Validate legacy and chained entries; return seq, head hash, total count.
 
@@ -542,10 +551,12 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
     total = 0
     chain_started = False
 
-    for line_number, raw_line in enumerate(contents.splitlines(keepends=True), start=1):
+    for line_number, raw_line in enumerate(
+        contents.splitlines(keepends=True), start=1
+    ):
         line = raw_line.rstrip(b"\r\n")
         try:
-            entry = json.loads(line)
+            entry = json.loads(line, object_pairs_hook=_reject_duplicate_json_keys)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise AuditLogIntegrityError(
                 f"audit log entry {line_number} is invalid; operator review required"
@@ -561,7 +572,9 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
             total += 1
             continue
 
-        expected_fields = {"action", "time", "record", "seq", "previous_hash", "hash"}
+        expected_fields = {
+            "action", "time", "record", "seq", "previous_hash", "hash"
+        }
         if not isinstance(entry, dict) or set(entry) != expected_fields:
             raise AuditLogIntegrityError(
                 f"audit log entry {line_number} has an invalid schema"
@@ -635,15 +648,20 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
             existing = audit_file.read(MAX_AUDIT_LOG_BYTES + 1)
             if len(existing) > MAX_AUDIT_LOG_BYTES:
                 raise AuditLogIntegrityError(
-    "audit log exceeds the configured 64 MiB validation limit; "
-    "archive through operator procedure" 
+                    "audit log exceeds the configured 64 MiB validation limit; "
+                    "archive through operator procedure"
                 )
             sequence, previous_hash, _ = _audit_chain_state(existing)
             entry["seq"] = sequence + 1
             entry["previous_hash"] = previous_hash
             entry["hash"] = hashlib.sha256(_canonical_audit_entry(entry)).hexdigest()
             encoded = (
-                json.dumps(entry, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+                json.dumps(
+                    entry,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                )
                 + "\n"
             ).encode("utf-8")
             audit_file.seek(0, os.SEEK_END)
