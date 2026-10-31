@@ -4,7 +4,7 @@ import uuid
 from typing import Optional
 
 import pydantic
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -311,7 +311,7 @@ def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
 
 @app.post("/approve")
 def approve_endpoint(
-    approval_id: str,
+    approval_id: str = Query(..., min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$"),
     approver_key: str = Depends(_check_approver_auth),
 ):
     from stage2_sdk_ai import approval as appr_mod
