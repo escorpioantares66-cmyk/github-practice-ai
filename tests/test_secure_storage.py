@@ -3,7 +3,7 @@ import stat
 
 import pytest
 
-from stage2_sdk_ai import approval, write_tools
+from stage2_sdk_ai import approval, tools as read_tools, write_tools
 from stage2_sdk_ai.secure_storage import UnsafeStoragePathError
 
 
@@ -109,11 +109,11 @@ def test_read_note_rejects_symlink_to_external_file(monkeypatch, tmp_path):
     outside = tmp_path / "private.txt"
     outside.write_text("sensitive external content", encoding="utf-8")
     (notes / "linked.md").symlink_to(outside)
-    monkeypatch.setattr(write_tools, "_notes_dir", notes)
+    monkeypatch.setattr(read_tools, "_notes_dir", notes)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
 
     with pytest.raises(OSError):
-        write_tools.read_note("linked.md")
+        read_tools.read_note("linked.md")
 
     assert outside.read_text(encoding="utf-8") == "sensitive external content"
 
@@ -124,8 +124,8 @@ def test_read_note_rejects_symlinked_notes_directory(monkeypatch, tmp_path):
     (outside / "note.md").write_text("external", encoding="utf-8")
     notes_link = tmp_path / "notes"
     notes_link.symlink_to(outside, target_is_directory=True)
-    monkeypatch.setattr(write_tools, "_notes_dir", notes_link)
+    monkeypatch.setattr(read_tools, "_notes_dir", notes_link)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
 
     with pytest.raises(UnsafeStoragePathError):
-        write_tools.read_note("note.md")
+        read_tools.read_note("note.md")
