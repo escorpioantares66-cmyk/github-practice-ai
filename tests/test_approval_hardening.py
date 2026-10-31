@@ -115,3 +115,63 @@ def test_concurrent_approve_and_deny_have_one_winner(monkeypatch, tmp_path):
     final_record = approval.check_approval(request["id"])
     assert final_record["status"] in {"approved", "denied"}
     assert sum(result["status"] == "invalid_transition" for result in results) == 1
+
+
+def test_malformed_approval_field_types_are_isolated(monkeypatch, tmp_path):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    approval._ensure_dirs()
+    approvals_dir = tmp_path / "approvals"
+
+    malformed_values = [
+        ("status", []),
+        ("status", {}),
+        ("request_audit_status", None),
+        ("request_audit_status", []),
+        ("created", "not-a-timestamp"),
+        ("created", True),
+        ("created", float("inf")),
+    ]
+    for index, (field, value) in enumerate(malformed_values):
+        approval_id = f"{index:032x}"
+        record = {
+            "id": approval_id,
+            "tool": "write_note",
+            "args": {"path": "a.md"},
+            "requester": "requester-1",
+            "status": "pending",
+            "request_audit_status": "written",
+            "created": 1.0,
+        }
+        record[field] = value
+        (approvals_dir / f"{approval_id}.json").write_text(
+            json.dumps(record), encoding="utf-8"
+        )
+
+        assert approval.check_approval(approval_id)["status"] == "corrupt_record"
+        assert approval.approve(
+            approval_id, approver_key=APPROVER_KEY
+        )["status"] == "corrupt_record"
+
+    assert approval.list_pending() == []
+
+
+def test_pending_scan_uses_complete_record_validation(monkeypatch, tmp_path):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    valid = approval.request_approval("write_note", {"path": "valid.md"})
+    approvals_dir = tmp_path / "approvals"
+    malformed_id = "f" * 32
+    malformed = {
+        "id": malformed_id,
+        "tool": "write_note",
+        "args": {"path": "bad.md"},
+        "requester": "requester-1",
+        "status": "pending",
+        "request_audit_status": [],
+        "created": 1.0,
+    }
+    (approvals_dir / f"{malformed_id}.json").write_text(
+        json.dumps(malformed), encoding="utf-8"
+    )
+
+    pending = approval.list_pending()
+    assert [record["id"] for record in pending] == [valid["id"]]
