@@ -547,3 +547,35 @@ def test_approval_audit_failure_is_http_500_and_execution_is_blocked(
     assert executed.status_code == 500
     assert executed.json()["detail"]["error"] == "approval_audit_incomplete"
     assert not (tmp_path / "notes" / "approval-audit-api.md").exists()
+
+
+def test_request_audit_failure_returns_http_500_and_cannot_be_approved(
+    client, monkeypatch
+):
+    from stage2_sdk_ai import approval
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+
+    def fail_request_audit(action, record):
+        if action == "request":
+            raise OSError("request audit unavailable")
+        raise AssertionError("unexpected audit action")
+
+    monkeypatch.setattr(approval, "log_audit", fail_request_audit)
+    requested = client.post(
+        "/write",
+        json={"path": "request-audit-failure.md", "content": "never execute"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert requested.status_code == 500
+    detail = requested.json()["detail"]
+    assert detail["error"] == "approval_audit_incomplete"
+    approval_id = detail["approval_id"]
+    assert approval.check_approval(approval_id)["request_audit_status"] == "failed"
+
+    approved = client.post(
+        f"/approve?approval_id={approval_id}",
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    )
+    assert approved.status_code == 500
+    assert approved.json()["detail"]["error"] == "approval_audit_incomplete"
