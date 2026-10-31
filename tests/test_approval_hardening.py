@@ -440,3 +440,59 @@ def test_audit_event_validation_rejects_nested_non_finite_values(
         pass
     else:
         raise AssertionError("nested non-finite JSON value was accepted")
+
+
+def test_audit_event_validation_rejects_incomplete_consumption_metadata(
+    monkeypatch, tmp_path
+):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    record = {
+        "id": "f" * 32,
+        "tool": "write_note",
+        "args": {"path": "bad.md"},
+        "requester": "requester-1",
+        "status": "consumed",
+        "request_audit_status": "written",
+        "approval_audit_status": "written",
+        "approver": "",
+        "approved_at": 1.0,
+        "consumed_at": 2.0,
+        "created": 1.0,
+    }
+    try:
+        approval.log_audit("consumed", record)
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("consumed event with empty approver was accepted")
+
+
+def test_audit_event_validation_rejects_incomplete_execution_failure_metadata(
+    monkeypatch, tmp_path
+):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    record = {
+        "id": "1" * 32,
+        "tool": "write_note",
+        "args": {"path": "bad.md"},
+        "requester": "requester-1",
+        "status": "consumed",
+        "request_audit_status": "written",
+        "approval_audit_status": "written",
+        "approver": "operator-1",
+        "approved_at": 1.0,
+        "consumed_at": 2.0,
+        "execution_failure": {
+            "failed_at": 3.0,
+            "error_type": "OSError",
+            "error_message": "write failed",
+        },
+        "created": 1.0,
+    }
+    record["approved_at"] = float("nan")
+    try:
+        approval.log_audit("execution_failed", record)
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("execution failure with invalid approval time was accepted")
