@@ -23,6 +23,9 @@ jobs:
       - name: Ruff strict
         run: |
           ruff check .
+      - name: Focused approval recovery tests
+        run: |
+          PYTHONPATH=. CI=true OPENAI_API_KEY=sk-test-mocked pytest -q -o addopts="" tests/test_approval_write_failure.py tests/test_approval_hardening.py
       - name: Tests + Coverage 80% gate
         run: |
           PYTHONPATH=. CI=true OPENAI_API_KEY=sk-test-mocked coverage run -m pytest -q -o addopts=""
