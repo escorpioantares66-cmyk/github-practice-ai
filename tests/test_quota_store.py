@@ -1,6 +1,8 @@
 import os
 from concurrent.futures import ProcessPoolExecutor
 
+import pytest
+
 from stage2_sdk_ai import quota_store
 
 
@@ -81,3 +83,14 @@ def test_database_and_directory_permissions_are_private(monkeypatch, tmp_path):
     quota_store.check_rate_limit("requester-a", "api", 10)
     assert stat.S_IMODE(db.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(db.stat().st_mode) == 0o600
+
+
+
+def test_database_symlink_is_rejected(monkeypatch, tmp_path):
+    outside = tmp_path / "outside.sqlite3"
+    outside.write_bytes(b"not a quota database")
+    link = tmp_path / "quota-link.sqlite3"
+    link.symlink_to(outside)
+    monkeypatch.setenv("AGENT_QUOTA_DB_PATH", str(link))
+    with pytest.raises(quota_store.QuotaStoreError):
+        quota_store.check_rate_limit("requester-a", "api", 10)
