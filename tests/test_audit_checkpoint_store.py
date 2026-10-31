@@ -10,10 +10,11 @@ class FakeS3:
     def __init__(self, payload):
         self.payload = payload
         self.request = None
+        self.body = io.BytesIO(payload)
 
     def get_object(self, **kwargs):
         self.request = kwargs
-        return {"Body": io.BytesIO(self.payload)}
+        return {"Body": self.body}
 
 
 def test_s3_checkpoint_fetch_uses_configured_bucket_and_key(monkeypatch):
@@ -40,6 +41,7 @@ def test_s3_checkpoint_fetch_uses_configured_bucket_and_key(monkeypatch):
     assert client.request == {
         "Bucket": "private-checkpoints", "Key": "audit/latest.json"
     }
+    assert client.body.closed
 
 
 def test_s3_checkpoint_rejects_duplicate_json_keys(monkeypatch):
@@ -85,3 +87,12 @@ def test_export_checkpoint_writes_private_file(monkeypatch, tmp_path):
     assert json.loads(destination.read_text(encoding="utf-8")) == result
     assert destination.stat().st_mode & 0o777 == 0o600
     assert destination.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_s3_checkpoint_closes_response_body_when_oversized():
+    client = FakeS3(b"x" * (audit_checkpoint_store.MAX_CHECKPOINT_BYTES + 1))
+    with pytest.raises(audit_checkpoint_store.AuditCheckpointStoreError, match="size"):
+        audit_checkpoint_store.load_s3_checkpoint(
+            client, bucket="private-checkpoints", key="audit/latest.json"
+        )
+    assert client.body.closed
