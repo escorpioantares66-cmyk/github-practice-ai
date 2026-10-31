@@ -1,18 +1,33 @@
 # Security and operational limitations
 
-## Process-local rate limits and cost budgets
+## Persistent quota storage and cost accounting
 
-The current rate limiter and daily cost budget are maintained in process memory.
+Requester and approver rate-limit events and daily model usage are stored in
+SQLite at `.agent_state/quotas.sqlite3` by default. Override the location with
+`AGENT_QUOTA_DB_PATH`. The parent directory is created with mode 0700 and the
+database is restricted to mode 0600. SQLite write transactions serialize quota
+decisions across local worker processes sharing the same persistent filesystem.
 
-- Rate-limit counters are local to one running application process.
-- Cost totals roll over at the UTC calendar-day boundary while the process is running.
-- Cost reservations are atomic within one process, so concurrent requests handled by that process cannot all spend the same unreserved budget.
-- Both rate-limit counters and cost totals are lost when the process restarts.
-- Multiple application workers or instances do not share counters or budget totals. Each process enforces its own local limits.
+This is a **single-host** design. Do not put the SQLite database on NFS or
+assume it coordinates separate machines/containers with independent disks.
+The database must live on persistent storage; ephemeral deployment filesystems
+will lose quota history on replacement or redeploy.
 
-This is an intentional low-cost deployment trade-off, not a distributed quota guarantee. It is suitable only when the application runs as a single process and operators accept reset-on-restart behavior.
+The API reserves a conservative worst-case allowance before running its
+bounded three-call agent loop. Reservations expire after one hour if a process
+crashes and are released when a request completes. Actual usage is recorded
+from the provider response's prompt and completion token counts. Missing usage
+or a failed durable usage write stops further agent execution. The default
+pricing configuration is for `gpt-4o-mini`: USD 0.15 per million input tokens
+and USD 0.60 per million output tokens. Override with
+`AGENT_MODEL_INPUT_USD_PER_1M` and `AGENT_MODEL_OUTPUT_USD_PER_1M` when model
+or provider pricing changes. Cached input is conservatively charged at the
+uncached input rate.
 
-Before deploying multiple workers/instances, or when daily spending limits must survive restarts, move rate-limit and cost-budget state to a shared persistent backend and enforce reservations atomically there. Do not treat the current in-memory controls as a global spending cap.
+These application records are estimates of provider charges, not a provider
+invoice or a guaranteed billing cap. They exclude non-model charges, taxes,
+platform fees, and model calls outside this instrumented agent path. Reconcile
+them against provider billing and usage dashboards.
 
 
 ## Additional application-level controls
