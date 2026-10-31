@@ -317,6 +317,15 @@ def execute_write_endpoint(
         raise HTTPException(status_code=403, detail="Approval belongs to a different requester")
     if status == "invalid_approved_payload":
         raise HTTPException(status_code=409, detail=result.get("error", status))
+    if status == "execution_failed":
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": result.get("error", "Approved write failed"),
+                "approval_id": req.approval_id,
+                "recovery": "Operator review required; approval remains consumed.",
+            },
+        )
     return result
 
 
