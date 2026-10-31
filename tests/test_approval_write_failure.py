@@ -163,7 +163,9 @@ def test_consumed_audit_failure_prevents_write_and_records_recovery(
     result = write_tools.execute_approved_write(approval_id, requester="agent")
 
     assert result["status"] == "consumption_audit_incomplete"
-    assert not (tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "fault-case.md").exists()
+    assert not (
+        tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "fault-case.md"
+    ).exists()
     record = approval.check_approval(approval_id)
     assert record["status"] == "consumed"
     assert record["execution_failure"]["error_type"] == "RuntimeError"
@@ -228,7 +230,9 @@ def test_approval_audit_failure_blocks_execution_and_preserves_consumed_safety(
         approval_id, requester="agent"
     )
     assert execution["status"] == "approval_audit_incomplete"
-    assert not (tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "approval-audit.md").exists()
+    assert not (
+        tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "approval-audit.md"
+    ).exists()
     assert approval.check_approval(approval_id)["status"] == "approved"
 
 
@@ -272,7 +276,9 @@ def test_approval_audit_record_update_failure_leaves_approval_unexecutable(
         approval_id, requester="agent"
     )
     assert execution["status"] == "approval_audit_incomplete"
-    assert not (tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "approval-audit-persist.md").exists()
+    assert not (
+        tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "approval-audit-persist.md"
+    ).exists()
 
 
 def test_denial_audit_failure_keeps_denial_terminal_and_reports_incomplete_audit(
