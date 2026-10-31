@@ -200,11 +200,14 @@ def query_endpoint(req: QueryReq, api_key: str = Depends(_check_auth)):
         return {"answer": "cost limit $1 exceeded", "blocked": True}
     res = run_agent(q, top_k=req.top_k or 5)
     out = output_guard.check_output(res.get("answer", ""), res.get("sources", []))
-    cost_guard.add_cost(api_key, q + res.get("answer", ""))
+    safe_answer = out.get("text", "")
+    safe_sources = out.get("sources", [])
+    cost_guard.add_cost(api_key, q + safe_answer)
     return {
-        "answer": res.get("answer"),
+        "answer": safe_answer,
         "confidence": out.get("confidence"),
-        "sources": res.get("sources", []),
+        "filtered": out.get("filtered", False),
+        "sources": safe_sources,
     }
 
 
