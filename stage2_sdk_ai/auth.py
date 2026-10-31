@@ -82,27 +82,44 @@ def verify_api_key(api_key: str | None) -> bool:
 def check_rate_limit(api_key: str) -> bool:
     return check_rate(api_key).get("is_ok", False)
 
+def _configured_approver_keys() -> list[tuple[str, str]]:
+    """Return stable approver identity/secret pairs from AGENT_APPROVER_KEYS."""
+    raw = os.getenv("AGENT_APPROVER_KEYS", "").strip()
+    configured: list[tuple[str, str]] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" in item:
+            identity, secret = item.split("=", 1)
+            identity, secret = identity.strip(), secret.strip()
+            if not identity or not secret:
+                continue
+        else:
+            secret = item
+            identity = "approver-" + hashlib.sha256(
+                secret.encode("utf-8")
+            ).hexdigest()[:12]
+        configured.append((identity, secret))
+    return configured
+
+
 def verify_approver_key(approver_key: str | None) -> bool:
     """Accept only explicitly configured approval credentials."""
     if not approver_key:
         return False
-
-    raw = os.getenv("AGENT_APPROVER_KEYS", "").strip()
-    if not raw:
-        return False
-
-    allowed = [key.strip() for key in raw.split(",") if key.strip()]
     return any(
-        hmac.compare_digest(approver_key, key)
-        for key in allowed
+        hmac.compare_digest(approver_key, secret)
+        for _, secret in _configured_approver_keys()
     )
 
 
-
 def approver_identity(approver_key: str) -> str:
-    """Return a non-secret stable audit/rate-limit identifier for a valid key."""
-    fingerprint = hashlib.sha256(approver_key.encode("utf-8")).hexdigest()[:12]
-    return f"approver-{fingerprint}"
+    """Resolve a valid approver secret to its stable configured identity."""
+    for identity, secret in _configured_approver_keys():
+        if hmac.compare_digest(approver_key, secret):
+            return identity
+    raise ValueError("Approver identity is not configured")
 
 
 def requester_rate_limit_identity(api_key: str | None) -> str | None:
