@@ -766,3 +766,49 @@ def test_requester_rate_limit_runs_before_large_body_buffering(client):
     )
     assert response.status_code == 429
     assert response.json()["detail"] == "Rate limit exceeded"
+
+
+@pytest.mark.parametrize("operation", ["approve", "deny", "execute"])
+def test_corrupt_approval_records_return_operator_error_not_success(
+    client, monkeypatch, operation
+):
+    from stage2_sdk_ai import approval
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=approver-secret")
+    created = client.post(
+        "/write",
+        json={"path": "corrupt-record.md", "content": "approved content"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert created.status_code == 200
+    approval_id = created.json()["approval_id"]
+
+    if operation == "execute":
+        approved = client.post(
+            f"/approve?approval_id={approval_id}",
+            headers={"X-Approver-Key": "approver-secret"},
+        )
+        assert approved.status_code == 200
+
+    approval._approval_path(approval_id).write_text("{malformed", encoding="utf-8")
+
+    if operation == "approve":
+        response = client.post(
+            f"/approve?approval_id={approval_id}",
+            headers={"X-Approver-Key": "approver-secret"},
+        )
+    elif operation == "deny":
+        response = client.post(
+            "/deny",
+            json={"approval_id": approval_id, "reason": "operator test"},
+            headers={"X-Approver-Key": "approver-secret"},
+        )
+    else:
+        response = client.post(
+            "/write/execute",
+            json={"approval_id": approval_id},
+            headers={"X-API-Key": VALID_KEY},
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["error"] == "corrupt_approval_record"
