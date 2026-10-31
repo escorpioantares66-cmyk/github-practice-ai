@@ -14,7 +14,13 @@ from stage2_sdk_ai.vector_store import RealVectorStore, _chunk_text
 
 def test_chunk_text_empty_returns_empty_list():
     assert _chunk_text("") == []
-    assert _chunk_text(None) == []  # falsy text, same branch
+
+
+def test_chunk_text_rejects_non_string_input():
+    import pytest
+
+    with pytest.raises(TypeError, match="text must be a string"):
+        _chunk_text(None)
 
 
 def test_chunk_text_shorter_than_chunk_size_single_chunk():
