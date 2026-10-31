@@ -222,13 +222,13 @@ def query_endpoint(req: QueryReq, api_key: str = Depends(_check_auth)):
     chk = input_guard.check_input(q)
     if not isinstance(chk, dict) or chk.get("is_safe") is not True:
         return {"answer": "blocked by input_guard", "blocked": True}
-    if not cost_guard.check_budget(api_key, q):
+    if not cost_guard.reserve_cost(api_key, q):
         return {"answer": "cost limit $1 exceeded", "blocked": True}
     res = run_agent(q, top_k=req.top_k or 5)
     out = output_guard.check_output(res.get("answer", ""), res.get("sources", []))
     safe_answer = out.get("text", "")
     safe_sources = out.get("sources", [])
-    cost_guard.add_cost(api_key, q + safe_answer)
+    cost_guard.add_cost(api_key, safe_answer)
     return {
         "answer": safe_answer,
         "confidence": out.get("confidence"),
