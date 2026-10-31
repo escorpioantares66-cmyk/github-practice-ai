@@ -143,3 +143,47 @@ def test_directory_fsync_failure_after_replace_requires_destination_inspection(
     assert result["status"] == "execution_failed"
     assert destination.read_text(encoding="utf-8") == "approved payload"
     assert approval.check_approval(approval_id)["status"] == "consumed"
+
+
+def test_consumed_audit_failure_prevents_write_and_records_recovery(
+    monkeypatch, tmp_path
+):
+    approval_id = _approved_request(monkeypatch, tmp_path)
+    real_log_audit = approval.log_audit
+
+    def fail_consumed_audit(action, record):
+        if action == "consumed":
+            raise OSError("consumed audit volume unavailable")
+        return real_log_audit(action, record)
+
+    monkeypatch.setattr(approval, "log_audit", fail_consumed_audit)
+    result = write_tools.execute_approved_write(approval_id, requester="agent")
+
+    assert result["status"] == "consumption_audit_incomplete"
+    assert not (tmp_path / "notes" / "fault-case.md").exists()
+    record = approval.check_approval(approval_id)
+    assert record["status"] == "consumed"
+    assert record["execution_failure"]["error_type"] == "RuntimeError"
+    assert "consumed audit append failed" in record["execution_failure"]["error_message"]
+    replay = write_tools.execute_approved_write(approval_id, requester="agent")
+    assert replay["status"] == "invalid_transition"
+
+
+def test_invalid_approved_payload_is_recorded_for_operator_review(
+    monkeypatch, tmp_path
+):
+    approval_id = _approved_request(monkeypatch, tmp_path)
+    record = approval.check_approval(approval_id)
+    record["args"]["path"] = "../outside.md"
+    approval._write_record_atomically(approval._approval_path(approval_id), record)
+
+    result = write_tools.execute_approved_write(approval_id, requester="agent")
+
+    assert result["status"] == "invalid_approved_payload_operator_review"
+    persisted = approval.check_approval(approval_id)
+    assert persisted["status"] == "consumed"
+    assert persisted["execution_failure"]["error_type"] == "ValueError"
+    assert "not canonical" in persisted["execution_failure"]["error_message"]
+    assert not (tmp_path / "outside.md").exists()
+    replay = write_tools.execute_approved_write(approval_id, requester="agent")
+    assert replay["status"] == "invalid_transition"
