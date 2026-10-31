@@ -251,8 +251,19 @@ def consume_approval_request(
         data["status"] = "consumed"
         data["consumed_at"] = time.time()
         _write_record_atomically(path, data)
-        log_audit("consumed", data)
-        return data
+        # The state transition is durable before the audit append. If the
+        # append fails, return the consumed record with an explicit marker so
+        # callers fail closed and never perform the approved side effect.
+        try:
+            log_audit("consumed", data)
+        except Exception as exc:
+            result = dict(data)
+            result["audit_status"] = "failed"
+            result["audit_error_type"] = type(exc).__name__[:120]
+            return result
+        result = dict(data)
+        result["audit_status"] = "written"
+        return result
 
 
 def consume_approval(
