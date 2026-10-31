@@ -346,7 +346,7 @@ def execute_write_endpoint(
         raise HTTPException(
             status_code=500,
             detail={
-                "error": result.get("error", "Approved write failed"),
+                "error": result.get("error", status),
                 "approval_id": req.approval_id,
                 "recovery": "Operator review required; approval remains consumed.",
             },
