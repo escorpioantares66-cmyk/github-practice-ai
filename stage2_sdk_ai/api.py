@@ -164,7 +164,7 @@ class DenyApprovalReq(BaseModel):
 def _check_auth(x_api_key: Optional[str] = Header(None)):
     if not auth.verify_api_key(x_api_key or ""):
         raise HTTPException(status_code=401, detail="Invalid API key")
-    if not auth.check_rate_limit(x_api_key or "anon"):
+    if not auth.check_requester_rate_limit(x_api_key):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
     return x_api_key
 
