@@ -18,7 +18,7 @@ class UnsafeStoragePathError(ValueError):
 
 
 def _open_directory_chain(path: Path, create: bool = False) -> int:
-    """Open a directory by walking each component relative to verified dirfds."""
+    """Open a directory from the nearest accessible ancestor using dirfds."""
     target = Path(os.path.abspath(os.fspath(path)))
     if target == Path(target.anchor):
         raise UnsafeStoragePathError(
@@ -30,9 +30,23 @@ def _open_directory_chain(path: Path, create: bool = False) -> int:
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_CLOEXEC", 0)
     )
-    fd = os.open(target.anchor, flags)
+
+    # Android/Termux may deny opening '/'. Find an accessible ancestor above
+    # the target, then verify every remaining component without following links.
+    anchor = target.parent
+    while True:
+        try:
+            fd = os.open(anchor, flags)
+            break
+        except (PermissionError, FileNotFoundError, NotADirectoryError):
+            parent = anchor.parent
+            if parent == anchor:
+                raise
+            anchor = parent
+
     try:
-        for part in target.parts[1:]:
+        relative_parts = target.relative_to(anchor).parts
+        for part in relative_parts:
             try:
                 next_fd = os.open(part, flags, dir_fd=fd)
             except FileNotFoundError:
@@ -42,8 +56,6 @@ def _open_directory_chain(path: Path, create: bool = False) -> int:
                 next_fd = os.open(part, flags, dir_fd=fd)
             os.close(fd)
             fd = next_fd
-        # Only the explicit directory-creation/validation path changes mode.
-        # Read-only descriptor walks must never chmod an existing directory.
         if create:
             os.fchmod(fd, 0o700)
         return fd
