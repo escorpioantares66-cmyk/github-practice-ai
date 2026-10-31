@@ -333,6 +333,7 @@ def test_request_audit_append_failure_leaves_request_unapprovable(
     assert stored["status"] == "pending"
     assert stored["request_audit_status"] == "failed"
     assert stored["request_audit_error_type"] == "OSError"
+    assert approval.list_pending() == []
     result = approval.approve(approval_id, approver_key="test-approver-secret")
     assert result["status"] == "approval_audit_incomplete"
     assert approval.check_approval(approval_id)["status"] == "pending"
