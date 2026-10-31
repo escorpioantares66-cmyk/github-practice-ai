@@ -27,10 +27,7 @@ def test_pii_samples_filtered():
     fn = _get_output_fn()
 
     def wrapper(text):
-        try:
-            return fn(text, sources=["safe doc"])
-        except TypeError:
-            return fn(text)
+        return fn(text, sources=["safe doc"])
 
     result = eval_pii_guard(wrapper)
     assert result["total"] == len(PII_SAMPLES)
@@ -40,18 +37,8 @@ def test_cost_spike_blocked():
     for n in ["reset_cost", "reset", "clear"]:
         if hasattr(cost_guard, n):
             getattr(cost_guard, n)()
-    add_fn = getattr(cost_guard, "add_cost", getattr(cost_guard, "add", lambda *a: None))
-    check_fn = None
-    for n in ["check_cost", "check_limit", "check", "is_over_limit"]:
-        if hasattr(cost_guard, n):
-            check_fn = getattr(cost_guard, n)
-            break
-
-    def _default_check(*a):
-        return {"blocked": True}
-
-    if check_fn is None:
-        check_fn = _default_check
+    add_fn = cost_guard.add_cost
+    check_fn = cost_guard.check_cost
     result = eval_cost_guard(add_fn, check_fn)
     assert result["spike_blocked"] is True
     for n in ["reset_cost", "reset", "clear"]:
@@ -75,10 +62,7 @@ def test_approval_bypass_blocked(monkeypatch):
 
 def test_output_guard_confidence_levels():
     fn = _get_output_fn()
-    try:
-        r = fn("answer from sources", sources=["answer from sources doc"])
-    except TypeError:
-        r = fn("answer from sources")
+    r = fn("answer from sources", sources=["answer from sources doc"])
     conf = r.get("confidence", "low") if isinstance(r, dict) else "low"
     assert conf in ["low", "medium", "high"]
 
@@ -110,9 +94,11 @@ def test_direct_injection_block():
                 assert res.get("blocked", False) is True
 
 def test_direct_cost_limit():
-    for n in ["reset_cost", "reset", "clear"]:
-        if hasattr(cost_guard, n):
-            getattr(cost_guard, n)()
+    cost_guard.reset_cost()
+    cost_guard.add_cost("test-key-123", "word " * 10_000)
+    result = cost_guard.check_cost("test-key-123", "x")
+    assert result["blocked"] is True
+    cost_guard.reset_cost()
     if hasattr(cost_guard, "add_cost"):
         try:
             cost_guard.add_cost("test-key-123", "word " * 10000)
