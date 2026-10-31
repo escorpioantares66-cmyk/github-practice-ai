@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 import logging
 import os
 import re
@@ -168,20 +169,70 @@ def _load_approval_record(path: Path, approval_id: str) -> dict[str, Any]:
     if not isinstance(data["tool"], str) or not data["tool"]:
         raise CorruptApprovalRecordError("invalid approval tool")
     if (
-    not isinstance(data["args"], dict)
-    or not isinstance(data["requester"], str)
-    or not data["requester"]
+        not isinstance(data["args"], dict)
+        or not isinstance(data["requester"], str)
+        or not data["requester"].strip()
     ):
         raise CorruptApprovalRecordError("invalid approval payload or requester")
-    if data["status"] not in {"pending", "approved", "denied", "consumed"}:
+
+    valid_statuses = {"pending", "approved", "denied", "consumed"}
+    valid_audit_statuses = {"pending", "written", "failed"}
+    if not isinstance(data["status"], str) or data["status"] not in valid_statuses:
         raise CorruptApprovalRecordError("invalid approval state")
-    if data["request_audit_status"] not in {"pending", "written", "failed"}:
-        raise CorruptApprovalRecordError("invalid request audit state")
     if (
-    data["status"] in {"approved", "denied", "consumed"}
-    and data.get("approval_audit_status") not in {"pending", "written", "failed"}
+        not isinstance(data["request_audit_status"], str)
+        or data["request_audit_status"] not in valid_audit_statuses
+    ):
+        raise CorruptApprovalRecordError("invalid request audit state")
+
+    created = data["created"]
+    if (
+        isinstance(created, bool)
+        or not isinstance(created, (int, float))
+        or not math.isfinite(created)
+    ):
+        raise CorruptApprovalRecordError("invalid approval creation time")
+
+    approval_audit_status = data.get("approval_audit_status")
+    if approval_audit_status is not None and (
+        not isinstance(approval_audit_status, str)
+        or approval_audit_status not in valid_audit_statuses
     ):
         raise CorruptApprovalRecordError("invalid approval audit state")
+    if data["status"] in {"approved", "denied", "consumed"} and (
+        approval_audit_status is None
+    ):
+        raise CorruptApprovalRecordError("missing approval audit state")
+
+    for timestamp_field in ("approved_at", "denied_at", "consumed_at"):
+        timestamp = data.get(timestamp_field)
+        if timestamp is not None and (
+            isinstance(timestamp, bool)
+            or not isinstance(timestamp, (int, float))
+            or not math.isfinite(timestamp)
+        ):
+            raise CorruptApprovalRecordError(
+                f"invalid approval timestamp: {timestamp_field}"
+            )
+
+    for text_field in ("approver", "reason", "approval_audit_error_type"):
+        value = data.get(text_field)
+        if value is not None and not isinstance(value, str):
+            raise CorruptApprovalRecordError(f"invalid approval field: {text_field}")
+
+    execution_failure = data.get("execution_failure")
+    if execution_failure is not None:
+        if not isinstance(execution_failure, dict):
+            raise CorruptApprovalRecordError("invalid execution failure metadata")
+        failed_at = execution_failure.get("failed_at")
+        if (
+            isinstance(failed_at, bool)
+            or not isinstance(failed_at, (int, float))
+            or not math.isfinite(failed_at)
+            or not isinstance(execution_failure.get("error_type"), str)
+            or not isinstance(execution_failure.get("error_message"), str)
+        ):
+            raise CorruptApprovalRecordError("invalid execution failure metadata")
     return data
 
 
