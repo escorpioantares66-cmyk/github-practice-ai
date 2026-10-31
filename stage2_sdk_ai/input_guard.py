@@ -26,7 +26,7 @@ BLOCK_PHRASES = [
     "base64:",
     "aWdub3JlIHByZXZpb3Vz",
 ]
-_ZERO_WIDTH = re.compile(r"[\\u200b-\\u200f\\u202a-\\u202e\\u2060\\ufeff]")
+_ZERO_WIDTH = re.compile(r"[\u200b-\u200f\u202a-\u202e\u2060\ufeff]")
 
 
 def check_input(text: str) -> dict:
@@ -39,7 +39,7 @@ def check_input(text: str) -> dict:
         return {"is_safe": False, "reason": "empty"}
     if len(normalized) > MAX_LEN:
         return {"is_safe": False, "reason": f"too long {len(normalized)}"}
-    if re.search(r"[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f]", normalized):
+    if re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", normalized):
         return {"is_safe": False, "reason": "control chars"}
     low = " ".join(normalized.casefold().split())
     for phrase in BLOCK_PHRASES:
