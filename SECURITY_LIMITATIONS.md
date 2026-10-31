@@ -17,7 +17,7 @@ Before deploying multiple workers/instances, or when daily spending limits must 
 
 ## Additional application-level controls
 
-- API note reads and writes are scoped to a requester identity using a SHA-256-derived directory name. This is application-level separation; operators must still protect the host filesystem and backups.
+- All note reads and writes, including direct SDK calls, require an explicit non-empty requester identity and use a SHA-256-derived owner directory. Missing identities fail closed; there is no shared `notes/` fallback. Existing files in the legacy shared directory are not automatically migrated or exposed through the SDK. This is application-level separation; operators must still protect the host filesystem and backups.
 - Approval requests expire 15 minutes after creation. Expired records are rejected at approval and consumption time and are omitted from the pending list. Expired records remain on disk for operator/audit review.
 - The ASGI request middleware limits concurrent body buffering to 16 requests per process and caps each body at 1 MiB. This is a per-process memory bound, not a substitute for connection limits and request timeouts at a reverse proxy.
 - Prompt-injection phrase screening is heuristic only. The agent's tool allowlist, strict argument validation, and requester-scoped note access are the actual privilege boundaries.
@@ -33,3 +33,15 @@ fails closed on significant backward clock adjustments; it does not replace
 reliable time synchronization. Production hosts should run a time
 synchronization service and alert on clock drift. Small clock adjustments
 within the 60-second tolerance can still affect the effective expiry window.
+
+
+## Direct SDK note access
+
+Callers of `tools.read_note`, `write_tools.write_note`, and
+`write_tools.execute_approved_write` must pass the same trusted requester
+identity used when creating the approval. Omitting the identity is rejected.
+Do not accept requester identities from model-generated tool arguments or
+untrusted request-body fields; derive them from authenticated application
+context. The legacy shared `notes/<filename>` location is no longer used by
+these SDK operations. If existing shared notes must be retained, migrate them
+to the correct owner directory through a separately reviewed operator process.
