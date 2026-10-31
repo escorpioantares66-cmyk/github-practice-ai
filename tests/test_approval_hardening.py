@@ -261,7 +261,7 @@ def test_audit_hash_chain_anchors_legacy_prefix(monkeypatch, tmp_path):
         encoding="utf-8",
     )
 
-    approval.log_audit("request", {"id": "b" * 32, "tool": "write_note"})
+    approval.request_approval("write_note", {"path": "two.md"})
     assert approval.verify_audit_log()["entries"] == 2
 
     legacy["record"]["tool"] = "changed"
@@ -296,3 +296,147 @@ def test_audit_hash_chain_rejects_duplicate_json_keys(monkeypatch, tmp_path):
         pass
     else:
         raise AssertionError("duplicate JSON keys were accepted")
+
+
+
+def _process_append_audit_event(index):
+    approval.request_approval("write_note", {"path": f"process-{index}.md"})
+    return index
+
+
+def test_audit_writes_are_serialized_across_processes(monkeypatch, tmp_path):
+    import multiprocessing
+
+    setup_approval_dirs(monkeypatch, tmp_path)
+    context = multiprocessing.get_context("fork")
+    with context.Pool(processes=4) as pool:
+        results = pool.map(_process_append_audit_event, range(12))
+
+    assert sorted(results) == list(range(12))
+    verified = approval.verify_audit_log()
+    assert verified["valid"] is True
+    assert verified["entries"] == 12
+    assert verified["chained_entries"] == 12
+    entries = [
+        json.loads(line)
+        for line in (tmp_path / "logs" / "audit.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert [entry["seq"] for entry in entries] == list(range(1, 13))
+
+
+def test_external_checkpoint_detects_suffix_truncation(monkeypatch, tmp_path):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    for index in range(3):
+        approval.request_approval("write_note", {"path": f"{index}.md"})
+    checkpoint = approval.create_audit_checkpoint()
+
+    approval.request_approval("write_note", {"path": "later.md"})
+    assert approval.verify_audit_log(checkpoint)["checkpoint_verified"] is True
+
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    lines = audit_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    audit_path.write_text("".join(lines[:2]), encoding="utf-8")
+    try:
+        approval.verify_audit_log(checkpoint)
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("truncation before external checkpoint was accepted")
+
+    audit_path.write_text("", encoding="utf-8")
+    try:
+        approval.verify_audit_log(checkpoint)
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("empty log was accepted against external checkpoint")
+
+
+def test_checkpoint_rejects_modified_checkpoint_and_supports_legacy_migration(
+    monkeypatch, tmp_path
+):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    approval._ensure_dirs()
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    legacy = {
+        "action": "request",
+        "time": 1.0,
+        "record": {"id": "a" * 32, "tool": "write_note"},
+    }
+    audit_path.write_text(
+        json.dumps(legacy, separators=(",", ":")) + chr(10),
+        encoding="utf-8",
+    )
+
+    checkpoint = approval.create_audit_checkpoint()
+    assert checkpoint["sequence"] == 0
+    assert checkpoint["legacy_entries"] == 1
+    approval.request_approval("write_note", {"path": "after-migration.md"})
+    assert approval.verify_audit_log(checkpoint)["checkpoint_verified"] is True
+
+    changed = dict(checkpoint)
+    changed["head_hash"] = "f" * 64
+    try:
+        approval.verify_audit_log(changed)
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("modified external checkpoint was accepted")
+
+    lines = audit_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    legacy["record"]["tool"] = "rewritten"
+    audit_path.write_text(
+        json.dumps(legacy, separators=(",", ":")) + chr(10) + lines[1],
+        encoding="utf-8",
+    )
+    try:
+        approval.verify_audit_log(checkpoint)
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("modified migrated legacy prefix was accepted")
+
+
+def test_audit_event_validation_rejects_inconsistent_state(monkeypatch, tmp_path):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    record = {
+        "id": "d" * 32,
+        "tool": "write_note",
+        "args": {"path": "bad.md"},
+        "requester": "requester-1",
+        "status": "approved",
+        "request_audit_status": "written",
+        "approval_audit_status": "written",
+        "approver": "operator-1",
+        "approved_at": 1.0,
+        "created": 1.0,
+    }
+    try:
+        approval.log_audit("request", record)
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("request event with approved state was accepted")
+
+
+def test_audit_event_validation_rejects_nested_non_finite_values(
+    monkeypatch, tmp_path
+):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    record = {
+        "id": "e" * 32,
+        "tool": "write_note",
+        "args": {"value": float("nan")},
+        "requester": "requester-1",
+        "status": "pending",
+        "request_audit_status": "written",
+        "created": 1.0,
+    }
+    try:
+        approval.log_audit("request", record)
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("nested non-finite JSON value was accepted")
