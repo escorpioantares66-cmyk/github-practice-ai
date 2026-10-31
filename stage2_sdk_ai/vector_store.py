@@ -108,6 +108,11 @@ def _validated_embedding(values: Any) -> Any:
     raw = values.tolist() if hasattr(values, "tolist") else list(values)
     if len(raw) != EMBEDDING_DIM:
         raise ValueError("Embedding has an unexpected dimension")
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        for value in raw
+    ):
+        raise ValueError("Embedding values must be numeric")
     vector = [float(value) for value in raw]
     if not all(math.isfinite(value) for value in vector):
         raise ValueError("Embedding contains a non-finite value")
