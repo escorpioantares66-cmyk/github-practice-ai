@@ -63,3 +63,39 @@ def test_usage_is_charged_to_reservation_day_across_utc_midnight(monkeypatch, tm
     assert old_day["output_tokens"] == 500
     assert new_day["input_tokens"] == 0
     cost_guard.release_request(reservation_id)
+
+
+
+def test_direct_sdk_agent_run_reserves_and_releases_quota(monkeypatch, tmp_path):
+    from stage2_sdk_ai import agent_loop
+
+    monkeypatch.setenv("AGENT_QUOTA_DB_PATH", str(tmp_path / "quota.sqlite3"))
+    monkeypatch.setattr(agent_loop, "_is_mock", lambda: False)
+    monkeypatch.setattr(
+        agent_loop,
+        "_run_agent_steps",
+        lambda *args, **kwargs: {"query": "q", "answer": "ok", "steps": [], "sources": []},
+    )
+    result = agent_loop.run_agent("q", requester="sdk-requester")
+    assert result["answer"] == "ok"
+    usage = quota_store.get_daily_usage("sdk-requester", cost_guard._utc_day())
+    assert usage["reserved"] == 0
+
+
+def test_direct_sdk_agent_run_keeps_reservation_on_unknown_usage(monkeypatch, tmp_path):
+    from stage2_sdk_ai import agent_loop
+
+    monkeypatch.setenv("AGENT_QUOTA_DB_PATH", str(tmp_path / "quota.sqlite3"))
+    monkeypatch.setattr(agent_loop, "_is_mock", lambda: False)
+    with pytest.raises(UsageAccountingError):
+        agent_loop.run_agent("q", requester="sdk-requester")
+    usage = quota_store.get_daily_usage("sdk-requester", cost_guard._utc_day())
+    assert usage["reserved"] > 0
+
+
+def test_real_agent_rejects_more_steps_than_reserved(monkeypatch):
+    from stage2_sdk_ai import agent_loop
+
+    monkeypatch.setattr(agent_loop, "_is_mock", lambda: False)
+    with pytest.raises(ValueError):
+        agent_loop.run_agent("q", max_steps=4, requester="sdk-requester")
