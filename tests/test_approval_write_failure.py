@@ -616,3 +616,24 @@ def test_success_audit_failure_is_visible_to_operator(monkeypatch, tmp_path):
     assert recovery[0]["execution_audit_status"] == "failed"
     replay = write_tools.execute_approved_write(approval_id, requester="agent")
     assert replay["status"] == "invalid_transition"
+
+
+
+def test_recovery_listing_surfaces_corrupt_approval_records(monkeypatch, tmp_path):
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
+    approval._ensure_dirs()
+    approval_id = "e" * 32
+    corrupt_path = tmp_path / "approvals" / f"{approval_id}.json"
+    corrupt_path.write_text('{"status": "consumed", broken', encoding="utf-8")
+    corrupt_path.chmod(0o600)
+
+    recovery = approval.list_execution_recovery()
+
+    assert recovery == [
+        {
+            "approval_id": approval_id,
+            "execution_status": "corrupt_record",
+            "execution_audit_status": None,
+        }
+    ]
