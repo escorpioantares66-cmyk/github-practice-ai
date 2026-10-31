@@ -30,6 +30,17 @@ logger = logging.getLogger(__name__)
 
 # Pending/approved write requests are valid for 15 minutes from creation.
 APPROVAL_TTL_SECONDS = 15 * 60
+# A persisted wall-clock timestamp this far ahead of the current clock is
+# treated as invalid. This makes significant clock rollback fail closed.
+MAX_APPROVAL_CLOCK_SKEW_SECONDS = 60
+
+
+def _approval_expired(created: float, now: float | None = None) -> bool:
+    """Fail closed on expiry and on a clock that moved behind record creation."""
+    current_time = time.time() if now is None else now
+    if created > current_time + MAX_APPROVAL_CLOCK_SKEW_SECONDS:
+        return True
+    return current_time - created > APPROVAL_TTL_SECONDS
 
 
 class CorruptApprovalRecordError(ValueError):
@@ -302,7 +313,7 @@ def _transition(
                 "current_status": data.get("status"),
             }
 
-        if time.time() - data["created"] > APPROVAL_TTL_SECONDS:
+        if _approval_expired(data["created"]):
             return {"status": "expired", "id": approval_id}
 
         # Distinct credentials are not sufficient if both roles resolve to
@@ -469,7 +480,7 @@ def consume_approval_request(
                 "current_status": data.get("status"),
             }
 
-        if time.time() - data["created"] > APPROVAL_TTL_SECONDS:
+        if _approval_expired(data["created"]):
             return {"status": "expired", "id": approval_id}
 
         if data.get("approval_audit_status") != "written":
@@ -948,7 +959,7 @@ def list_pending() -> list[dict[str, Any]]:
         if (
             data["status"] == "pending"
             and data["request_audit_status"] == "written"
-            and time.time() - data["created"] <= APPROVAL_TTL_SECONDS
+            and not _approval_expired(data["created"])
         ):
             pending.append(data)
     return pending
