@@ -28,6 +28,9 @@ _approvals_dir = Path("approvals")
 _audit_file = Path("logs/audit.jsonl")
 logger = logging.getLogger(__name__)
 
+# Pending/approved write requests are valid for 15 minutes from creation.
+APPROVAL_TTL_SECONDS = 15 * 60
+
 
 class CorruptApprovalRecordError(ValueError):
     """An approval record is malformed or does not match its filename."""
@@ -299,6 +302,14 @@ def _transition(
                 "current_status": data.get("status"),
             }
 
+        if time.time() - data["created"] > APPROVAL_TTL_SECONDS:
+            return {"status": "expired", "id": approval_id}
+
+        # Distinct credentials are not sufficient if both roles resolve to
+        # the same configured principal. Enforce separation of identities too.
+        if data.get("requester") == approver:
+            return {"status": "self_approval_denied", "id": approval_id}
+
         if data.get("request_audit_status") != "written":
             return {
                 "status": "approval_audit_incomplete",
@@ -457,6 +468,9 @@ def consume_approval_request(
                 "id": approval_id,
                 "current_status": data.get("status"),
             }
+
+        if time.time() - data["created"] > APPROVAL_TTL_SECONDS:
+            return {"status": "expired", "id": approval_id}
 
         if data.get("approval_audit_status") != "written":
             return {
@@ -934,6 +948,7 @@ def list_pending() -> list[dict[str, Any]]:
         if (
             data["status"] == "pending"
             and data["request_audit_status"] == "written"
+            and time.time() - data["created"] <= APPROVAL_TTL_SECONDS
         ):
             pending.append(data)
     return pending
