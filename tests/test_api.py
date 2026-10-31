@@ -579,3 +579,31 @@ def test_request_audit_failure_returns_http_500_and_cannot_be_approved(
     )
     assert approved.status_code == 500
     assert approved.json()["detail"]["error"] == "approval_audit_incomplete"
+
+
+def test_query_redacts_pii_from_answer_and_sources(client, monkeypatch):
+    import stage2_sdk_ai.api as api_mod
+
+    def return_pii(*args, **kwargs):
+        return {
+            "answer": "Contact alice@example.com or call 555-123-4567.",
+            "sources": [
+                {"text": "Customer email alice@example.com"},
+                {"metadata": {"contact": "555-123-4567"}},
+            ],
+        }
+
+    monkeypatch.setattr(api_mod, "run_agent", return_pii)
+    response = client.post(
+        "/query",
+        json={"query": "contact details"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["filtered"] is True
+    assert "alice@example.com" not in body["answer"]
+    assert "555-123-4567" not in body["answer"]
+    assert "alice@example.com" not in response.text
+    assert "555-123-4567" not in response.text
+    assert "[REDACTED:EMAIL]" in response.text
