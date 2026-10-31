@@ -144,28 +144,44 @@ def request_approval(
     return record
 
 
+def _load_approval_record(path: Path, approval_id: str) -> dict[str, Any]:
+    """Load and validate a record before any state transition."""
+    try:
+        data = json.loads(read_private_text(path))
+    except FileNotFoundError:
+        raise
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise CorruptApprovalRecordError("approval record is malformed") from exc
+    if not isinstance(data, dict) or data.get("id") != approval_id:
+        raise CorruptApprovalRecordError("approval record identity mismatch")
+    required = {"id", "tool", "args", "requester", "status", "request_audit_status", "created"}
+    if not required.issubset(data):
+        raise CorruptApprovalRecordError("approval record is missing required fields")
+    if not isinstance(data["tool"], str) or not data["tool"]:
+        raise CorruptApprovalRecordError("invalid approval tool")
+    if not isinstance(data["args"], dict) or not isinstance(data["requester"], str) or not data["requester"]:
+        raise CorruptApprovalRecordError("invalid approval payload or requester")
+    if data["status"] not in {"pending", "approved", "denied", "consumed"}:
+        raise CorruptApprovalRecordError("invalid approval state")
+    if data["request_audit_status"] not in {"pending", "written", "failed"}:
+        raise CorruptApprovalRecordError("invalid request audit state")
+    if data["status"] in {"approved", "denied", "consumed"} and data.get("approval_audit_status") not in {"pending", "written", "failed"}:
+        raise CorruptApprovalRecordError("invalid approval audit state")
+    return data
+
+
 def check_approval(approval_id: str) -> dict[str, Any]:
     _ensure_dirs()
     path = _approval_path(approval_id)
     if path is None:
         return {"status": "invalid_id", "id": approval_id}
     try:
-        data = json.loads(read_private_text(path))
+        return _load_approval_record(path, approval_id)
     except FileNotFoundError:
         return {"status": "not_found", "id": approval_id}
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        logger.exception(
-            "approval record is malformed; operator review required",
-            extra={"approval_id": approval_id},
-        )
+    except CorruptApprovalRecordError:
+        logger.exception("approval record requires operator review", extra={"approval_id": approval_id})
         return {"status": "corrupt_record", "id": approval_id}
-    if not isinstance(data, dict) or data.get("id") != approval_id:
-        logger.error(
-            "approval record identity mismatch; operator review required",
-            extra={"approval_id": approval_id},
-        )
-        return {"status": "corrupt_record", "id": approval_id}
-    return data
 
 
 def _transition(
@@ -184,9 +200,12 @@ def _transition(
 
     with _locked_record(path):
         try:
-            data = json.loads(read_private_text(path))
+            data = _load_approval_record(path, approval_id)
         except FileNotFoundError:
             return {"status": "not_found", "id": approval_id}
+        except CorruptApprovalRecordError:
+            logger.exception("approval record requires operator review", extra={"approval_id": approval_id})
+            return {"status": "corrupt_record", "id": approval_id}
 
         if data.get("status") != "pending":
             return {
@@ -277,9 +296,12 @@ def record_execution_failure(
 
     with _locked_record(path):
         try:
-            data = json.loads(read_private_text(path))
+            data = _load_approval_record(path, approval_id)
         except FileNotFoundError:
             return {"status": "not_found", "id": approval_id}
+        except CorruptApprovalRecordError:
+            logger.exception("approval record requires operator review", extra={"approval_id": approval_id})
+            return {"status": "corrupt_record", "id": approval_id}
 
         if data.get("status") != "consumed":
             return {
@@ -329,9 +351,12 @@ def consume_approval_request(
 
     with _locked_record(path):
         try:
-            data = json.loads(read_private_text(path))
+            data = _load_approval_record(path, approval_id)
         except FileNotFoundError:
             return {"status": "not_found", "id": approval_id}
+        except CorruptApprovalRecordError:
+            logger.exception("approval record requires operator review", extra={"approval_id": approval_id})
+            return {"status": "corrupt_record", "id": approval_id}
 
         if data.get("status") == "pending":
             return {"status": "pending", "id": approval_id}
