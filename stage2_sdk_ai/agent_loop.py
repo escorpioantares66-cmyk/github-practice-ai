@@ -229,6 +229,14 @@ def run_agent(
     quota_reservation_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the agent only under a valid daily quota reservation in real mode."""
+    if (
+        isinstance(max_steps, bool)
+        or not isinstance(max_steps, int)
+        or not 1 <= max_steps <= cost_guard.MAX_MODEL_CALLS_PER_REQUEST
+    ):
+        raise ValueError(
+            f"max_steps must be between 1 and {cost_guard.MAX_MODEL_CALLS_PER_REQUEST}"
+        )
     if _is_mock():
         return _run_agent_steps(query, max_steps=max_steps, top_k=top_k, requester=requester)
     if not isinstance(requester, str) or not requester.strip():
