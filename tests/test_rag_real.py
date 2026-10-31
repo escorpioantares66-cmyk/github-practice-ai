@@ -1,3 +1,7 @@
+import os
+
+os.environ.setdefault("OPENAI_API_KEY", "sk-test-mocked")
+
 import pathlib
 import shutil
 
