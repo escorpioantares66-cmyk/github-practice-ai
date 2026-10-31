@@ -4,19 +4,19 @@ import re
 from typing import Any
 
 _EMAIL = re.compile(
-    r"(?i)\b[A-Z0-9.!#$%&'*+/=?^_{|}~-]+@"
+    r"(?i)\\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@"
     r"[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?"
-    r"(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+\b"
+    r"(?:\\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+\\b"
 )
-_SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
-_CARD = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")
+_SSN = re.compile(r"\\b\\d{3}-\\d{2}-\\d{4}\\b")
+_CARD = re.compile(r"(?<!\\d)(?:\\d[ -]?){13,19}(?!\\d)")
 _PHONE = re.compile(
-    r"(?<!\w)(?:\+?\d{1,3}[ .()-]?)?(?:\(?\d{2,4}\)?[ .()-]?)"
-    r"\d{2,4}[ .()-]?\d{3,4}(?!\w)"
+    r"(?<!\\w)(?:\\+?\\d{1,3}[ .()-]?)?(?:\\(?\\d{2,4}\\)?[ .()-]?)"
+    r"\\d{2,4}[ .()-]?\\d{3,4}(?!\\w)"
 )
 _STREET_ADDRESS = re.compile(
-    r"\b\d{1,6}\s+[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,3}\s+"
-    r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl)\b\.?",
+    r"\\b\\d{1,6}\\s+[A-Za-z0-9.'-]+(?:\\s+[A-Za-z0-9.'-]+){0,3}\\s+"
+    r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl)\\b\\.?",
     re.IGNORECASE,
 )
 
@@ -51,7 +51,6 @@ def redact_pii(text: str) -> tuple[str, bool]:
     """Redact common high-confidence PII patterns without discarding other text."""
     if not isinstance(text, str):
         return "", True
-
     redacted = _EMAIL.sub("[REDACTED:EMAIL]", text)
     redacted = _SSN.sub("[REDACTED:SSN]", redacted)
 
@@ -86,11 +85,22 @@ def _sanitize_value(value: Any) -> tuple[Any, bool]:
         output = {}
         changed = False
         for key, item in value.items():
+            safe_key, key_changed = redact_pii(key) if isinstance(key, str) else (str(key), True)
             safe_item, item_changed = _sanitize_value(item)
-            output[key] = safe_item
-            changed = changed or item_changed
+            # Avoid silently dropping a value if two original keys redact to
+            # the same label. Preserve both under deterministic unique keys.
+            unique_key = safe_key
+            suffix = 2
+            while unique_key in output:
+                unique_key = f"{safe_key}_{suffix}"
+                suffix += 1
+            output[unique_key] = safe_item
+            changed = changed or key_changed or item_changed
         return output, changed
-    return value, False
+    if value is None or isinstance(value, (bool, int, float)):
+        return value, False
+    # Unknown objects are not safe to serialize or expose as metadata.
+    return "[REDACTED:UNSUPPORTED_VALUE]", True
 
 
 def check_output(text: str, sources: list | None = None) -> dict:
