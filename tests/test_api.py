@@ -607,3 +607,58 @@ def test_query_redacts_pii_from_answer_and_sources(client, monkeypatch):
     assert "alice@example.com" not in response.text
     assert "555-123-4567" not in response.text
     assert "[REDACTED:EMAIL]" in response.text
+
+
+def test_query_rejects_unbounded_top_k_and_invalid_query(client):
+    oversized_top_k = client.post(
+        "/query",
+        json={"query": "hello", "top_k": 51},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert oversized_top_k.status_code == 422
+
+    empty_query = client.post(
+        "/query",
+        json={"query": ""},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert empty_query.status_code == 422
+
+
+def test_query_fails_closed_when_input_guard_returns_malformed_result(
+    client, monkeypatch
+):
+    import stage2_sdk_ai.api as api_mod
+
+    monkeypatch.setattr(api_mod.input_guard, "check_input", lambda _query: {})
+    monkeypatch.setattr(
+        api_mod,
+        "run_agent",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("agent must not run when guard result is malformed")
+        ),
+    )
+    response = client.post(
+        "/query",
+        json={"query": "hello"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert response.status_code == 200
+    assert response.json()["blocked"] is True
+
+
+def test_query_compatibility_function_redacts_pii(monkeypatch):
+    import stage2_sdk_ai.api as api_mod
+
+    monkeypatch.setattr(
+        api_mod,
+        "run_agent",
+        lambda *_args, **_kwargs: {
+            "answer": "Contact alice@example.com",
+            "sources": [{"text": "Call 0712 345 678"}],
+        },
+    )
+    result = api_mod.query_compat("hello")
+    assert "alice@example.com" not in result["answer"]
+    assert "0712 345 678" not in str(result["sources"])
+    assert result["filtered"] is True
