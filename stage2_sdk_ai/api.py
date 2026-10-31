@@ -349,6 +349,11 @@ def approve_endpoint(
         raise HTTPException(status_code=410, detail="Approval request has expired")
     if status == "not_found":
         raise HTTPException(status_code=404, detail="Approval not found")
+    if status == "corrupt_record":
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "corrupt_approval_record", "recovery": "Operator review required."},
+        )
     if status == "invalid_id":
         raise HTTPException(status_code=422, detail="Invalid approval ID")
     if status == "invalid_transition":
@@ -390,6 +395,11 @@ def deny_endpoint(
         raise HTTPException(status_code=410, detail="Approval request has expired")
     if status == "not_found":
         raise HTTPException(status_code=404, detail="Approval not found")
+    if status == "corrupt_record":
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "corrupt_approval_record", "recovery": "Operator review required."},
+        )
     if status == "invalid_id":
         raise HTTPException(status_code=422, detail="Invalid approval ID")
     if status == "invalid_transition":
@@ -422,6 +432,15 @@ def execute_write_endpoint(
     status = result.get("status")
     if status == "not_found":
         raise HTTPException(status_code=404, detail="Approval not found")
+    if status == "corrupt_record":
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "corrupt_approval_record",
+                "approval_id": req.approval_id,
+                "recovery": "Operator review required; approval remains non-executable.",
+            },
+        )
     if status == "invalid_id":
         raise HTTPException(status_code=422, detail="Invalid approval ID")
     if status == "pending":
