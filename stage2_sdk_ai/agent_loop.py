@@ -80,6 +80,7 @@ def _real_llm_pick_tool(
     query: str,
     history: list[dict[str, Any]],
     requester: str | None = None,
+    quota_reservation_id: str | None = None,
 ) -> dict[str, Any]:
     key = os.getenv("OPENAI_API_KEY", "").strip()
     if not key:
@@ -136,7 +137,11 @@ def _real_llm_pick_tool(
     output_tokens = _usage_value(usage, "completion_tokens")
     try:
         cost_guard.record_model_usage(
-            requester, input_tokens, output_tokens, model=cost_guard.MODEL_NAME
+            requester,
+            input_tokens,
+            output_tokens,
+            model=cost_guard.MODEL_NAME,
+            reservation_id=quota_reservation_id,
         )
     except Exception as exc:
         logger.error(
@@ -160,14 +165,23 @@ def _real_llm_pick_tool(
 
 
 def _run_agent_steps(
-    query: str, max_steps: int = 3, top_k: int = 3, requester: str | None = None
+    query: str,
+    max_steps: int = 3,
+    top_k: int = 3,
+    requester: str | None = None,
+    quota_reservation_id: str | None = None,
 ) -> dict[str, Any]:
     history: list[dict[str, Any]] = []
     for step in range(max_steps):
         if _is_mock():
             pick = _mock_llm_pick_tool(query, step)
         else:
-            pick = _real_llm_pick_tool(query, history, requester=requester)
+            pick = _real_llm_pick_tool(
+                query,
+                history,
+                requester=requester,
+                quota_reservation_id=quota_reservation_id,
+            )
         try:
             pick = _validate_tool_pick(pick)
         except (TypeError, ValueError):
@@ -271,7 +285,11 @@ def run_agent(
 
     try:
         return _run_agent_steps(
-            query, max_steps=max_steps, top_k=top_k, requester=requester
+            query,
+            max_steps=max_steps,
+            top_k=top_k,
+            requester=requester,
+            quota_reservation_id=quota_reservation_id,
         )
     except UsageAccountingError:
         # Unknown/unrecorded provider usage must keep the worst-case hold until
