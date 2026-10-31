@@ -230,9 +230,9 @@ def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
 
     try:
         r = appr_mod.request_approval(
-        "write_note",
-        {"path": str(safe_path), "content": req.content},
-        requester=requester,
+            "write_note",
+            {"path": str(safe_path), "content": req.content},
+            requester=requester,
         )
     except appr_mod.ApprovalAuditError as exc:
         raise HTTPException(
