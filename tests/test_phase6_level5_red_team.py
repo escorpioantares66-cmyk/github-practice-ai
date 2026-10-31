@@ -99,41 +99,6 @@ def test_direct_cost_limit():
     result = cost_guard.check_cost("test-key-123", "x")
     assert result["blocked"] is True
     cost_guard.reset_cost()
-    if hasattr(cost_guard, "add_cost"):
-        try:
-            cost_guard.add_cost("test-key-123", "word " * 10000)
-        except TypeError:
-            cost_guard.add_cost("word " * 10000)
-    check_fn = None
-    for n in ["check_limit", "check_cost", "check", "is_over_limit"]:
-        if hasattr(cost_guard, n):
-            check_fn = getattr(cost_guard, n)
-            break
-    if check_fn:
-
-        def _call_check():
-            try:
-                return check_fn("test-key-123", "x")
-            except TypeError:
-                try:
-                    return check_fn("x")
-                except TypeError:
-                    return check_fn()
-
-        res = _call_check()
-        if isinstance(res, bool):
-            assert res is False
-        else:
-            is_blocked = (
-                res.get("blocked", False)
-                or not res.get("is_ok", True)
-                or not res.get("allowed", True)
-                or res.get("over_limit", False)
-            )
-            assert is_blocked
-    for n in ["reset_cost", "reset", "clear"]:
-        if hasattr(cost_guard, n):
-            getattr(cost_guard, n)()
 
 
 
