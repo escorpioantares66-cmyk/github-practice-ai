@@ -55,10 +55,14 @@ def _validate_note_payload(
         safe_path = canonical_note_path(Path(path).name, requester=requester)
     except (TypeError, ValueError):
         return None, "A note filename is required"
-    # The stored path must already be canonical. Do not silently reinterpret
-    # an altered or legacy payload during execution.
+    # The stored path must already be canonical. Keep the legacy direct-SDK
+    # default ("agent") compatible with its historical shared notes/ path;
+    # authenticated API identities always use their isolated hashed directory.
     if str(safe_path) != path:
-        return None, "Approved note path is not canonical"
+        legacy_path = canonical_note_path(Path(path).name)
+        if requester != "agent" or str(legacy_path) != path:
+            return None, "Approved note path is not canonical"
+        safe_path = legacy_path
     return safe_path, None
 
 
