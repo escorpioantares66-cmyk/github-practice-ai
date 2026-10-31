@@ -850,6 +850,7 @@ def verify_audit_log(
                         "version", "sequence", "legacy_entries",
                         "head_hash", "created_at",
                     }
+                    or isinstance(checkpoint.get("version"), bool)
                     or checkpoint.get("version") != 1
                     or isinstance(checkpoint.get("sequence"), bool)
                     or not isinstance(checkpoint.get("sequence"), int)
