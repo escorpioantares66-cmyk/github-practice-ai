@@ -152,3 +152,20 @@ def test_similarity_search_rejects_unbounded_parameters(monkeypatch):
         store.similarity_search("query", top_k=True)
     with pytest.raises(ValueError):
         store.similarity_search("x" * (vector_store.MAX_QUERY_CHARS + 1))
+
+
+def test_load_rejects_string_embedding_values(tmp_path):
+    directory = tmp_path / "store"
+    directory.mkdir()
+    (directory / "store.json").write_text(
+        json.dumps(
+            {
+                "texts": ["one"],
+                "metadatas": [{}],
+                "embeddings": [["0.0"] * 1536],
+                "embedding_dim": 1536,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert RealVectorStore(persist_path=str(directory)).load() is False
