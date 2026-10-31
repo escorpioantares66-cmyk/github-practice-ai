@@ -110,3 +110,16 @@ def test_approver_rate_limit_uses_stable_identity_across_secret_rotation(monkeyp
     assert auth.approver_identity("new-approver-secret") == identity
     assert not auth.check_rate_limit(identity)
     auth.reset_rate()
+
+
+
+def test_rate_limit_is_atomic_under_concurrent_requests(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from stage2_sdk_ai import auth
+
+    auth.reset_rate()
+    monkeypatch.setattr(auth, "_MAX_PER_MIN", 10)
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        results = list(pool.map(auth.check_rate_limit, ["parallel-worker"] * 100))
+    assert sum(results) == 10
+    auth.reset_rate()
