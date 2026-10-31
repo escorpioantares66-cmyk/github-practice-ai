@@ -116,9 +116,11 @@ def test_oversized_write_body_is_rejected_before_json_validation(client):
     assert response.json()["detail"] == "Request body too large"
 
 
-def test_oversized_deny_body_is_rejected_before_json_validation(client):
+def test_oversized_deny_body_is_rejected_before_json_validation(client, monkeypatch):
     from stage2_sdk_ai.api import MAX_REQUEST_BODY_BYTES
 
+    # The early middleware auth gate requires this test key to be configured.
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "any")
     response = client.post(
         "/deny",
         content=(
