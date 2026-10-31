@@ -209,19 +209,27 @@ class RealVectorStore:
                 raise ValueError(f"vector store cannot exceed {MAX_CHUNKS} chunks")
             pending.extend((chunk, meta) for chunk in chunks)
 
+        staged_embeddings = []
         for chunk, metadata in pending:
             embedding, dimension, _ = _get_query_embedding(chunk or " ")
             if dimension != EMBEDDING_DIM:
                 raise ValueError("Unexpected embedding dimension")
-            self.texts.append(chunk)
-            self.metadatas.append(metadata)
-            self.embeddings.append(embedding)
-            if self._faiss_index is not None and NUMPY_AVAILABLE and np is not None:
-                try:
-                    self._faiss_index.add(np.asarray(embedding, dtype=np.float32).reshape(1, -1))
-                except Exception as exc:
-                    self._faiss_index = None
-                    raise RuntimeError("FAISS index update failed") from exc
+            staged_embeddings.append((chunk, metadata, embedding))
+
+        # Commit the in-memory mutation only after every embedding succeeds.
+        self.texts.extend(chunk for chunk, _, _ in staged_embeddings)
+        self.metadatas.extend(metadata for _, metadata, _ in staged_embeddings)
+        self.embeddings.extend(embedding for _, _, embedding in staged_embeddings)
+        if self._faiss_index is not None and staged_embeddings and NUMPY_AVAILABLE and np is not None:
+            try:
+                matrix = np.vstack(
+                    [np.asarray(item[2], dtype=np.float32) for item in staged_embeddings]
+                )
+                self._faiss_index.add(matrix)
+            except Exception:
+                # Similarity search uses the validated vectors directly; discard
+                # the optional acceleration index rather than corrupting state.
+                self._faiss_index = None
 
     def similarity_search(
         self,
@@ -346,11 +354,16 @@ class RealVectorStore:
             self.embeddings = validated_embeddings
             self.embedding_dim = EMBEDDING_DIM
             self._reset_faiss_index()
-            if self._faiss_index is not None and self.embeddings and NUMPY_AVAILABLE and np is not None:
+            if (
+                self._faiss_index is not None
+                and self.embeddings
+                and NUMPY_AVAILABLE
+                and np is not None
+            ):
                 matrix = np.vstack(self.embeddings).astype(np.float32, copy=False)
                 self._faiss_index.add(matrix)
             return True
-        except (OSError, UnicodeError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        except (OSError, UnicodeError, ValueError, TypeError, KeyError):
             self.texts = []
             self.metadatas = []
             self.embeddings = []
