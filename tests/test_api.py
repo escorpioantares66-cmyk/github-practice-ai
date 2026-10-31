@@ -116,9 +116,11 @@ def test_oversized_write_body_is_rejected_before_json_validation(client):
     assert response.json()["detail"] == "Request body too large"
 
 
-def test_oversized_deny_body_is_rejected_before_json_validation(client):
+def test_oversized_deny_body_is_rejected_before_json_validation(client, monkeypatch):
     from stage2_sdk_ai.api import MAX_REQUEST_BODY_BYTES
 
+    # The early middleware auth gate requires this test key to be configured.
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "any")
     response = client.post(
         "/deny",
         content=(
@@ -662,3 +664,30 @@ def test_query_compatibility_function_redacts_pii(monkeypatch):
     assert "alice@example.com" not in result["answer"]
     assert "0712 345 678" not in str(result["sources"])
     assert result["filtered"] is True
+
+
+
+def test_unauthenticated_oversized_write_is_rejected_before_body_limit(client):
+    from stage2_sdk_ai.api import MAX_REQUEST_BODY_BYTES
+
+    response = client.post(
+        "/write",
+        content=b"x" * (MAX_REQUEST_BODY_BYTES + 1),
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid API key"
+    assert response.headers.get("x-request-id")
+
+
+def test_unauthorized_oversized_deny_is_rejected_before_body_limit(client):
+    from stage2_sdk_ai.api import MAX_REQUEST_BODY_BYTES
+
+    response = client.post(
+        "/deny",
+        content=b"x" * (MAX_REQUEST_BODY_BYTES + 1),
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Invalid or missing approver credentials"
+    assert response.headers.get("x-request-id")
