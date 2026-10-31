@@ -269,7 +269,10 @@ def write_note(
             "path": str(safe_path),
             "status": outcome.get("status", "execution_outcome_recording_failed"),
             "approval_id": approval_id,
-            "error": "Note write completed; verify the destination and execution audit before taking further action",
+            "error": (
+                "Note write completed; verify the destination and execution audit "
+                "before taking further action"
+            ),
             "is_mock": False,
         }
 
@@ -377,7 +380,10 @@ def execute_approved_write(
             "path": str(safe_path),
             "status": outcome.get("status", "execution_outcome_recording_failed"),
             "approval_id": approval_id,
-            "error": "Note write completed; verify the destination and execution audit before taking further action",
+            "error": (
+                "Note write completed; verify the destination and execution audit "
+                "before taking further action"
+            ),
             "is_mock": False,
         }
 
