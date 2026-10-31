@@ -51,7 +51,10 @@ def _validate_note_payload(path: Any, content: Any) -> tuple[Path | None, str | 
 
 
 def write_note(
-    path: str, content: str, approval_id: str | None = None
+    path: str,
+    content: str,
+    approval_id: str | None = None,
+    requester: str = "agent",
 ) -> dict[str, Any]:
     safe_path = canonical_note_path(path)
     mock_mode = _is_mock()
@@ -84,6 +87,7 @@ def write_note(
         request = request_approval(
             "write_note",
             {"path": str(safe_path), "content": content},
+            requester=requester,
         )
         return {
             "tool": "write_note",
@@ -97,6 +101,7 @@ def write_note(
         approval_id,
         "write_note",
         {"path": str(safe_path), "content": content},
+        requester=requester,
     )
     if consumed.get("status") != "consumed":
         return {
