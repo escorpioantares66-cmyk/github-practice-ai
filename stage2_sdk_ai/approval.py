@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
+import hmac
 import json
 import logging
 import math
@@ -492,37 +494,130 @@ def consume_approval(
     return consume_approval_request(approval_id, tool, args, requester)
 
 
-def _validate_audit_bytes(contents: bytes) -> None:
-    """Reject malformed entries and unterminated trailing records without repair."""
+def _canonical_audit_entry(entry: dict[str, Any]) -> bytes:
+    """Serialize an audit entry deterministically, excluding its own hash."""
+    payload = {key: value for key, value in entry.items() if key != "hash"}
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _validate_audit_event(entry: Any, line_number: int) -> None:
+    if (
+        not isinstance(entry, dict)
+        or not isinstance(entry.get("action"), str)
+        or entry.get("action") not in {
+            "request", "approved", "denied", "consumed", "execution_failed"
+        }
+        or isinstance(entry.get("time"), bool)
+        or not isinstance(entry.get("time"), (int, float))
+        or not math.isfinite(entry["time"])
+        or not isinstance(entry.get("record"), dict)
+        or not isinstance(entry["record"].get("id"), str)
+        or not re.fullmatch(r"[0-9a-f]{32}", entry["record"]["id"])
+    ):
+        raise AuditLogIntegrityError(
+            f"audit log entry {line_number} has an invalid schema"
+        )
+
+
+def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
+    """Validate legacy and chained entries; return seq, head hash, total count.
+
+    Legacy JSONL entries are accepted as an immutable prefix. The first chained
+    entry commits to the exact bytes of that prefix, so later edits to legacy
+    history are detected. New entries use SHA-256 over canonical JSON.
+    """
     if not contents:
-        return
-    if not contents.endswith(b"\n"):
+        return 0, "0" * 64, 0
+    if not contents.endswith(b"\\n"):
         raise AuditLogIntegrityError(
             "audit log has an incomplete trailing entry; operator review required"
         )
-    for line_number, raw_line in enumerate(contents.splitlines(), start=1):
+
+    legacy_lines: list[bytes] = []
+    sequence = 0
+    previous_hash = "0" * 64
+    total = 0
+    chain_started = False
+
+    for line_number, raw_line in enumerate(contents.splitlines(keepends=True), start=1):
+        line = raw_line.rstrip(b"\\r\\n")
         try:
-            entry = json.loads(raw_line)
+            entry = json.loads(line)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise AuditLogIntegrityError(
                 f"audit log entry {line_number} is invalid; operator review required"
             ) from exc
-        if (
-            not isinstance(entry, dict)
-            or set(entry) != {"action", "time", "record"}
-            or not isinstance(entry.get("action"), str)
-            or entry.get("action") not in {
-                "request", "approved", "denied", "consumed", "execution_failed"
-            }
-            or not isinstance(entry.get("time"), (int, float))
-            or isinstance(entry.get("time"), bool)
-            or not isinstance(entry.get("record"), dict)
-            or not isinstance(entry["record"].get("id"), str)
-            or not re.fullmatch(r"[0-9a-f]{32}", entry["record"]["id"])
-        ):
+
+        if isinstance(entry, dict) and set(entry) == {"action", "time", "record"}:
+            if chain_started:
+                raise AuditLogIntegrityError(
+                    f"legacy entry {line_number} appears after the hash chain began"
+                )
+            _validate_audit_event(entry, line_number)
+            legacy_lines.append(raw_line)
+            total += 1
+            continue
+
+        expected_fields = {"action", "time", "record", "seq", "previous_hash", "hash"}
+        if not isinstance(entry, dict) or set(entry) != expected_fields:
             raise AuditLogIntegrityError(
                 f"audit log entry {line_number} has an invalid schema"
             )
+        _validate_audit_event(entry, line_number)
+        seq = entry.get("seq")
+        if isinstance(seq, bool) or not isinstance(seq, int) or seq != sequence + 1:
+            raise AuditLogIntegrityError(
+                f"audit log sequence mismatch at entry {line_number}"
+            )
+        if not isinstance(entry.get("previous_hash"), str) or not re.fullmatch(
+            r"[0-9a-f]{64}", entry["previous_hash"]
+        ):
+            raise AuditLogIntegrityError(
+                f"audit log previous hash is invalid at entry {line_number}"
+            )
+        if not isinstance(entry.get("hash"), str) or not re.fullmatch(
+            r"[0-9a-f]{64}", entry["hash"]
+        ):
+            raise AuditLogIntegrityError(
+                f"audit log hash is invalid at entry {line_number}"
+            )
+
+        if not chain_started:
+            expected_previous = (
+                hashlib.sha256(
+                    b"legacy-audit-prefix-v1\\0" + b"".join(legacy_lines)
+                ).hexdigest()
+                if legacy_lines else "0" * 64
+            )
+        else:
+            expected_previous = previous_hash
+        if not hmac.compare_digest(entry["previous_hash"], expected_previous):
+            raise AuditLogIntegrityError(
+                f"audit log link mismatch at entry {line_number}"
+            )
+        calculated = hashlib.sha256(_canonical_audit_entry(entry)).hexdigest()
+        if not hmac.compare_digest(entry["hash"], calculated):
+            raise AuditLogIntegrityError(
+                f"audit log hash mismatch at entry {line_number}"
+            )
+        sequence = seq
+        previous_hash = entry["hash"]
+        chain_started = True
+        total += 1
+
+    if not chain_started and legacy_lines:
+        previous_hash = hashlib.sha256(
+            b"legacy-audit-prefix-v1\\0" + b"".join(legacy_lines)
+        ).hexdigest()
+    return sequence, previous_hash, total
+
+
+def _validate_audit_bytes(contents: bytes) -> None:
+    """Reject malformed, incomplete, reordered, or hash-mismatched history."""
+    _audit_chain_state(contents)
 
 
 MAX_AUDIT_LOG_BYTES = 64 * 1024 * 1024
@@ -544,7 +639,14 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
     "audit log exceeds the configured 64 MiB validation limit; "
     "archive through operator procedure" 
                 )
-            _validate_audit_bytes(existing)
+            sequence, previous_hash, _ = _audit_chain_state(existing)
+            entry["seq"] = sequence + 1
+            entry["previous_hash"] = previous_hash
+            entry["hash"] = hashlib.sha256(_canonical_audit_entry(entry)).hexdigest()
+            encoded = (
+                json.dumps(entry, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+                + "\\n"
+            ).encode("utf-8")
             audit_file.seek(0, os.SEEK_END)
             original_size = audit_file.tell()
             view = memoryview(encoded)
@@ -567,6 +669,29 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
                         "audit append rollback failed; operator review required"
                     )
                 raise
+        finally:
+            fcntl.flock(audit_file.fileno(), fcntl.LOCK_UN)
+
+
+def verify_audit_log() -> dict[str, Any]:
+    """Verify the complete audit history without modifying it."""
+    _ensure_dirs()
+    fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
+    with os.fdopen(fd, "r+b") as audit_file:
+        fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
+        try:
+            contents = audit_file.read(MAX_AUDIT_LOG_BYTES + 1)
+            if len(contents) > MAX_AUDIT_LOG_BYTES:
+                raise AuditLogIntegrityError(
+                    "audit log exceeds the configured 64 MiB validation limit"
+                )
+            sequence, head_hash, total = _audit_chain_state(contents)
+            return {
+                "valid": True,
+                "entries": total,
+                "chained_entries": sequence,
+                "head_hash": head_hash,
+            }
         finally:
             fcntl.flock(audit_file.fileno(), fcntl.LOCK_UN)
 
