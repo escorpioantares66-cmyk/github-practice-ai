@@ -19,7 +19,7 @@ def test_real_mode_no_approval_id_requests_bound_approval(
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
 
-    result = write_tools.write_note("real_note.md", "hello world")
+    result = write_tools.write_note("real_note.md", "hello world", requester="test-requester")
 
     assert result["status"] == "needs_approval"
     assert result["is_mock"] is False
@@ -43,8 +43,7 @@ def test_real_mode_unapproved_id_returns_pending(monkeypatch, tmp_path):
     )
 
     result = write_tools.write_note(
-        "pending.md", "still waiting", approval_id=request["id"]
-    )
+        "pending.md", "still waiting", approval_id=request["id"], requester="test-requester")
 
     assert result["status"] == "pending"
     assert result["is_mock"] is False
@@ -58,8 +57,7 @@ def test_real_mode_unknown_approval_id_returns_not_found(
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
 
     result = write_tools.write_note(
-        "ghost.md", "content", approval_id="d" * 32
-    )
+        "ghost.md", "content", approval_id="d" * 32, requester="test-requester")
 
     assert result["status"] == "not_found"
     assert result["is_mock"] is False
@@ -70,12 +68,11 @@ def test_real_mode_approved_id_writes_only_approved_content(
 ):
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
-    request = write_tools.write_note("final.md", "final content")
+    request = write_tools.write_note("final.md", "final content", requester="test-requester")
     approval.approve(request["approval_id"], approver_key="test-approver-secret")
 
     result = write_tools.write_note(
-        "final.md", "final content", approval_id=request["approval_id"]
-    )
+        "final.md", "final content", approval_id=request["approval_id"], requester="test-requester")
 
     assert result["status"] == "written"
     assert result["is_mock"] is False
@@ -89,12 +86,11 @@ def test_approved_id_cannot_be_reused_for_different_content(
 ):
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
-    request = write_tools.write_note("safe.md", "approved text")
+    request = write_tools.write_note("safe.md", "approved text", requester="test-requester")
     approval.approve(request["approval_id"], approver_key="test-approver-secret")
 
     result = write_tools.write_note(
-        "safe.md", "replacement text", approval_id=request["approval_id"]
-    )
+        "safe.md", "replacement text", approval_id=request["approval_id"], requester="test-requester")
 
     assert result["status"] == "approval_mismatch"
     assert not (tmp_path / "notes" / "safe.md").exists()
@@ -105,12 +101,11 @@ def test_approved_id_cannot_be_reused_for_different_path(
 ):
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
-    request = write_tools.write_note("approved.md", "approved text")
+    request = write_tools.write_note("approved.md", "approved text", requester="test-requester")
     approval.approve(request["approval_id"], approver_key="test-approver-secret")
 
     result = write_tools.write_note(
-        "other.md", "approved text", approval_id=request["approval_id"]
-    )
+        "other.md", "approved text", approval_id=request["approval_id"], requester="test-requester")
 
     assert result["status"] == "approval_mismatch"
     assert not (tmp_path / "notes" / "other.md").exists()
@@ -119,7 +114,7 @@ def test_approved_id_cannot_be_reused_for_different_path(
 def test_approve_write_delegates_to_approval_module(monkeypatch, tmp_path):
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
-    request = write_tools.write_note("delegated.md", "approved content")
+    request = write_tools.write_note("delegated.md", "approved content", requester="test-requester")
 
     result = write_tools.approve_write(request["approval_id"], approver_key="test-approver-secret")
 
@@ -131,7 +126,7 @@ def test_oversized_content_is_rejected(monkeypatch, tmp_path):
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
 
-    result = write_tools.write_note("large.md", "x" * 5001)
+    result = write_tools.write_note("large.md", "x" * 5001, requester="test-requester")
 
     assert result["status"] == "rejected"
     assert not (tmp_path / "notes").exists()
@@ -142,15 +137,13 @@ def test_approval_cannot_be_replayed_after_successful_write(
 ):
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
-    request = write_tools.write_note("once.md", "one-time content")
+    request = write_tools.write_note("once.md", "one-time content", requester="test-requester")
     approval.approve(request["approval_id"], approver_key="test-approver-secret")
 
     first = write_tools.write_note(
-        "once.md", "one-time content", approval_id=request["approval_id"]
-    )
+        "once.md", "one-time content", approval_id=request["approval_id"], requester="test-requester")
     second = write_tools.write_note(
-        "once.md", "one-time content", approval_id=request["approval_id"]
-    )
+        "once.md", "one-time content", approval_id=request["approval_id"], requester="test-requester")
 
     assert first["status"] == "written"
     assert second["status"] == "invalid_transition"
@@ -168,11 +161,10 @@ def test_atomic_write_replaces_symlink_without_modifying_target(
     outside_file.write_text("do not change", encoding="utf-8")
     (notes_dir / "linked.md").symlink_to(outside_file)
 
-    request = write_tools.write_note("linked.md", "approved note")
+    request = write_tools.write_note("linked.md", "approved note", requester="test-requester")
     approval.approve(request["approval_id"], approver_key="test-approver-secret")
     result = write_tools.write_note(
-        "linked.md", "approved note", approval_id=request["approval_id"]
-    )
+        "linked.md", "approved note", approval_id=request["approval_id"], requester="test-requester")
 
     assert result["status"] == "written"
     assert outside_file.read_text(encoding="utf-8") == "do not change"
