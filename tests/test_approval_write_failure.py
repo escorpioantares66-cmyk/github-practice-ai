@@ -534,3 +534,85 @@ def test_corrupt_record_is_rejected_by_approve_and_consume(monkeypatch, tmp_path
     assert json.loads(path.read_text(encoding="utf-8")) == {
         "id": approval_id, "status": "pending"
     }
+
+
+
+def test_successful_write_persists_completed_outcome_and_audit(monkeypatch, tmp_path):
+    approval_id = _approved_request(monkeypatch, tmp_path)
+
+    result = write_tools.execute_approved_write(approval_id, requester="agent")
+
+    assert result["status"] == "written"
+    record = approval.check_approval(approval_id)
+    assert record["status"] == "consumed"
+    assert record["execution_outcome"]["status"] == "completed"
+    assert record["execution_outcome"]["audit_status"] == "written"
+    audit = [
+        json.loads(line)
+        for line in (tmp_path / "logs" / "audit.jsonl").read_text().splitlines()
+    ]
+    assert any(
+        entry["action"] == "execution_succeeded"
+        and entry["record"]["id"] == approval_id
+        and entry["record"]["execution_outcome"]["status"] == "completed"
+        for entry in audit
+    )
+    assert approval.list_execution_recovery() == []
+
+
+def test_success_recording_failure_leaves_started_outcome_for_inspection(
+    monkeypatch, tmp_path
+):
+    approval_id = _approved_request(monkeypatch, tmp_path)
+    real_write_record = approval._write_record_atomically
+
+    def fail_completed_outcome(path, record):
+        outcome = record.get("execution_outcome", {})
+        if outcome.get("status") == "completed":
+            raise OSError("approval store unavailable after note write")
+        return real_write_record(path, record)
+
+    monkeypatch.setattr(approval, "_write_record_atomically", fail_completed_outcome)
+
+    result = write_tools.execute_approved_write(approval_id, requester="agent")
+
+    assert result["status"] == "execution_outcome_recording_failed"
+    note_path = (
+        tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "fault-case.md"
+    )
+    assert note_path.read_text(encoding="utf-8") == "approved payload"
+    record = approval.check_approval(approval_id)
+    assert record["status"] == "consumed"
+    assert record["execution_outcome"]["status"] == "started"
+    recovery = approval.list_execution_recovery()
+    assert len(recovery) == 1
+    assert recovery[0]["approval_id"] == approval_id
+    assert recovery[0]["execution_status"] == "started"
+    assert "approved payload" not in str(recovery)
+    replay = write_tools.execute_approved_write(approval_id, requester="agent")
+    assert replay["status"] == "invalid_transition"
+
+
+def test_success_audit_failure_is_visible_to_operator(monkeypatch, tmp_path):
+    approval_id = _approved_request(monkeypatch, tmp_path)
+    real_log_audit = approval.log_audit
+
+    def fail_success_audit(action, record):
+        if action == "execution_succeeded":
+            raise OSError("audit storage unavailable")
+        return real_log_audit(action, record)
+
+    monkeypatch.setattr(approval, "log_audit", fail_success_audit)
+
+    result = write_tools.execute_approved_write(approval_id, requester="agent")
+
+    assert result["status"] == "execution_succeeded_audit_incomplete"
+    record = approval.check_approval(approval_id)
+    assert record["execution_outcome"]["status"] == "completed"
+    assert record["execution_outcome"]["audit_status"] == "failed"
+    recovery = approval.list_execution_recovery()
+    assert len(recovery) == 1
+    assert recovery[0]["execution_status"] == "completed"
+    assert recovery[0]["execution_audit_status"] == "failed"
+    replay = write_tools.execute_approved_write(approval_id, requester="agent")
+    assert replay["status"] == "invalid_transition"
