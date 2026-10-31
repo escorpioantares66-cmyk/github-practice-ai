@@ -127,6 +127,7 @@ def test_malformed_approval_field_types_are_isolated(monkeypatch, tmp_path):
         ("status", {}),
         ("request_audit_status", None),
         ("request_audit_status", []),
+        ("approval_audit_status", []),
         ("created", "not-a-timestamp"),
         ("created", True),
         ("created", float("inf")),
@@ -175,3 +176,18 @@ def test_pending_scan_uses_complete_record_validation(monkeypatch, tmp_path):
 
     pending = approval.list_pending()
     assert [record["id"] for record in pending] == [valid["id"]]
+
+    invalid_filename = approvals_dir / "legacy.json"
+    invalid_filename.write_text(
+        json.dumps({
+            "id": "legacy",
+            "tool": "write_note",
+            "args": {"path": "legacy.md"},
+            "requester": "requester-1",
+            "status": "pending",
+            "request_audit_status": "written",
+            "created": 1.0,
+        }),
+        encoding="utf-8",
+    )
+    assert [record["id"] for record in approval.list_pending()] == [valid["id"]]
