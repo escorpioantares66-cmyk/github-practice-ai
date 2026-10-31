@@ -186,6 +186,20 @@ def release_budget(reservation_id: str) -> None:
         )
 
 
+def has_reservation(
+    identity: str, utc_day: str, reservation_id: str,
+) -> bool:
+    with _db() as connection:
+        row = connection.execute(
+            """
+            SELECT 1 FROM reservations
+            WHERE identity=? AND utc_day=? AND reservation_id=? AND expires_at>?
+            """,
+            (identity, utc_day, reservation_id, time.time()),
+        ).fetchone()
+    return row is not None
+
+
 def record_model_usage(
     identity: str, utc_day: str, input_tokens: int, output_tokens: int,
     amount_usd: float,
