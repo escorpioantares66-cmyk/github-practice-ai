@@ -226,8 +226,6 @@ def test_write_rejects_empty_note_path(client):
 def test_complete_approved_write_lifecycle(client, monkeypatch, tmp_path):
     from pathlib import Path
 
-    from stage2_sdk_ai import auth
-
     monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
 
     requested = client.post(
@@ -339,8 +337,6 @@ def test_concurrent_execute_has_exactly_one_winner(client, monkeypatch, tmp_path
         responses = list(pool.map(lambda _: execute(), range(2)))
 
     assert sorted(response.status_code for response in responses) == [200, 409]
-    from stage2_sdk_ai import auth
-
     owner_dir = hashlib.sha256(
         auth.requester_identity(VALID_KEY).encode("utf-8")
     ).hexdigest()
