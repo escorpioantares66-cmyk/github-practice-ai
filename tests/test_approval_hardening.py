@@ -538,3 +538,24 @@ def test_request_approval_accepts_valid_json_payload_and_logs_it(
     assert approval.check_approval(request["id"])["args"] == {
         "path": "safe.md", "content": "hello"
     }
+
+
+
+def test_audit_log_redacts_approval_argument_values(monkeypatch, tmp_path):
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
+    secret_note = "private note body that must never enter the audit log"
+
+    request = approval.request_approval(
+        "write_note",
+        {"path": "notes/private.md", "content": secret_note},
+        requester="requester-a",
+    )
+
+    audit_text = (tmp_path / "logs" / "audit.jsonl").read_text(encoding="utf-8")
+    audit_entry = json.loads(audit_text.splitlines()[0])
+    assert secret_note not in audit_text
+    assert audit_entry["record"]["args"] == {"redacted": True, "field_count": 2}
+    # The private approval record retains the payload needed for execution.
+    assert approval.check_approval(request["id"])["args"]["content"] == secret_note
+    assert approval.verify_audit_log()["valid"] is True
