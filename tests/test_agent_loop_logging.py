@@ -14,7 +14,7 @@ from tests.test_agent_loop_real_mode import _install_fake_openai
 def test_missing_api_key_logs_structured_warning(monkeypatch, caplog):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with caplog.at_level(logging.WARNING, logger="stage2_sdk_ai.agent_loop"):
-        _real_llm_pick_tool("hi", [])
+        _real_llm_pick_tool("hi", [], requester="test-requester")
     assert len(caplog.records) == 1
     record = caplog.records[0]
     assert "OPENAI_API_KEY" in record.message
@@ -37,7 +37,7 @@ def test_openai_not_installed_logs_structured_warning(monkeypatch, caplog):
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
     with caplog.at_level(logging.WARNING, logger="stage2_sdk_ai.agent_loop"):
-        _real_llm_pick_tool("hi", [])
+        _real_llm_pick_tool("hi", [], requester="test-requester")
     assert len(caplog.records) == 1
     record = caplog.records[0]
     assert record.event == "llm_fallback"
@@ -48,8 +48,15 @@ def test_api_exception_logs_structured_warning_with_traceback(monkeypatch, caplo
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
     _install_fake_openai(monkeypatch, raise_exc=RuntimeError("simulated API failure"))
 
+    from stage2_sdk_ai.agent_loop import UsageAccountingError
+
     with caplog.at_level(logging.WARNING, logger="stage2_sdk_ai.agent_loop"):
-        _real_llm_pick_tool("hi", [])
+        try:
+            _real_llm_pick_tool("hi", [], requester="test-requester")
+        except UsageAccountingError:
+            pass
+        else:
+            raise AssertionError("ambiguous provider outcome must fail closed")
     assert len(caplog.records) == 1
     record = caplog.records[0]
     assert record.event == "llm_fallback"

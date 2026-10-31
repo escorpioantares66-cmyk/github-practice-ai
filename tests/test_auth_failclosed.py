@@ -101,12 +101,14 @@ def test_approver_rate_limit_uses_stable_identity_across_secret_rotation(monkeyp
     identity = auth.approver_identity("old-approver-secret")
     assert identity == "reviewer"
     for _ in range(auth._MAX_PER_MIN):
-        assert auth.check_rate_limit(identity)
+        assert auth.check_rate_limit(identity, role="approver")
 
     monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=new-approver-secret")
     assert auth.verify_approver_key("new-approver-secret")
     assert auth.approver_identity("new-approver-secret") == identity
-    assert not auth.check_rate_limit(identity)
+    assert not auth.check_rate_limit(identity, role="approver")
+    # Requester and approver identities occupy separate durable rate buckets.
+    assert auth.check_rate_limit(identity, role="api")
     auth.reset_rate()
 
 
@@ -175,16 +177,18 @@ def test_distinct_requester_and_approver_credentials_are_accepted(monkeypatch):
     assert auth.verify_approver_key("approver-secret") is True
 
 
-def test_rate_limit_uses_monotonic_clock(monkeypatch):
+def test_rate_limit_uses_persisted_wall_clock(monkeypatch, tmp_path):
+    from stage2_sdk_ai import quota_store
+
+    monkeypatch.setenv("AGENT_QUOTA_DB_PATH", str(tmp_path / "quota.sqlite3"))
     auth.reset_rate()
     clock = [100.0]
-    monkeypatch.setattr(auth.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(auth.time, "time", lambda: 10_000_000.0)
+    monkeypatch.setattr(quota_store.time, "time", lambda: clock[0])
 
     for _ in range(auth._MAX_PER_MIN):
-        assert auth.check_rate_limit("monotonic-worker") is True
-    assert auth.check_rate_limit("monotonic-worker") is False
+        assert auth.check_rate_limit("wall-clock-worker")
+    assert not auth.check_rate_limit("wall-clock-worker")
 
     clock[0] += 61.0
-    assert auth.check_rate_limit("monotonic-worker") is True
+    assert auth.check_rate_limit("wall-clock-worker")
     auth.reset_rate()

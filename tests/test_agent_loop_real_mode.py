@@ -9,6 +9,8 @@ logic without installing openai or making a network call.
 import sys
 import types
 
+import pytest
+
 import stage2_sdk_ai.agent_loop as agent_loop_mod
 from stage2_sdk_ai.agent_loop import _real_llm_pick_tool
 
@@ -25,7 +27,8 @@ def _install_fake_openai(monkeypatch, content=None, raise_exc=None):
                 raise raise_exc
             msg = types.SimpleNamespace(content=content)
             choice = types.SimpleNamespace(message=msg)
-            return types.SimpleNamespace(choices=[choice])
+            usage = types.SimpleNamespace(prompt_tokens=120, completion_tokens=40)
+            return types.SimpleNamespace(choices=[choice], usage=usage)
 
     class FakeChat:
         def __init__(self):
@@ -42,36 +45,36 @@ def _install_fake_openai(monkeypatch, content=None, raise_exc=None):
 
 def test_missing_api_key_falls_back_to_mock(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    result = _real_llm_pick_tool("hi", [])
+    result = _real_llm_pick_tool("hi", [], requester="test-requester")
     assert result["tool"] in ("search", "read_note", "final")
 
 
 def test_happy_path_returns_parsed_tool_call(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
     _install_fake_openai(monkeypatch, content='{"tool": "final", "args": {"answer": "ok"}}')
-    result = _real_llm_pick_tool("hi", [])
+    result = _real_llm_pick_tool("hi", [], requester="test-requester")
     assert result == {"tool": "final", "args": {"answer": "ok"}}
 
 
 def test_unparseable_response_falls_back_to_mock(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
     _install_fake_openai(monkeypatch, content="not json at all")
-    result = _real_llm_pick_tool("hi", [])
+    result = _real_llm_pick_tool("hi", [], requester="test-requester")
     assert result["tool"] in ("search", "read_note", "final")
 
 
 def test_args_not_a_dict_falls_back_to_mock(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
     _install_fake_openai(monkeypatch, content='{"tool": "final", "args": "oops-a-string"}')
-    result = _real_llm_pick_tool("hi", [])
+    result = _real_llm_pick_tool("hi", [], requester="test-requester")
     assert result["tool"] in ("search", "read_note", "final")
 
 
-def test_api_exception_falls_back_to_mock(monkeypatch):
+def test_api_exception_is_ambiguous_and_keeps_quota_hold(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
     _install_fake_openai(monkeypatch, raise_exc=RuntimeError("simulated API failure"))
-    result = _real_llm_pick_tool("hi", [])
-    assert result["tool"] in ("search", "read_note", "final")
+    with pytest.raises(agent_loop_mod.UsageAccountingError):
+        _real_llm_pick_tool("hi", [], requester="test-requester")
 
 
 def test_openai_not_installed_falls_back_to_mock(monkeypatch):
@@ -87,7 +90,7 @@ def test_openai_not_installed_falls_back_to_mock(monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    result = _real_llm_pick_tool("hi", [])
+    result = _real_llm_pick_tool("hi", [], requester="test-requester")
     assert result["tool"] in ("search", "read_note", "final")
 
 
@@ -97,9 +100,12 @@ def test_run_agent_real_mode_takes_else_branch_to_final(monkeypatch):
     monkeypatch.setattr(
         agent_loop_mod,
         "_real_llm_pick_tool",
-        lambda query, history: {"tool": "final", "args": {"answer": "done"}},
+        lambda query, history, requester=None, quota_reservation_id=None: {
+            "tool": "final",
+            "args": {"answer": "done"},
+        },
     )
-    result = agent_loop_mod.run_agent("hi")
+    result = agent_loop_mod.run_agent("hi", requester="test-requester")
     assert result["answer"] == "done"
 
 
@@ -109,8 +115,11 @@ def test_run_agent_real_mode_unknown_tool_fails_closed(monkeypatch):
     monkeypatch.setattr(
         agent_loop_mod,
         "_real_llm_pick_tool",
-        lambda query, history: {"tool": "no_such_tool", "args": {}},
+        lambda query, history, requester=None, quota_reservation_id=None: {
+            "tool": "no_such_tool",
+            "args": {},
+        },
     )
-    result = agent_loop_mod.run_agent("hi", max_steps=2)
+    result = agent_loop_mod.run_agent("hi", max_steps=2, requester="test-requester")
     assert result["answer"] == "I could not safely process that request."
     assert result["steps"] == []

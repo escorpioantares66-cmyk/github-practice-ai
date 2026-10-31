@@ -11,3 +11,4 @@ logs/
 approvals/
 notes/
 .test_*
+.agent_state/
