@@ -322,6 +322,23 @@ def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
                 "recovery": "Operator review required; request cannot be approved.",
             },
         ) from exc
+    except appr_mod.ApprovalLimitError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "approval_limit_exceeded",
+                "limit": exc.limit,
+                "retry": "Retry after an existing pending request expires or is decided, or after the next UTC day.",
+            },
+        ) from exc
+    except appr_mod.ApprovalStoreIntegrityError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "approval_store_requires_review",
+                "recovery": "New requests are paused until the approval store is inspected.",
+            },
+        ) from exc
     approval_id = r.get("id") or r.get("approval_id")
 
     return {
