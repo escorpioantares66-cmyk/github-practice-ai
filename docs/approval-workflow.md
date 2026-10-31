@@ -11,11 +11,11 @@ The note-writing API uses three separate capabilities:
 Set both variables in the server environment. Use independently generated, high-entropy secrets and never commit them:
 
 ~~~sh
-export AGENT_API_KEYS="replace-with-a-long-random-requester-secret"
+export AGENT_API_KEYS="requester-a=replace-with-a-long-random-requester-secret"
 export AGENT_APPROVER_KEYS="replace-with-a-different-long-random-approver-secret"
 ~~~
 
-Comma-separated values are supported for controlled key rotation. An empty or missing allow-list fails closed. Do not reuse the same secret for both roles. Use HTTPS in deployment and keep secrets in the deployment secret manager.
+Requester entries use `identity=secret` syntax and may be comma-separated. Keep the identity label stable when rotating a requester's secret; the approval record stores the label, never the raw secret. Legacy bare secrets remain accepted and receive a deterministic non-secret fingerprint identity, but explicit labels are preferred. An empty or missing allow-list fails closed. Do not reuse the same secret for both roles. Use HTTPS in deployment and keep secrets in the deployment secret manager.
 
 ## Lifecycle
 
@@ -29,7 +29,7 @@ Content-Type: application/json
 {"path":"release-notes.md","content":"Approved text"}
 ~~~
 
-The server canonicalizes the filename and stores the exact path and content in a `pending` approval. The response contains an `approval_id`.
+The server canonicalizes the filename and stores the exact path and content in a `pending` approval, bound to the authenticated requester's configured identity. The response contains an `approval_id`.
 
 ### 2. Approve the request
 
@@ -62,7 +62,7 @@ Content-Type: application/json
 {"approval_id":"<approval-id>"}
 ~~~
 
-The execution endpoint deliberately accepts no path or content fields. It loads the stored approved payload, validates its canonical path and content limit, atomically consumes the approval under a per-record lock, and atomically replaces the destination file. A concurrent or later replay cannot execute the same approval again.
+The execution endpoint deliberately accepts no path or content fields. The authenticated requester identity must match the owner stored on the approval; a different valid requester receives `403` without consuming the approval. The rightful owner can then execute it. Execution loads the stored approved payload, validates its canonical path and content limit, atomically consumes the approval under a per-record lock, and atomically replaces the destination file. A concurrent or later replay cannot execute the same approval again.
 
 ## Expected failures
 
