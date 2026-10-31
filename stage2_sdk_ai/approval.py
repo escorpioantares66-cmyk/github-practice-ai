@@ -504,9 +504,13 @@ def _canonical_audit_entry(entry: dict[str, Any]) -> bytes:
 
 
 def _validate_audit_event(entry: Any, line_number: int) -> None:
+    def invalid() -> None:
+        raise AuditLogIntegrityError(
+            f"audit log entry {line_number} has an invalid event schema"
+        )
+
     if (
         not isinstance(entry, dict)
-        or not isinstance(entry.get("action"), str)
         or entry.get("action") not in {
             "request", "approved", "denied", "consumed", "execution_failed"
         }
@@ -514,12 +518,79 @@ def _validate_audit_event(entry: Any, line_number: int) -> None:
         or not isinstance(entry.get("time"), (int, float))
         or not math.isfinite(entry["time"])
         or not isinstance(entry.get("record"), dict)
-        or not isinstance(entry["record"].get("id"), str)
-        or not re.fullmatch(r"[0-9a-f]{32}", entry["record"]["id"])
     ):
+        invalid()
+    record = entry["record"]
+    if (
+        not isinstance(record.get("id"), str)
+        or not re.fullmatch(r"[0-9a-f]{32}", record["id"])
+        or not isinstance(record.get("tool"), str)
+        or not record["tool"].strip()
+        or len(record["tool"]) > 120
+        or not isinstance(record.get("args"), dict)
+        or not isinstance(record.get("requester"), str)
+        or not record["requester"].strip()
+        or len(record["requester"]) > 256
+        or record.get("request_audit_status") != "written"
+        or isinstance(record.get("created"), bool)
+        or not isinstance(record.get("created"), (int, float))
+        or not math.isfinite(record["created"])
+    ):
+        invalid()
+
+    action = entry["action"]
+    status = record.get("status")
+    if action == "request":
+        if status != "pending":
+            invalid()
+    elif action in {"approved", "denied"}:
+        expected = "approved" if action == "approved" else "denied"
+        timestamp = "approved_at" if action == "approved" else "denied_at"
+        if (
+            status != expected
+            or record.get("approval_audit_status") != "written"
+            or not isinstance(record.get("approver"), str)
+            or not record["approver"].strip()
+            or isinstance(record.get(timestamp), bool)
+            or not isinstance(record.get(timestamp), (int, float))
+            or not math.isfinite(record[timestamp])
+        ):
+            invalid()
+        if action == "denied" and (
+            not isinstance(record.get("reason"), str)
+            or len(record["reason"]) > 2000
+        ):
+            invalid()
+    elif action == "consumed":
+        if (
+            status != "consumed"
+            or record.get("approval_audit_status") != "written"
+            or isinstance(record.get("consumed_at"), bool)
+            or not isinstance(record.get("consumed_at"), (int, float))
+            or not math.isfinite(record["consumed_at"])
+        ):
+            invalid()
+    else:
+        failure = record.get("execution_failure")
+        if (
+            status != "consumed"
+            or not isinstance(failure, dict)
+            or isinstance(failure.get("failed_at"), bool)
+            or not isinstance(failure.get("failed_at"), (int, float))
+            or not math.isfinite(failure["failed_at"])
+            or not isinstance(failure.get("error_type"), str)
+            or not failure["error_type"]
+            or len(failure["error_type"]) > 120
+            or not isinstance(failure.get("error_message"), str)
+            or len(failure["error_message"]) > 1000
+        ):
+            invalid()
+    try:
+        _canonical_audit_entry(entry)
+    except (TypeError, ValueError, OverflowError) as exc:
         raise AuditLogIntegrityError(
-            f"audit log entry {line_number} has an invalid schema"
-        )
+            f"audit log entry {line_number} cannot be canonically serialized"
+        ) from exc
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -531,7 +602,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
+def _audit_chain_state(contents: bytes) -> tuple[int, str, int, int, dict[int, str]]:
     """Validate legacy and chained entries; return seq, head hash, total count.
 
     Legacy JSONL entries are accepted as an immutable prefix. The first chained
@@ -539,7 +610,7 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
     history are detected. New entries use SHA-256 over canonical JSON.
     """
     if not contents:
-        return 0, "0" * 64, 0
+        return 0, "0" * 64, 0, 0, {0: "0" * 64}
     if not contents.endswith(b"\n"):
         raise AuditLogIntegrityError(
             "audit log has an incomplete trailing entry; operator review required"
@@ -549,6 +620,8 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
     sequence = 0
     previous_hash = "0" * 64
     total = 0
+    legacy_count = 0
+    chain_hashes: dict[int, str] = {0: "0" * 64}
     chain_started = False
 
     for line_number, raw_line in enumerate(
@@ -569,6 +642,7 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
                 )
             _validate_audit_event(entry, line_number)
             legacy_lines.append(raw_line)
+            legacy_count += 1
             total += 1
             continue
 
@@ -618,6 +692,7 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
             )
         sequence = seq
         previous_hash = entry["hash"]
+        chain_hashes[sequence] = previous_hash
         chain_started = True
         total += 1
 
@@ -625,7 +700,9 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
         previous_hash = hashlib.sha256(
             b"legacy-audit-prefix-v1\\0" + b"".join(legacy_lines)
         ).hexdigest()
-    return sequence, previous_hash, total
+    if not chain_started and legacy_lines:
+        chain_hashes[0] = previous_hash
+    return sequence, previous_hash, total, legacy_count, chain_hashes
 
 
 def _validate_audit_bytes(contents: bytes) -> None:
@@ -651,7 +728,7 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
                     "audit log exceeds the configured 64 MiB validation limit; "
                     "archive through operator procedure"
                 )
-            sequence, previous_hash, _ = _audit_chain_state(existing)
+            sequence, previous_hash, _, _, _ = _audit_chain_state(existing)
             _validate_audit_event(entry, sequence + 1)
             entry["seq"] = sequence + 1
             entry["previous_hash"] = previous_hash
@@ -691,8 +768,26 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
             fcntl.flock(audit_file.fileno(), fcntl.LOCK_UN)
 
 
-def verify_audit_log() -> dict[str, Any]:
-    """Verify the complete audit history without modifying it."""
+def create_audit_checkpoint() -> dict[str, Any]:
+    """Return a checkpoint for storage independently of this machine."""
+    result = verify_audit_log()
+    return {
+        "version": 1,
+        "sequence": result["chained_entries"],
+        "legacy_entries": result["legacy_entries"],
+        "head_hash": result["head_hash"],
+        "created_at": time.time(),
+    }
+
+
+def verify_audit_log(
+    expected_checkpoint: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Verify local history and, optionally, an independently retained head.
+
+    An older checkpoint remains valid as the log grows. The verifier confirms
+    the hash at the checkpoint sequence, detecting truncation past that point.
+    """
     _ensure_dirs()
     fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
@@ -703,13 +798,54 @@ def verify_audit_log() -> dict[str, Any]:
                 raise AuditLogIntegrityError(
                     "audit log exceeds the configured 64 MiB validation limit"
                 )
-            sequence, head_hash, total = _audit_chain_state(contents)
-            return {
+            sequence, head_hash, total, legacy_count, chain_hashes = (
+                _audit_chain_state(contents)
+            )
+            result = {
                 "valid": True,
                 "entries": total,
+                "legacy_entries": legacy_count,
                 "chained_entries": sequence,
                 "head_hash": head_hash,
             }
+            if expected_checkpoint is not None:
+                checkpoint = expected_checkpoint
+                if (
+                    not isinstance(checkpoint, dict)
+                    or set(checkpoint) != {
+                        "version", "sequence", "legacy_entries",
+                        "head_hash", "created_at",
+                    }
+                    or checkpoint.get("version") != 1
+                    or isinstance(checkpoint.get("sequence"), bool)
+                    or not isinstance(checkpoint.get("sequence"), int)
+                    or checkpoint["sequence"] < 0
+                    or isinstance(checkpoint.get("legacy_entries"), bool)
+                    or not isinstance(checkpoint.get("legacy_entries"), int)
+                    or checkpoint["legacy_entries"] < 0
+                    or not isinstance(checkpoint.get("head_hash"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", checkpoint["head_hash"])
+                    or isinstance(checkpoint.get("created_at"), bool)
+                    or not isinstance(checkpoint.get("created_at"), (int, float))
+                    or not math.isfinite(checkpoint["created_at"])
+                    or checkpoint["created_at"] <= 0
+                ):
+                    raise AuditLogIntegrityError("audit checkpoint is malformed")
+                checkpoint_seq = checkpoint["sequence"]
+                if (
+                    sequence < checkpoint_seq
+                    or legacy_count != checkpoint["legacy_entries"]
+                    or checkpoint_seq not in chain_hashes
+                    or not hmac.compare_digest(
+                        chain_hashes[checkpoint_seq], checkpoint["head_hash"]
+                    )
+                ):
+                    raise AuditLogIntegrityError(
+                        "audit log is truncated or diverges from the external checkpoint"
+                    )
+                result["checkpoint_verified"] = True
+                result["checkpoint_sequence"] = checkpoint_seq
+            return result
         finally:
             fcntl.flock(audit_file.fileno(), fcntl.LOCK_UN)
 
