@@ -32,8 +32,13 @@ def _validate_search(query: str, top_k: int) -> None:
 def get_store() -> RealVectorStore:
     global _store
     if _store is None:
-        _store = RealVectorStore(persist_path="data/faiss_store")
-        _store.load()
+        store_path = Path("data/faiss_store")
+        candidate = RealVectorStore(persist_path=str(store_path))
+        loaded = candidate.load()
+        store_file = store_path / "store.json"
+        if not loaded and (store_file.exists() or store_file.is_symlink()):
+            raise RuntimeError("Persisted vector store failed validation")
+        _store = candidate
     return _store
 
 
