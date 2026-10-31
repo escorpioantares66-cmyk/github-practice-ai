@@ -89,6 +89,31 @@ def test_query_rate_limit_enforced(client):
     assert resp.status_code == 429
 
 
+def test_write_enforces_pending_approval_limit_as_http_429(
+    client, monkeypatch
+):
+    from stage2_sdk_ai import approval
+
+    monkeypatch.setattr(approval, "MAX_PENDING_APPROVALS_PER_REQUESTER", 1)
+    monkeypatch.setattr(approval, "MAX_APPROVAL_REQUESTS_PER_UTC_DAY", 100)
+    headers = {"X-API-Key": VALID_KEY}
+    first = client.post(
+        "/write",
+        json={"path": "first.md", "content": "first"},
+        headers=headers,
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/write",
+        json={"path": "second.md", "content": "second"},
+        headers=headers,
+    )
+    assert second.status_code == 429
+    assert second.json()["detail"]["error"] == "approval_limit_exceeded"
+    assert second.json()["detail"]["limit"] == "pending_approval_limit"
+
+
 def test_write_requires_approval(client):
     resp = client.post(
         "/write",
