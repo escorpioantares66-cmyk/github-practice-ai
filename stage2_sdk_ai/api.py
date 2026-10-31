@@ -328,7 +328,10 @@ def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
             detail={
                 "error": "approval_limit_exceeded",
                 "limit": exc.limit,
-                "retry": "Retry after an existing pending request expires or is decided, or after the next UTC day.",
+                "retry": (
+                    "Retry after an existing pending request expires or is decided, "
+                    "or after the next UTC day."
+                ),
             },
         ) from exc
     except appr_mod.ApprovalStoreIntegrityError as exc:
