@@ -22,3 +22,14 @@ Before deploying multiple workers/instances, or when daily spending limits must 
 - The ASGI request middleware limits concurrent body buffering to 16 requests per process and caps each body at 1 MiB. This is a per-process memory bound, not a substitute for connection limits and request timeouts at a reverse proxy.
 - Prompt-injection phrase screening is heuristic only. The agent's tool allowlist, strict argument validation, and requester-scoped note access are the actual privilege boundaries.
 - Output redaction covers common high-confidence PII patterns; it is not comprehensive data-loss prevention.
+
+
+## Approval clock integrity
+
+Approval expiry uses the host wall clock because approval records persist across
+process restarts. A record whose creation timestamp is more than 60 seconds in
+the future relative to the current host clock is rejected as expired. This
+fails closed on significant backward clock adjustments; it does not replace
+reliable time synchronization. Production hosts should run a time
+synchronization service and alert on clock drift. Small clock adjustments
+within the 60-second tolerance can still affect the effective expiry window.
