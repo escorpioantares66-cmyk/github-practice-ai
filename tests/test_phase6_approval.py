@@ -25,7 +25,10 @@ def test_request_and_approve():
 
 def test_write_needs_approval_then_writes():
     req = request_approval("write_note", {"path": "a.md", "content": "hello"})
-    assert write_note("a.md", "hello", approval_id=req["id"], requester="test-requester")["status"] == "needs_approval"
+    result = write_note(
+        "a.md", "hello", approval_id=req["id"], requester="test-requester"
+    )
+    assert result["status"] == "needs_approval"
     assert "approval_id" in write_note("b.md", "mock content", requester="test-requester")
 
 
