@@ -11,6 +11,9 @@ These tests verify:
      rejects every key -- fail closed.
   3. Production mode with AGENT_API_KEYS configured accepts only those keys.
 """
+from concurrent.futures import ThreadPoolExecutor
+
+from stage2_sdk_ai import auth
 from stage2_sdk_ai.auth import _allowed_keys, check_auth
 
 
@@ -114,9 +117,6 @@ def test_approver_rate_limit_uses_stable_identity_across_secret_rotation(monkeyp
 
 
 def test_rate_limit_is_atomic_under_concurrent_requests(monkeypatch):
-    from concurrent.futures import ThreadPoolExecutor
-    from stage2_sdk_ai import auth
-
     auth.reset_rate()
     monkeypatch.setattr(auth, "_MAX_PER_MIN", 10)
     with ThreadPoolExecutor(max_workers=32) as pool:
