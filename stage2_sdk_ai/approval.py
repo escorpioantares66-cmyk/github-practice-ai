@@ -154,18 +154,33 @@ def _load_approval_record(path: Path, approval_id: str) -> dict[str, Any]:
         raise CorruptApprovalRecordError("approval record is malformed") from exc
     if not isinstance(data, dict) or data.get("id") != approval_id:
         raise CorruptApprovalRecordError("approval record identity mismatch")
-    required = {"id", "tool", "args", "requester", "status", "request_audit_status", "created"}
+    required = {
+        "id",
+        "tool",
+        "args",
+        "requester",
+        "status",
+        "request_audit_status",
+        "created",
+    }
     if not required.issubset(data):
         raise CorruptApprovalRecordError("approval record is missing required fields")
     if not isinstance(data["tool"], str) or not data["tool"]:
         raise CorruptApprovalRecordError("invalid approval tool")
-    if not isinstance(data["args"], dict) or not isinstance(data["requester"], str) or not data["requester"]:
+    if (
+    not isinstance(data["args"], dict)
+    or not isinstance(data["requester"], str)
+    or not data["requester"]
+    ):
         raise CorruptApprovalRecordError("invalid approval payload or requester")
     if data["status"] not in {"pending", "approved", "denied", "consumed"}:
         raise CorruptApprovalRecordError("invalid approval state")
     if data["request_audit_status"] not in {"pending", "written", "failed"}:
         raise CorruptApprovalRecordError("invalid request audit state")
-    if data["status"] in {"approved", "denied", "consumed"} and data.get("approval_audit_status") not in {"pending", "written", "failed"}:
+    if (
+    data["status"] in {"approved", "denied", "consumed"}
+    and data.get("approval_audit_status") not in {"pending", "written", "failed"}
+    ):
         raise CorruptApprovalRecordError("invalid approval audit state")
     return data
 
@@ -180,7 +195,10 @@ def check_approval(approval_id: str) -> dict[str, Any]:
     except FileNotFoundError:
         return {"status": "not_found", "id": approval_id}
     except CorruptApprovalRecordError:
-        logger.exception("approval record requires operator review", extra={"approval_id": approval_id})
+        logger.exception(
+    "approval record requires operator review",
+    extra={"approval_id": approval_id},
+        )
         return {"status": "corrupt_record", "id": approval_id}
 
 
@@ -204,7 +222,10 @@ def _transition(
         except FileNotFoundError:
             return {"status": "not_found", "id": approval_id}
         except CorruptApprovalRecordError:
-            logger.exception("approval record requires operator review", extra={"approval_id": approval_id})
+            logger.exception(
+    "approval record requires operator review",
+    extra={"approval_id": approval_id},
+            )
             return {"status": "corrupt_record", "id": approval_id}
 
         if data.get("status") != "pending":
@@ -300,7 +321,10 @@ def record_execution_failure(
         except FileNotFoundError:
             return {"status": "not_found", "id": approval_id}
         except CorruptApprovalRecordError:
-            logger.exception("approval record requires operator review", extra={"approval_id": approval_id})
+            logger.exception(
+    "approval record requires operator review",
+    extra={"approval_id": approval_id},
+            )
             return {"status": "corrupt_record", "id": approval_id}
 
         if data.get("status") != "consumed":
@@ -355,7 +379,10 @@ def consume_approval_request(
         except FileNotFoundError:
             return {"status": "not_found", "id": approval_id}
         except CorruptApprovalRecordError:
-            logger.exception("approval record requires operator review", extra={"approval_id": approval_id})
+            logger.exception(
+    "approval record requires operator review",
+    extra={"approval_id": approval_id},
+            )
             return {"status": "corrupt_record", "id": approval_id}
 
         if data.get("status") == "pending":
@@ -459,7 +486,10 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
             audit_file.seek(0)
             existing = audit_file.read(MAX_AUDIT_LOG_BYTES + 1)
             if len(existing) > MAX_AUDIT_LOG_BYTES:
-                raise AuditLogIntegrityError("audit log exceeds the configured 64 MiB validation limit; archive through operator procedure")
+                raise AuditLogIntegrityError(
+    "audit log exceeds the configured 64 MiB validation limit; "
+    "archive through operator procedure" 
+                )
             _validate_audit_bytes(existing)
             audit_file.seek(0, os.SEEK_END)
             original_size = audit_file.tell()
@@ -502,7 +532,12 @@ def list_pending() -> list[dict[str, Any]]:
                 or data.get("id") != approval_id
             ):
                 raise CorruptApprovalRecordError("record ID does not match filename")
-        except (json.JSONDecodeError, UnicodeDecodeError, OSError, CorruptApprovalRecordError):
+        except (
+    json.JSONDecodeError,
+    UnicodeDecodeError,
+    OSError,
+    CorruptApprovalRecordError,
+        ):
             logger.exception(
                 "skipping corrupt approval record; operator review required",
                 extra={"approval_id": approval_id},
