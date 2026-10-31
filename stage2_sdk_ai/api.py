@@ -51,12 +51,19 @@ class RequestBodyLimitMiddleware:
             if not auth.verify_api_key(api_key):
                 await self._json_error(scope, send, 401, "Invalid API key")
                 return
+            if not auth.check_requester_rate_limit(api_key):
+                await self._json_error(scope, send, 429, "Rate limit exceeded")
+                return
         elif method == "POST" and path in {"/approve", "/deny"}:
             approver_key = headers.get(b"x-approver-key", b"").decode("latin-1")
             if not auth.verify_approver_key(approver_key):
                 await self._json_error(
                     scope, send, 403, "Invalid or missing approver credentials"
                 )
+                return
+            approver_identity = auth.approver_identity(approver_key)
+            if not auth.check_rate_limit(approver_identity):
+                await self._json_error(scope, send, 429, "Approver rate limit exceeded")
                 return
 
         with self._counter_lock:
@@ -215,8 +222,6 @@ class DenyApprovalReq(BaseModel):
 def _check_auth(x_api_key: Optional[str] = Header(None)):
     if not auth.verify_api_key(x_api_key or ""):
         raise HTTPException(status_code=401, detail="Invalid API key")
-    if not auth.check_requester_rate_limit(x_api_key):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
     return x_api_key
 
 def _check_approver_auth(
@@ -227,9 +232,6 @@ def _check_approver_auth(
             status_code=403,
             detail="Invalid or missing approver credentials",
         )
-    identity = auth.approver_identity(x_approver_key or "")
-    if not auth.check_rate_limit(identity):
-        raise HTTPException(status_code=429, detail="Approver rate limit exceeded")
     return x_approver_key or ""
 
 
