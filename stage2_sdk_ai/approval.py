@@ -61,7 +61,7 @@ def _write_record_atomically(path: Path, record: dict[str, Any]) -> None:
 
 
 def request_approval(
-    tool: str, args: dict[str, Any], requester: str
+    tool: str, args: dict[str, Any], requester: str = "agent"
 ) -> dict[str, Any]:
     """Create an approval owned by an authenticated requester identity."""
     if not isinstance(requester, str) or not requester.strip():
