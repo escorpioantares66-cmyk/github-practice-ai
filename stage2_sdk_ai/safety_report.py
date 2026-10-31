@@ -33,7 +33,11 @@ def generate_safety_report(
         },
         "levels": levels,
         "overall": overall,
-        "recommendation": "Deploy with L1-L5 active.",
+        "recommendation": (
+            "Deploy with L1-L5 active."
+            if overall == "SAFE_TO_DEPLOY"
+            else "Do not deploy; resolve failed security controls and rerun evaluations."
+        ),
     }
 
 def report_to_markdown(report: dict) -> str:
