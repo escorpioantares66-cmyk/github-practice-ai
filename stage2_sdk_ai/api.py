@@ -1,3 +1,4 @@
+import threading
 import time
 import uuid
 from typing import Optional
@@ -23,26 +24,28 @@ MAX_REQUEST_BODY_BYTES = 1_048_576  # 1 MiB
 
 
 class RequestBodyLimitMiddleware:
-    """ASGI middleware that caps body bytes before application parsing."""
+    """Bound body size and concurrent body buffering before JSON parsing."""
 
-    def __init__(self, app, max_body_bytes: int = MAX_REQUEST_BODY_BYTES):
+    def __init__(
+        self,
+        app,
+        max_body_bytes: int = MAX_REQUEST_BODY_BYTES,
+        max_concurrent_buffers: int = 16,
+    ):
         self.app = app
         self.max_body_bytes = max_body_bytes
+        self.max_concurrent_buffers = max_concurrent_buffers
+        self._active_buffers = 0
+        self._counter_lock = threading.Lock()
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        # Authenticate protected routes before reading or buffering request
-        # bodies. Otherwise unauthenticated clients can consume up to the body
-        # cap per concurrent request before the endpoint dependency rejects them.
         method = scope.get("method", "").upper()
         path = scope.get("path", "")
-        headers = {
-            key.lower(): value
-            for key, value in scope.get("headers", [])
-        }
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
         if method == "POST" and path in {"/query", "/write", "/write/execute"}:
             api_key = headers.get(b"x-api-key", b"").decode("latin-1")
             if not auth.verify_api_key(api_key):
@@ -56,43 +59,57 @@ class RequestBodyLimitMiddleware:
                 )
                 return
 
-        content_length = next(
-            (value for key, value in scope.get("headers", []) if key.lower() == b"content-length"),
-            None,
-        )
-        if content_length is not None:
-            try:
-                declared_length = int(content_length)
-            except ValueError:
-                declared_length = -1
-            if declared_length > self.max_body_bytes:
-                await self._too_large(scope, send)
+        with self._counter_lock:
+            if self._active_buffers >= self.max_concurrent_buffers:
+                await self._json_error(scope, send, 429, "Too many concurrent requests")
                 return
+            self._active_buffers += 1
 
-        # Buffer at most limit+1 bytes. This also enforces the limit when the
-        # client omits Content-Length or streams a chunked request body.
-        messages = []
-        total = 0
-        while True:
-            message = await receive()
-            if message["type"] != "http.request":
+        try:
+            content_length = next(
+                (
+                    value for key, value in scope.get("headers", [])
+                    if key.lower() == b"content-length"
+                ),
+                None,
+            )
+            if content_length is not None:
+                try:
+                    declared_length = int(content_length)
+                except ValueError:
+                    declared_length = -1
+                if declared_length < 0:
+                    await self._json_error(scope, send, 400, "Invalid Content-Length")
+                    return
+                if declared_length > self.max_body_bytes:
+                    await self._too_large(scope, send)
+                    return
+
+            messages = []
+            total = 0
+            while True:
+                message = await receive()
+                if message["type"] != "http.request":
+                    messages.append(message)
+                    break
+                body = message.get("body", b"")
+                total += len(body)
+                if total > self.max_body_bytes:
+                    await self._too_large(scope, send)
+                    return
                 messages.append(message)
-                break
-            body = message.get("body", b"")
-            total += len(body)
-            if total > self.max_body_bytes:
-                await self._too_large(scope, send)
-                return
-            messages.append(message)
-            if not message.get("more_body", False):
-                break
+                if not message.get("more_body", False):
+                    break
 
-        async def replay_receive():
-            if messages:
-                return messages.pop(0)
-            return await receive()
+            async def replay_receive():
+                if messages:
+                    return messages.pop(0)
+                return await receive()
 
-        await self.app(scope, replay_receive, send)
+            await self.app(scope, replay_receive, send)
+        finally:
+            with self._counter_lock:
+                self._active_buffers -= 1
 
     @staticmethod
     async def _json_error(scope, send, status_code: int, detail: str):
@@ -172,20 +189,26 @@ class QueryReq(BaseModel):
     top_k: Optional[int] = Field(default=5, ge=1, le=50)
 
 class WriteReq(BaseModel):
-    path: str
-    content: str
+    path: str = Field(min_length=1, max_length=255)
+    content: str = Field(max_length=5_000)
+
+    class Config:
+        extra = "forbid"
 
 
 class ExecuteWriteReq(BaseModel):
-    approval_id: str
+    approval_id: str = Field(min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$")
 
     class Config:
         extra = "forbid"
 
 
 class DenyApprovalReq(BaseModel):
-    approval_id: str
-    reason: str = ""
+    approval_id: str = Field(min_length=32, max_length=32, pattern=r"^[0-9a-f]{32}$")
+    reason: str = Field(default="", max_length=500)
+
+    class Config:
+        extra = "forbid"
 
 def _check_auth(x_api_key: Optional[str] = Header(None)):
     if not auth.verify_api_key(x_api_key or ""):
@@ -224,7 +247,10 @@ def query_endpoint(req: QueryReq, api_key: str = Depends(_check_auth)):
         return {"answer": "blocked by input_guard", "blocked": True}
     if not cost_guard.reserve_cost(api_key, q):
         return {"answer": "cost limit $1 exceeded", "blocked": True}
-    res = run_agent(q, top_k=req.top_k or 5)
+    requester = auth.requester_identity(api_key)
+    if requester is None:
+        raise HTTPException(status_code=401, detail="Invalid API key identity")
+    res = run_agent(q, top_k=req.top_k or 5, requester=requester)
     out = output_guard.check_output(res.get("answer", ""), res.get("sources", []))
     safe_answer = out.get("text", "")
     safe_sources = out.get("sources", [])
@@ -242,6 +268,10 @@ def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
     from stage2_sdk_ai import approval as appr_mod
     from stage2_sdk_ai.write_tools import MAX_NOTE_CHARS, canonical_note_path
 
+    requester = auth.requester_identity(api_key)
+    if requester is None:
+        raise HTTPException(status_code=401, detail="Invalid API key identity")
+
     if len(req.content) > MAX_NOTE_CHARS:
         raise HTTPException(
             status_code=422,
@@ -249,13 +279,9 @@ def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
         )
 
     try:
-        safe_path = canonical_note_path(req.path)
+        safe_path = canonical_note_path(req.path, requester=requester)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    requester = auth.requester_identity(api_key)
-    if requester is None:
-        raise HTTPException(status_code=401, detail="Invalid API key identity")
 
     try:
         r = appr_mod.request_approval(
@@ -290,8 +316,10 @@ def approve_endpoint(
 
     result = appr_mod.approve(approval_id, approver_key=approver_key)
     status = result.get("status")
-    if status == "unauthorized":
-        raise HTTPException(status_code=403, detail="Invalid or missing approver credentials")
+    if status in {"unauthorized", "self_approval_denied"}:
+        raise HTTPException(status_code=403, detail="Approver must be a distinct configured identity")
+    if status == "expired":
+        raise HTTPException(status_code=410, detail="Approval request has expired")
     if status == "not_found":
         raise HTTPException(status_code=404, detail="Approval not found")
     if status == "invalid_id":
@@ -326,8 +354,10 @@ def deny_endpoint(
         reason=req.reason,
     )
     status = result.get("status")
-    if status == "unauthorized":
-        raise HTTPException(status_code=403, detail="Invalid or missing approver credentials")
+    if status in {"unauthorized", "self_approval_denied"}:
+        raise HTTPException(status_code=403, detail="Approver must be a distinct configured identity")
+    if status == "expired":
+        raise HTTPException(status_code=410, detail="Approval request has expired")
     if status == "not_found":
         raise HTTPException(status_code=404, detail="Approval not found")
     if status == "invalid_id":
@@ -366,6 +396,8 @@ def execute_write_endpoint(
         raise HTTPException(status_code=422, detail="Invalid approval ID")
     if status == "pending":
         raise HTTPException(status_code=409, detail="Approval is still pending")
+    if status == "expired":
+        raise HTTPException(status_code=410, detail="Approval has expired")
     if status == "invalid_transition":
         raise HTTPException(status_code=409, detail="Approval was already consumed or denied")
     if status == "approval_mismatch":
