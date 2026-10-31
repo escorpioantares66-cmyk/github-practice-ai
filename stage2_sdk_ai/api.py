@@ -60,10 +60,12 @@ class RequestBodyLimitMiddleware:
                 return
 
         with self._counter_lock:
-            if self._active_buffers >= self.max_concurrent_buffers:
-                await self._json_error(scope, send, 429, "Too many concurrent requests")
-                return
-            self._active_buffers += 1
+            at_capacity = self._active_buffers >= self.max_concurrent_buffers
+            if not at_capacity:
+                self._active_buffers += 1
+        if at_capacity:
+            await self._json_error(scope, send, 429, "Too many concurrent requests")
+            return
 
         try:
             content_length = next(
