@@ -55,7 +55,10 @@ def _validate_note_payload(path: Any, content: Any) -> tuple[Path | None, str | 
 
 
 def _report_execution_failure(
-    approval_id: str, path: Path, original_error: Exception
+    approval_id: str,
+    path: Path,
+    original_error: Exception,
+    result_status: str = "execution_failed",
 ) -> dict[str, Any]:
     """Log the side-effect failure before attempting fallible recovery writes."""
     logger.error(
@@ -140,8 +143,8 @@ def _report_execution_failure(
 
     return {
         **base,
-        "status": "execution_failed",
-        "error": "Write failed after approval consumption; operator review required",
+        "status": result_status,
+        "error": "Approved operation stopped after consumption; operator review required",
     }
 
 
@@ -207,6 +210,16 @@ def write_note(
             "is_mock": False,
         }
 
+    if consumed.get("audit_status") == "failed":
+        audit_error = RuntimeError(
+            "consumed audit append failed: "
+            + str(consumed.get("audit_error_type", "unknown error"))
+        )
+        return _report_execution_failure(
+            approval_id, safe_path, audit_error,
+            result_status="consumption_audit_incomplete",
+        )
+
     try:
         _atomic_write_note(safe_path, content)
     except Exception as exc:
@@ -241,6 +254,16 @@ def execute_approved_write(
             "is_mock": False,
         }
 
+    if consumed.get("audit_status") == "failed":
+        audit_error = RuntimeError(
+            "consumed audit append failed: "
+            + str(consumed.get("audit_error_type", "unknown error"))
+        )
+        return _report_execution_failure(
+            approval_id, safe_path, audit_error,
+            result_status="consumption_audit_incomplete",
+        )
+
     args = consumed.get("args")
     if not isinstance(args, dict):
         return {
@@ -252,13 +275,13 @@ def execute_approved_write(
 
     safe_path, error = _validate_note_payload(args.get("path"), args.get("content"))
     if error or safe_path is None:
-        return {
-            "tool": "write_note",
-            "status": "invalid_approved_payload",
-            "error": error or "Invalid approved payload",
-            "approval_id": approval_id,
-            "is_mock": False,
-        }
+        validation_error = ValueError(error or "Invalid approved payload")
+        return _report_execution_failure(
+            approval_id,
+            Path("<invalid-approved-path>"),
+            validation_error,
+            result_status="invalid_approved_payload_operator_review",
+        )
 
     try:
         _atomic_write_note(safe_path, args["content"])
