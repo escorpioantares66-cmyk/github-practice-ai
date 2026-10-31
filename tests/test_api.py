@@ -121,7 +121,11 @@ def test_oversized_deny_body_is_rejected_before_json_validation(client):
 
     response = client.post(
         "/deny",
-        content=b'{"approval_id":"' + b"d" * 32 + b'","reason":"' + b"x" * MAX_REQUEST_BODY_BYTES + b'"}',
+        content=(
+            b'{"approval_id":"' + b"d" * 32 + b'","reason":"'
+            + b"x" * MAX_REQUEST_BODY_BYTES
+            + b'"}'
+        ),
         headers={"X-Approver-Key": "any", "Content-Type": "application/json"},
     )
     assert response.status_code == 413
