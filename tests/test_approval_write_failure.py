@@ -34,7 +34,10 @@ def test_failed_write_records_operator_recovery_context_without_replay(
     assert record["args"]["content"] == "approved payload"
     assert record["execution_failure"]["error_type"] == "OSError"
     assert "simulated disk failure" in record["execution_failure"]["error_message"]
-    assert "operator_review_required" in caplog.text
+    assert any(
+        getattr(record, "recovery", None) == "operator_review_required"
+        for record in caplog.records
+    )
 
     audit = [
         json.loads(line)
