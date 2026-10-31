@@ -426,16 +426,29 @@ def _validate_audit_bytes(contents: bytes) -> None:
             raise AuditLogIntegrityError(
                 f"audit log entry {line_number} is invalid; operator review required"
             ) from exc
-        if not isinstance(entry, dict) or not {
-            "action", "time", "record"
-        }.issubset(entry):
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"action", "time", "record"}
+            or not isinstance(entry.get("action"), str)
+            or entry.get("action") not in {
+                "request", "approved", "denied", "consumed", "execution_failed"
+            }
+            or not isinstance(entry.get("time"), (int, float))
+            or isinstance(entry.get("time"), bool)
+            or not isinstance(entry.get("record"), dict)
+            or not isinstance(entry["record"].get("id"), str)
+            or not re.fullmatch(r"[0-9a-f]{32}", entry["record"]["id"])
+        ):
             raise AuditLogIntegrityError(
                 f"audit log entry {line_number} has an invalid schema"
             )
 
 
+MAX_AUDIT_LOG_BYTES = 64 * 1024 * 1024
+
+
 def log_audit(action: str, record: dict[str, Any]) -> None:
-    """Append one durable JSONL event; refuse to append to a corrupt history."""
+    """Append one durable JSONL event; refuse corrupt or oversized histories."""
     _ensure_dirs()
     entry = {"action": action, "time": time.time(), "record": record}
     encoded = (json.dumps(entry, separators=(",", ":")) + "\n").encode("utf-8")
@@ -444,7 +457,10 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
         fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
         try:
             audit_file.seek(0)
-            _validate_audit_bytes(audit_file.read())
+            existing = audit_file.read(MAX_AUDIT_LOG_BYTES + 1)
+            if len(existing) > MAX_AUDIT_LOG_BYTES:
+                raise AuditLogIntegrityError("audit log exceeds the configured 64 MiB validation limit; archive through operator procedure")
+            _validate_audit_bytes(existing)
             audit_file.seek(0, os.SEEK_END)
             original_size = audit_file.tell()
             view = memoryview(encoded)
