@@ -373,6 +373,9 @@ def list_pending() -> list[dict[str, Any]]:
         if path.is_symlink():
             continue
         data = json.loads(read_private_text(path))
-        if data.get("status") == "pending":
+        if (
+            data.get("status") == "pending"
+            and data.get("request_audit_status") == "written"
+        ):
             pending.append(data)
     return pending
