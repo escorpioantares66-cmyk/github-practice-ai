@@ -24,6 +24,14 @@ _approvals_dir = Path("approvals")
 _audit_file = Path("logs/audit.jsonl")
 
 
+class ApprovalAuditError(RuntimeError):
+    """A request was stored but its audit state could not be confirmed."""
+
+    def __init__(self, approval_id: str):
+        super().__init__("approval_audit_incomplete")
+        self.approval_id = approval_id
+
+
 def _ensure_dirs() -> None:
     ensure_private_directory(_approvals_dir)
     ensure_private_directory(_audit_file.parent)
@@ -72,6 +80,7 @@ def request_approval(
         "args": args,
         "requester": requester,
         "status": "pending",
+        "request_audit_status": "pending",
         "created": time.time(),
     }
     while True:
@@ -91,7 +100,26 @@ def request_approval(
             os.fsync(approval_file.fileno())
         fsync_directory(_approvals_dir)
         break
-    log_audit("request", record)
+    # The request is not approvable until its audit append and durable
+    # status marker both succeed. The initial pending marker fails closed.
+    try:
+        audit_record = dict(record)
+        audit_record["request_audit_status"] = "written"
+        log_audit("request", audit_record)
+    except Exception as exc:
+        record["request_audit_status"] = "failed"
+        record["request_audit_error_type"] = type(exc).__name__[:120]
+        try:
+            _write_record_atomically(path, record)
+        except Exception:
+            pass
+        raise ApprovalAuditError(approval_id) from exc
+
+    record["request_audit_status"] = "written"
+    try:
+        _write_record_atomically(path, record)
+    except Exception as exc:
+        raise ApprovalAuditError(approval_id) from exc
     return record
 
 
@@ -131,6 +159,15 @@ def _transition(
                 "status": "invalid_transition",
                 "id": approval_id,
                 "current_status": data.get("status"),
+            }
+
+        if data.get("request_audit_status") != "written":
+            return {
+                "status": "approval_audit_incomplete",
+                "id": approval_id,
+                "current_status": data.get("status"),
+                "audit_phase": "request",
+                "audit_status": data.get("request_audit_status", "missing"),
             }
 
         data["status"] = target_status
