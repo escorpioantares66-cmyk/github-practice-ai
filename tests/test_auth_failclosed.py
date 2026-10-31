@@ -101,12 +101,14 @@ def test_approver_rate_limit_uses_stable_identity_across_secret_rotation(monkeyp
     identity = auth.approver_identity("old-approver-secret")
     assert identity == "reviewer"
     for _ in range(auth._MAX_PER_MIN):
-        assert auth.check_rate_limit(identity)
+        assert auth.check_rate_limit(identity, role="approver")
 
     monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=new-approver-secret")
     assert auth.verify_approver_key("new-approver-secret")
     assert auth.approver_identity("new-approver-secret") == identity
-    assert not auth.check_rate_limit(identity)
+    assert not auth.check_rate_limit(identity, role="approver")
+    # Requester and approver identities occupy separate durable rate buckets.
+    assert auth.check_rate_limit(identity, role="api")
     auth.reset_rate()
 
 
