@@ -6,9 +6,9 @@ import os
 import sqlite3
 import stat
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from .secure_storage import ensure_private_directory
 
