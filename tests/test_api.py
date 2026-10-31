@@ -410,3 +410,73 @@ def test_deny_rejects_oversized_reason(client, monkeypatch):
         json={"approval_id": approval_id},
         headers={"X-API-Key": VALID_KEY},
     ).status_code == 409
+
+
+
+def test_approval_is_owned_by_requester_and_wrong_user_does_not_consume(
+    client, monkeypatch, tmp_path
+):
+    from pathlib import Path
+
+    from stage2_sdk_ai import approval
+
+    monkeypatch.setenv(
+        "AGENT_API_KEYS",
+        "requester-a=secret-a,requester-b=secret-b",
+    )
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "separate-approver-secret")
+
+    requested = client.post(
+        "/write",
+        json={"path": "owner-bound.md", "content": "owner-only"},
+        headers={"X-API-Key": "secret-a"},
+    )
+    assert requested.status_code == 200
+    approval_id = requested.json()["approval_id"]
+    stored = approval.check_approval(approval_id)
+    assert stored["requester"] == "requester-a"
+    assert "secret-a" not in str(stored)
+
+    approved = client.post(
+        f"/approve?approval_id={approval_id}",
+        headers={"X-Approver-Key": "separate-approver-secret"},
+    )
+    assert approved.status_code == 200
+
+    wrong_owner = client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
+        headers={"X-API-Key": "secret-b"},
+    )
+    assert wrong_owner.status_code == 403
+    assert approval.check_approval(approval_id)["status"] == "approved"
+    assert not (tmp_path / "notes" / "owner-bound.md").exists()
+
+    rightful_owner = client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
+        headers={"X-API-Key": "secret-a"},
+    )
+    assert rightful_owner.status_code == 200
+    assert rightful_owner.json()["status"] == "written"
+    assert Path(rightful_owner.json()["path"]).read_text(
+        encoding="utf-8"
+    ) == "owner-only"
+
+    replay = client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
+        headers={"X-API-Key": "secret-a"},
+    )
+    assert replay.status_code == 409
+
+
+def test_requester_identity_survives_secret_rotation(monkeypatch):
+    from stage2_sdk_ai.auth import requester_identity
+
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=old-secret")
+    assert requester_identity("old-secret") == "automation"
+
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=new-secret")
+    assert requester_identity("new-secret") == "automation"
+    assert requester_identity("old-secret") is None
