@@ -30,9 +30,10 @@ def _reset_auth_state(monkeypatch):
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
-    from stage2_sdk_ai import approval, write_tools
+    from stage2_sdk_ai import approval, tools, write_tools
 
     monkeypatch.setattr(write_tools, "_notes_dir", tmp_path / "notes")
+    monkeypatch.setattr(tools, "_notes_dir", tmp_path / "notes")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(
         approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
@@ -222,7 +223,10 @@ def test_write_rejects_empty_note_path(client):
 
 
 def test_complete_approved_write_lifecycle(client, monkeypatch, tmp_path):
+    import hashlib
     from pathlib import Path
+
+    from stage2_sdk_ai import auth
 
     monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
 
@@ -259,9 +263,12 @@ def test_complete_approved_write_lifecycle(client, monkeypatch, tmp_path):
     assert executed.status_code == 200
     body = executed.json()
     assert body["status"] == "written"
-    assert body["path"] == str(tmp_path / "notes" / "approved.md")
+    owner_dir = hashlib.sha256(
+        auth.requester_identity(VALID_KEY).encode("utf-8")
+    ).hexdigest()
+    assert body["path"] == str(tmp_path / "notes" / owner_dir / "approved.md")
     assert Path(body["path"]).read_text(encoding="utf-8") == "approved body"
-    assert not (tmp_path / "notes" / "attacker.md").exists()
+    assert not (tmp_path / "notes" / owner_dir / "attacker.md").exists()
 
     replay = client.post(
         "/write/execute",
@@ -480,7 +487,8 @@ def test_approval_is_owned_by_requester_and_wrong_user_does_not_consume(
     )
     assert wrong_owner.status_code == 403
     assert approval.check_approval(approval_id)["status"] == "approved"
-    assert not (tmp_path / "notes" / "owner-bound.md").exists()
+    owner_dir = hashlib.sha256(b"requester-a").hexdigest()
+    assert not (tmp_path / "notes" / owner_dir / "owner-bound.md").exists()
 
     rightful_owner = client.post(
         "/write/execute",
@@ -489,9 +497,13 @@ def test_approval_is_owned_by_requester_and_wrong_user_does_not_consume(
     )
     assert rightful_owner.status_code == 200
     assert rightful_owner.json()["status"] == "written"
+    owner_dir = hashlib.sha256(b"requester-a").hexdigest()
     assert Path(rightful_owner.json()["path"]).read_text(
         encoding="utf-8"
     ) == "owner-only"
+    assert rightful_owner.json()["path"] == str(
+        tmp_path / "notes" / owner_dir / "owner-bound.md"
+    )
 
     replay = client.post(
         "/write/execute",
