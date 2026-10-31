@@ -92,3 +92,8 @@ The execution endpoint deliberately accepts no path or content fields. The authe
 An approval or denial transition is committed with approval_audit_status set to pending before its audit event is appended. The audit event is written with the intended written marker; only after the append succeeds is the approval record updated to written. Execution is permitted only when an approved record has approval_audit_status set to written.
 
 If the audit append fails, the terminal approval/denial state is retained, the record is marked failed when that metadata update is possible, and the API returns HTTP 500 with an operator-review instruction. If the audit append succeeds but the final record update fails, the record remains pending and execution is still blocked. These states are deliberately fail-closed: do not edit the record to written or retry the transition without reconciling the private approval record and audit log. A fresh request is required after operator review when execution is still needed.
+
+
+## Request creation audit integrity
+
+A newly created request starts with `request_audit_status: pending`. The request audit event is appended before the record is marked `written`. Approval and denial transitions are rejected unless the stored request audit marker is `written`. If the audit append fails, the record is marked `failed` when possible; if that marker update also fails, the original `pending` marker remains fail-closed. If the audit append succeeds but the final marker update fails, the request also remains unapprovable. The API returns HTTP 500 with the approval ID and an operator-review instruction. Do not manually change the marker or retry approval; reconcile the approval record and audit log first.
