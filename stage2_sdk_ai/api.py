@@ -259,6 +259,15 @@ def approve_endpoint(
         raise HTTPException(status_code=422, detail="Invalid approval ID")
     if status == "invalid_transition":
         raise HTTPException(status_code=409, detail="Approval is no longer pending")
+    if status == "approval_audit_incomplete":
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "approval_audit_incomplete",
+                "approval_id": approval_id,
+                "recovery": "Operator review required; approval cannot be executed.",
+            },
+        )
     return result
 
 
@@ -286,6 +295,15 @@ def deny_endpoint(
         raise HTTPException(status_code=422, detail="Invalid approval ID")
     if status == "invalid_transition":
         raise HTTPException(status_code=409, detail="Approval is no longer pending")
+    if status == "approval_audit_incomplete":
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "approval_audit_incomplete",
+                "approval_id": req.approval_id,
+                "recovery": "Operator review required; denial remains terminal.",
+            },
+        )
     return result
 
 
@@ -322,6 +340,7 @@ def execute_write_endpoint(
         "execution_failed_audit_incomplete",
         "execution_failure_recording_failed",
         "consumption_audit_incomplete",
+        "approval_audit_incomplete",
         "invalid_approved_payload_operator_review",
     }:
         raise HTTPException(
