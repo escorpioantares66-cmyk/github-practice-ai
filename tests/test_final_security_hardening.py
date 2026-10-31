@@ -149,13 +149,21 @@ def test_body_buffering_concurrency_limit_returns_429():
             return {"type": "http.request", "body": b"", "more_body": False}
 
         first_messages = []
+
+        async def first_send(message):
+            first_messages.append(message)
+
         first_task = asyncio.create_task(
-            middleware(scope(), receive, first_messages.append)
+            middleware(scope(), receive, first_send)
         )
         await entered.wait()
 
         second_messages = []
-        await middleware(scope(), receive, second_messages.append)
+
+        async def second_send(message):
+            second_messages.append(message)
+
+        await middleware(scope(), receive, second_send)
         assert second_messages[0]["status"] == 429
 
         release.set()
