@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import fcntl
 import json
-import math
 import logging
+import math
 import os
 import re
 import secrets
@@ -194,13 +194,14 @@ def _load_approval_record(path: Path, approval_id: str) -> dict[str, Any]:
         raise CorruptApprovalRecordError("invalid approval creation time")
 
     approval_audit_status = data.get("approval_audit_status")
-    if approval_audit_status is not None and (
+    if "approval_audit_status" in data and (
         not isinstance(approval_audit_status, str)
         or approval_audit_status not in valid_audit_statuses
     ):
         raise CorruptApprovalRecordError("invalid approval audit state")
-    if data["status"] in {"approved", "denied", "consumed"} and (
-        approval_audit_status is None
+    if (
+        data["status"] in {"approved", "denied", "consumed"}
+        and "approval_audit_status" not in data
     ):
         raise CorruptApprovalRecordError("missing approval audit state")
 
