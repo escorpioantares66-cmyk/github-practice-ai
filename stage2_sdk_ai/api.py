@@ -261,7 +261,12 @@ def query_endpoint(req: QueryReq, api_key: str = Depends(_check_auth)):
     if not reserved:
         return {"answer": "daily cost limit $1 exceeded", "blocked": True}
     try:
-        res = run_agent(q, top_k=req.top_k or 5, requester=requester)
+        res = run_agent(
+            q,
+            top_k=req.top_k or 5,
+            requester=requester,
+            quota_reservation_id=reservation_id,
+        )
     except UsageAccountingError:
         # Keep the worst-case reservation when provider usage is unknown or
         # could not be durably stored. It expires only after the recovery TTL.
