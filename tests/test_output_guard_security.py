@@ -45,3 +45,11 @@ def test_non_string_model_output_fails_closed():
     assert result["filtered"] is True
     assert result["text"] == ""
     assert result["sources"] == []
+
+
+def test_redacts_international_and_local_phone_formats():
+    for number in ("+254 712 345 678", "0712 345 678"):
+        result = check_output(f"Call {number}")
+        assert result["filtered"] is True
+        assert number not in result["text"]
+        assert not contains_pii(result["text"])
