@@ -171,3 +171,45 @@ def test_body_buffering_concurrency_limit_returns_429():
         assert first_messages[0]["status"] == 200
 
     asyncio.run(scenario())
+
+
+
+def test_pending_approval_fails_closed_after_significant_clock_rollback(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator-secret")
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
+    clock = [5_000.0]
+    monkeypatch.setattr(approval.time, "time", lambda: clock[0])
+
+    request = approval.request_approval("write_note", {"path": "a.md"})
+    clock[0] -= approval.MAX_APPROVAL_CLOCK_SKEW_SECONDS + 1
+
+    assert approval.approve(
+        request["id"], approver_key="operator-secret"
+    )["status"] == "expired"
+    assert request["id"] not in [item["id"] for item in approval.list_pending()]
+
+
+def test_approved_operation_fails_closed_after_clock_rollback(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator-secret")
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
+    clock = [8_000.0]
+    monkeypatch.setattr(approval.time, "time", lambda: clock[0])
+
+    request = approval.request_approval(
+        "write_note", {"path": "a.md", "content": "x"}, requester="owner"
+    )
+    assert approval.approve(
+        request["id"], approver_key="operator-secret"
+    )["status"] == "approved"
+
+    clock[0] -= approval.MAX_APPROVAL_CLOCK_SKEW_SECONDS + 1
+    result = approval.consume_approval_request(
+        request["id"], "write_note", requester="owner"
+    )
+    assert result["status"] == "expired"
