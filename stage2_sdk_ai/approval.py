@@ -799,10 +799,25 @@ def _validate_audit_bytes(contents: bytes) -> None:
 MAX_AUDIT_LOG_BYTES = 64 * 1024 * 1024
 
 
+def _audit_safe_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Keep approval metadata while excluding caller-supplied argument values."""
+    safe_record = dict(record)
+    args = record.get("args")
+    if isinstance(args, dict):
+        # Argument values can contain note bodies, prompts, credentials, or
+        # other user data. Keep only a coarse field count for audit correlation.
+        safe_record["args"] = {"redacted": True, "field_count": len(args)}
+    return safe_record
+
+
 def log_audit(action: str, record: dict[str, Any]) -> None:
-    """Append one durable JSONL event; refuse corrupt or oversized histories."""
+    """Append one durable JSONL event without persisting argument values."""
     _ensure_dirs()
-    entry = {"action": action, "time": time.time(), "record": record}
+    # Validate the complete in-memory record before redaction so non-JSON and
+    # non-finite values remain rejected rather than silently discarded.
+    json.dumps(record, allow_nan=False)
+    safe_record = _audit_safe_record(record)
+    entry = {"action": action, "time": time.time(), "record": safe_record}
     fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
         fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
