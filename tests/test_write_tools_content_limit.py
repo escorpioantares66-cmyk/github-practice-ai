@@ -27,7 +27,7 @@ def test_note_at_character_limit_is_accepted_for_approval(
 
     captured = {}
 
-    def fake_request_approval(tool, args):
+    def fake_request_approval(tool, args, requester="agent"):
         captured["tool"] = tool
         captured["args"] = args
         return {"id": "test1234"}
