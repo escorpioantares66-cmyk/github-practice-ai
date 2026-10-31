@@ -85,8 +85,16 @@ def request_approval(
     tool: str, args: dict[str, Any], requester: str = "agent"
 ) -> dict[str, Any]:
     """Create an approval owned by an authenticated requester identity."""
-    if not isinstance(requester, str) or not requester.strip():
-        raise ValueError("A requester identity is required")
+    if not isinstance(tool, str) or not tool.strip() or len(tool) > 120:
+        raise ValueError("A valid approval tool name is required")
+    if not isinstance(args, dict):
+        raise ValueError("Approval arguments must be a dictionary")
+    if not isinstance(requester, str) or not requester.strip() or len(requester) > 256:
+        raise ValueError("A valid requester identity is required")
+    try:
+        json.dumps(args, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Approval arguments must be finite JSON data") from exc
     _ensure_dirs()
     record = {
         "tool": tool,
