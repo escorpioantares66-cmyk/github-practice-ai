@@ -390,7 +390,7 @@ def _validate_audit_bytes(contents: bytes) -> None:
     """Reject malformed entries and unterminated trailing records without repair."""
     if not contents:
         return
-    if not contents.endswith(b"\\n"):
+    if not contents.endswith(b"\n"):
         raise AuditLogIntegrityError(
             "audit log has an incomplete trailing entry; operator review required"
         )
@@ -413,7 +413,7 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
     """Append one durable JSONL event; refuse to append to a corrupt history."""
     _ensure_dirs()
     entry = {"action": action, "time": time.time(), "record": record}
-    encoded = (json.dumps(entry, separators=(",", ":")) + "\\n").encode("utf-8")
+    encoded = (json.dumps(entry, separators=(",", ":")) + "\n").encode("utf-8")
     fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
         fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
