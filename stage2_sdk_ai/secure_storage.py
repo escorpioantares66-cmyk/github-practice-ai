@@ -20,6 +20,10 @@ class UnsafeStoragePathError(ValueError):
 def _open_directory_chain(path: Path, create: bool = False) -> int:
     """Open a directory by walking each component relative to verified dirfds."""
     target = Path(os.path.abspath(os.fspath(path)))
+    if target == Path(target.anchor):
+        raise UnsafeStoragePathError(
+            "The filesystem root cannot be used as a private storage directory"
+        )
     flags = (
         os.O_RDONLY
         | getattr(os, "O_DIRECTORY", 0)
@@ -38,7 +42,10 @@ def _open_directory_chain(path: Path, create: bool = False) -> int:
                 next_fd = os.open(part, flags, dir_fd=fd)
             os.close(fd)
             fd = next_fd
-        os.fchmod(fd, 0o700)
+        # Only the explicit directory-creation/validation path changes mode.
+        # Read-only descriptor walks must never chmod an existing directory.
+        if create:
+            os.fchmod(fd, 0o700)
         return fd
     except Exception:
         os.close(fd)
