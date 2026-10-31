@@ -511,6 +511,7 @@ def _validate_audit_event(entry: Any, line_number: int) -> None:
 
     if (
         not isinstance(entry, dict)
+        or not isinstance(entry.get("action"), str)
         or entry.get("action") not in {
             "request", "approved", "denied", "consumed", "execution_failed"
         }
@@ -593,6 +594,23 @@ def _validate_audit_event(entry: Any, line_number: int) -> None:
         ) from exc
 
 
+def _validate_legacy_audit_event(entry: Any, line_number: int) -> None:
+    if (
+        not isinstance(entry, dict)
+        or not isinstance(entry.get("action"), str)
+        or entry.get("action") not in {
+            "request", "approved", "denied", "consumed", "execution_failed"
+        }
+        or isinstance(entry.get("time"), bool)
+        or not isinstance(entry.get("time"), (int, float))
+        or not math.isfinite(entry["time"])
+        or not isinstance(entry.get("record"), dict)
+    ):
+        raise AuditLogIntegrityError(
+            f"legacy audit entry {line_number} has an invalid schema"
+        )
+
+
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -640,7 +658,7 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int, int, dict[int, s
                 raise AuditLogIntegrityError(
                     f"legacy entry {line_number} appears after the hash chain began"
                 )
-            _validate_audit_event(entry, line_number)
+            _validate_legacy_audit_event(entry, line_number)
             legacy_lines.append(raw_line)
             legacy_count += 1
             total += 1
