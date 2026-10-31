@@ -34,6 +34,28 @@ class RequestBodyLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # Authenticate protected routes before reading or buffering request
+        # bodies. Otherwise unauthenticated clients can consume up to the body
+        # cap per concurrent request before the endpoint dependency rejects them.
+        method = scope.get("method", "").upper()
+        path = scope.get("path", "")
+        headers = {
+            key.lower(): value
+            for key, value in scope.get("headers", [])
+        }
+        if method == "POST" and path in {"/query", "/write", "/write/execute"}:
+            api_key = headers.get(b"x-api-key", b"").decode("latin-1")
+            if not auth.verify_api_key(api_key):
+                await self._json_error(scope, send, 401, "Invalid API key")
+                return
+        elif method == "POST" and path in {"/approve", "/deny"}:
+            approver_key = headers.get(b"x-approver-key", b"").decode("latin-1")
+            if not auth.verify_approver_key(approver_key):
+                await self._json_error(
+                    scope, send, 403, "Invalid or missing approver credentials"
+                )
+                return
+
         content_length = next(
             (value for key, value in scope.get("headers", []) if key.lower() == b"content-length"),
             None,
@@ -73,17 +95,21 @@ class RequestBodyLimitMiddleware:
         await self.app(scope, replay_receive, send)
 
     @staticmethod
-    async def _too_large(scope, send):
-        body = b'{"detail":"Request body too large"}'
+    async def _json_error(scope, send, status_code: int, detail: str):
+        body = JSONResponse(status_code=status_code, content={"detail": detail}).body
         await send({
             "type": "http.response.start",
-            "status": 413,
+            "status": status_code,
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode("ascii")),
             ],
         })
         await send({"type": "http.response.body", "body": body})
+
+    @classmethod
+    async def _too_large(cls, scope, send):
+        await cls._json_error(scope, send, 413, "Request body too large")
 
 
 app = FastAPI(title="github-practice-ai v7.0-prod")
