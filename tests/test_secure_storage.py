@@ -91,3 +91,13 @@ def test_note_file_is_owner_only_and_symlink_target_is_not_followed(monkeypatch,
     assert destination.read_text(encoding="utf-8") == "new note"
     assert stat.S_IMODE(destination.stat().st_mode) == 0o600
     assert stat.S_IMODE(notes.stat().st_mode) == 0o700
+
+
+
+def test_filesystem_root_is_never_used_as_private_storage():
+    from pathlib import Path
+
+    from stage2_sdk_ai.secure_storage import ensure_private_directory
+
+    with pytest.raises(UnsafeStoragePathError, match="filesystem root"):
+        ensure_private_directory(Path("/"))
