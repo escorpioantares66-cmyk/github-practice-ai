@@ -371,3 +371,119 @@ def test_request_audit_status_persistence_failure_leaves_request_unapprovable(
     assert any(json.loads(line)["action"] == "request" for line in audit_lines)
     result = approval.approve(approval_id, approver_key="test-approver-secret")
     assert result["status"] == "approval_audit_incomplete"
+
+
+
+def test_initial_approval_record_failure_cleans_reserved_file(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
+
+    def fail_atomic_record(path, record):
+        raise OSError("simulated record persistence failure")
+
+    monkeypatch.setattr(approval, "_write_record_atomically", fail_atomic_record)
+    try:
+        approval.request_approval("write_note", {"path": "x.md", "content": "x"})
+    except OSError as exc:
+        assert "simulated record persistence failure" in str(exc)
+    else:
+        raise AssertionError("record persistence failure must propagate")
+
+    assert list((tmp_path / "approvals").glob("*.json")) == []
+
+
+def test_pending_scan_skips_corrupt_record_and_returns_valid_pending(
+    monkeypatch, tmp_path, caplog
+):
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
+    valid = approval.request_approval(
+        "write_note", {"path": "valid.md", "content": "valid"}
+    )
+    corrupt_id = "a" * 32
+    (tmp_path / "approvals" / f"{corrupt_id}.json").write_text(
+        '{"status": "pending", broken', encoding="utf-8"
+    )
+
+    pending = approval.list_pending()
+
+    assert [item["id"] for item in pending] == [valid["id"]]
+    assert any("corrupt approval record" in record.message for record in caplog.records)
+    assert approval.check_approval(corrupt_id)["status"] == "corrupt_record"
+
+
+def test_audit_log_incomplete_trailing_entry_is_not_extended(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    audit_path.parent.mkdir(parents=True)
+    damaged = b'{"action":"request","time":1,"record":'
+    audit_path.write_bytes(damaged)
+
+    try:
+        approval.log_audit("request", {"id": "b" * 32})
+    except approval.AuditLogIntegrityError as exc:
+        assert "incomplete trailing entry" in str(exc)
+    else:
+        raise AssertionError("incomplete audit history must block appends")
+
+    assert audit_path.read_bytes() == damaged
+
+
+def test_audit_partial_write_is_rolled_back_before_next_append(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
+    real_write = approval.os.write
+    calls = 0
+
+    def partial_then_fail(fd, data):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return real_write(fd, data[:8])
+        if calls == 2:
+            raise OSError("simulated interrupted append")
+        return real_write(fd, data)
+
+    monkeypatch.setattr(approval.os, "write", partial_then_fail)
+    try:
+        approval.log_audit("request", {"id": "c" * 32})
+    except OSError as exc:
+        assert "interrupted append" in str(exc)
+    else:
+        raise AssertionError("simulated append failure must propagate")
+
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    assert audit_path.read_bytes() == b""
+
+    monkeypatch.setattr(approval.os, "write", real_write)
+    approval.log_audit("request", {"id": "d" * 32})
+    lines = audit_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["record"]["id"] == "d" * 32
+
+
+def test_audit_log_invalid_complete_line_is_not_rewritten(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    audit_path.parent.mkdir(parents=True)
+    damaged = b"{not-json}\\n"
+    audit_path.write_bytes(damaged)
+
+    try:
+        approval.log_audit("request", {"id": "e" * 32})
+    except approval.AuditLogIntegrityError as exc:
+        assert "entry 1 is invalid" in str(exc)
+    else:
+        raise AssertionError("invalid audit history must block appends")
+
+    assert audit_path.read_bytes() == damaged
