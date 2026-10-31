@@ -508,3 +508,42 @@ def test_requester_identity_survives_secret_rotation(monkeypatch):
     monkeypatch.setenv("AGENT_API_KEYS", "automation=new-secret")
     assert requester_identity("new-secret") == "automation"
     assert requester_identity("old-secret") is None
+
+
+def test_approval_audit_failure_is_http_500_and_execution_is_blocked(
+    client, monkeypatch, tmp_path
+):
+    from stage2_sdk_ai import approval
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    real_log_audit = approval.log_audit
+
+    def fail_approval_audit(action, record):
+        if action == "approved":
+            raise OSError("approval audit unavailable")
+        return real_log_audit(action, record)
+
+    monkeypatch.setattr(approval, "log_audit", fail_approval_audit)
+    requested = client.post(
+        "/write",
+        json={"path": "approval-audit-api.md", "content": "must not execute"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert requested.status_code == 200
+    approval_id = requested.json()["approval_id"]
+
+    approved = client.post(
+        f"/approve?approval_id={approval_id}",
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    )
+    assert approved.status_code == 500
+    assert approved.json()["detail"]["error"] == "approval_audit_incomplete"
+
+    executed = client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert executed.status_code == 500
+    assert executed.json()["detail"]["error"] == "approval_audit_incomplete"
+    assert not (tmp_path / "notes" / "approval-audit-api.md").exists()
