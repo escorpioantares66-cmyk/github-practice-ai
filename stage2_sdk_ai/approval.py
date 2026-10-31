@@ -531,7 +531,7 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
     """
     if not contents:
         return 0, "0" * 64, 0
-    if not contents.endswith(b"\\n"):
+    if not contents.endswith(b"\n"):
         raise AuditLogIntegrityError(
             "audit log has an incomplete trailing entry; operator review required"
         )
@@ -543,7 +543,7 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
     chain_started = False
 
     for line_number, raw_line in enumerate(contents.splitlines(keepends=True), start=1):
-        line = raw_line.rstrip(b"\\r\\n")
+        line = raw_line.rstrip(b"\r\n")
         try:
             entry = json.loads(line)
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -627,7 +627,6 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
     """Append one durable JSONL event; refuse corrupt or oversized histories."""
     _ensure_dirs()
     entry = {"action": action, "time": time.time(), "record": record}
-    encoded = (json.dumps(entry, separators=(",", ":")) + "\n").encode("utf-8")
     fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
         fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
@@ -645,7 +644,7 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
             entry["hash"] = hashlib.sha256(_canonical_audit_entry(entry)).hexdigest()
             encoded = (
                 json.dumps(entry, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
-                + "\\n"
+                + "\n"
             ).encode("utf-8")
             audit_file.seek(0, os.SEEK_END)
             original_size = audit_file.tell()
