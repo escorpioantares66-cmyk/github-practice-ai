@@ -192,8 +192,20 @@ def record_execution_failure(
             "error_message": error_message[:1000],
         }
         _write_record_atomically(path, data)
-        log_audit("execution_failed", data)
-        return data
+        # The private approval record is the primary recovery record. An audit
+        # append can fail independently after the metadata has been committed;
+        # report that separately rather than making callers assume the record
+        # write itself failed.
+        try:
+            log_audit("execution_failed", data)
+        except Exception as exc:
+            result = dict(data)
+            result["audit_status"] = "failed"
+            result["audit_error_type"] = type(exc).__name__[:120]
+            return result
+        result = dict(data)
+        result["audit_status"] = "written"
+        return result
 
 
 def consume_approval_request(
