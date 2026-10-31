@@ -112,3 +112,14 @@ If an in-process append fails after writing only part of an event, the writer at
 ## Identity-based rate limiting
 
 Configure requester credentials using stable identity labels, for example `AGENT_API_KEYS=worker-a=secret-one,worker-b=secret-two`. Configure approvers the same way with `AGENT_APPROVER_KEYS=reviewer-a=secret-three`. Rate-limit buckets use the identity label, not the secret, so rotating a secret while retaining its identity does not reset the requester's or approver's rate limit. Legacy bare secrets remain accepted for compatibility, but their derived fingerprint identity changes when the secret changes; migrate to labelled credentials to preserve buckets across rotation.
+
+
+## Final adversarial hardening notes
+
+Every state-changing approval operation validates the JSON record schema, filename/record ID binding, required payload fields, allowed lifecycle state, and audit-state values while holding the per-record lock. Corrupt records are rejected with an operator-review status and are never transitioned.
+
+Rate-limit check-and-increment and reset operations are synchronized within a Python process. This prevents concurrent threads in one worker from exceeding the configured window. The limiter remains process-local: multi-worker or multi-host deployments must put a shared atomic limiter (for example Redis with a single atomic script) in front of the API; do not claim a global limit from the in-memory implementation.
+
+Audit events are checked for an exact event envelope, allowed action, numeric timestamp, and a record object containing a valid approval ID. Validation is bounded to 64 MiB; once the active audit file reaches that size, appends fail closed. Operators should archive/rotate only through an explicit, documented procedure that preserves the original immutable segment and verifies its integrity before creating a new active segment. This bound limits per-append parsing cost but is not a substitute for implementing segmented audit storage before sustained high-volume production use.
+
+Private storage operations now walk directory components with no-follow directory descriptors and perform file opens, temporary-file creation, replacement, and directory fsync relative to the verified directory descriptor. This reduces pathname substitution races. The storage root must still be owned by the service account and not writable by untrusted users; it does not defend against a malicious process with the same account privileges.
