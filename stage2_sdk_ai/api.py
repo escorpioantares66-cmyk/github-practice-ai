@@ -5,7 +5,7 @@ from typing import Optional
 import pydantic
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from stage2_sdk_ai import auth, cost_guard, input_guard, output_guard
 from stage2_sdk_ai.agent_loop import run_agent
@@ -141,9 +141,9 @@ async def add_request_id_and_log(request: Request, call_next):
 
 
 class QueryReq(BaseModel):
-    query: str
+    query: str = Field(min_length=1, max_length=500)
     name: Optional[str] = None
-    top_k: Optional[int] = 5
+    top_k: Optional[int] = Field(default=5, ge=1, le=50)
 
 class WriteReq(BaseModel):
     path: str
@@ -194,7 +194,7 @@ def root():
 def query_endpoint(req: QueryReq, api_key: str = Depends(_check_auth)):
     q = req.query
     chk = input_guard.check_input(q)
-    if not chk.get("is_safe", True):
+    if not isinstance(chk, dict) or chk.get("is_safe") is not True:
         return {"answer": "blocked by input_guard", "blocked": True}
     if not cost_guard.check_budget(api_key, q):
         return {"answer": "cost limit $1 exceeded", "blocked": True}
@@ -374,9 +374,16 @@ def query_compat(*args, **kwargs):
     q = args[0] if args else kwargs.get("q") or kwargs.get("query", "hi")
     tk = kwargs.get("top_k", 5)
     chk = input_guard.check_input(q)
-    if not chk.get("is_safe", True):
+    if not isinstance(chk, dict) or chk.get("is_safe") is not True:
         return {"answer": "blocked", "blocked": True}
     res = run_agent(q, top_k=tk)
-    return res
+    out = output_guard.check_output(res.get("answer", ""), res.get("sources", []))
+    return {
+        **res,
+        "answer": out.get("text", ""),
+        "sources": out.get("sources", []),
+        "confidence": out.get("confidence"),
+        "filtered": out.get("filtered", False),
+    }
 
 query = query_compat
