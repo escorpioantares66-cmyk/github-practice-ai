@@ -4,8 +4,8 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
-from .vector_store import RealVectorStore
 from .secure_storage import ensure_private_directory, open_private_file
+from .vector_store import RealVectorStore
 
 _store: RealVectorStore | None = None
 _notes_dir = Path("notes")
