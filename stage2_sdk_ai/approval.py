@@ -143,8 +143,39 @@ def _transition(
             data["denied_at"] = time.time()
             action = "denied"
 
+        # Commit the terminal transition first, but keep it non-executable
+        # until its audit event is durably appended and the record is updated.
+        data["approval_audit_status"] = "pending"
         _write_record_atomically(path, data)
-        log_audit(action, data)
+        try:
+            audit_record = dict(data)
+            audit_record["approval_audit_status"] = "written"
+            log_audit(action, audit_record)
+        except Exception as exc:
+            data["approval_audit_status"] = "failed"
+            data["approval_audit_error_type"] = type(exc).__name__[:120]
+            try:
+                _write_record_atomically(path, data)
+            except Exception:
+                # "pending" remains fail-closed if the failure marker cannot
+                # be persisted. Operators must inspect the audit and record.
+                pass
+            result = dict(data)
+            result["status"] = "approval_audit_incomplete"
+            result["approval_status"] = target_status
+            return result
+
+        data["approval_audit_status"] = "written"
+        try:
+            _write_record_atomically(path, data)
+        except Exception as exc:
+            # The audit event exists, but the record remains pending and
+            # therefore cannot be consumed. Require operator reconciliation.
+            result = dict(data)
+            result["status"] = "approval_audit_incomplete"
+            result["approval_status"] = target_status
+            result["audit_error_type"] = type(exc).__name__[:120]
+            return result
         return data
 
 
@@ -238,6 +269,14 @@ def consume_approval_request(
                 "status": "invalid_transition",
                 "id": approval_id,
                 "current_status": data.get("status"),
+            }
+
+        if data.get("approval_audit_status") != "written":
+            return {
+                "status": "approval_audit_incomplete",
+                "id": approval_id,
+                "current_status": data.get("status"),
+                "audit_status": data.get("approval_audit_status", "missing"),
             }
 
         if not requester or data.get("requester") != requester:
