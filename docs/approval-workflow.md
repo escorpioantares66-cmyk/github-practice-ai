@@ -97,3 +97,18 @@ If the audit append fails, the terminal approval/denial state is retained, the r
 ## Request creation audit integrity
 
 A newly created request starts with `request_audit_status: pending`. The request audit event is appended before the record is marked `written`. Approval and denial transitions are rejected unless the stored request audit marker is `written`. If the audit append fails, the record is marked `failed` when possible; if that marker update also fails, the original `pending` marker remains fail-closed. If the audit append succeeds but the final marker update fails, the request also remains unapprovable. The API returns HTTP 500 with the approval ID and an operator-review instruction. Do not manually change the marker or retry approval; reconcile the approval record and audit log first.
+
+
+## Approval-record and audit-log integrity
+
+New approval records are first reserved with an exclusive, owner-only file creation and then made visible as complete JSON through an atomic replacement. If persistence fails before the replacement completes, the reservation is removed when possible; an interrupted or malformed leftover is never considered pending.
+
+The pending-request scan validates each record independently. Malformed JSON, invalid encoding, non-object data, and record-ID/filename mismatches are excluded from the queue and logged for operator review. The scan continues so one damaged file cannot hide unrelated valid requests. A corrupt record is not repaired or automatically deleted.
+
+Audit history is append-only. Before appending, the writer takes the audit-file lock and validates every existing JSONL entry, including the terminating newline and required event fields. If the log has an incomplete trailing entry or a malformed complete entry, new appends stop and the existing bytes are left unchanged. Operators must preserve a copy of the original log, investigate the interrupted event using approval records and service logs, and perform an explicitly documented recovery; the application never truncates or silently rewrites audit history.
+
+If an in-process append fails after writing only part of an event, the writer attempts to truncate back to the original file length while holding the exclusive lock and fsyncs that rollback. If rollback itself fails, treat the audit log as requiring operator review. A process crash can still leave an incomplete final line; the next writer detects it and refuses to append.
+
+## Identity-based rate limiting
+
+Configure requester credentials using stable identity labels, for example `AGENT_API_KEYS=worker-a=secret-one,worker-b=secret-two`. Rate-limit buckets use the identity label, not the secret, so rotating a secret while retaining its identity does not reset the requester's rate limit. Legacy bare secrets remain accepted for compatibility, but their derived fingerprint identity changes when the secret changes; migrate to labelled credentials to preserve buckets across rotation. Approver credentials continue to use their non-secret derived approver identity for rate limiting.
