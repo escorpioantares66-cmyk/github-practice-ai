@@ -260,18 +260,20 @@ def execute_approved_write(
             + str(consumed.get("audit_error_type", "unknown error"))
         )
         return _report_execution_failure(
-            approval_id, safe_path, audit_error,
+            approval_id,
+            Path("<unknown-approved-path>"),
+            audit_error,
             result_status="consumption_audit_incomplete",
         )
 
     args = consumed.get("args")
     if not isinstance(args, dict):
-        return {
-            "tool": "write_note",
-            "status": "invalid_approved_payload",
-            "approval_id": approval_id,
-            "is_mock": False,
-        }
+        return _report_execution_failure(
+            approval_id,
+            Path("<invalid-approved-path>"),
+            ValueError("Approved payload must be an object"),
+            result_status="invalid_approved_payload_operator_review",
+        )
 
     safe_path, error = _validate_note_payload(args.get("path"), args.get("content"))
     if error or safe_path is None:
