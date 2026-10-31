@@ -1,8 +1,13 @@
 """Real-mode write tests use isolated temporary storage for every test."""
-from pathlib import Path
 import hashlib
+from pathlib import Path
 
 from stage2_sdk_ai import approval, write_tools
+
+
+def requester_notes_dir(tmp_path):
+    owner = hashlib.sha256(b"test-requester").hexdigest()
+    return tmp_path / "notes" / owner
 
 
 def configure_paths(monkeypatch, tmp_path):
@@ -27,7 +32,7 @@ def test_real_mode_no_approval_id_requests_bound_approval(
     record = approval.check_approval(result["approval_id"])
     assert record["tool"] == "write_note"
     assert record["args"] == {
-        "path": str(tmp_path / "notes" / hashlib.sha256(b"test-requester").hexdigest() / "real_note.md"),
+        "path": str(requester_notes_dir(tmp_path) / "real_note.md"),
         "content": "hello world",
     }
 
@@ -38,14 +43,18 @@ def test_real_mode_unapproved_id_returns_pending(monkeypatch, tmp_path):
     request = approval.request_approval(
         "write_note",
         {
-            "path": str(tmp_path / "notes" / hashlib.sha256(b"test-requester").hexdigest() / "pending.md"),
+            "path": str(requester_notes_dir(tmp_path) / "pending.md"),
             "content": "still waiting",
         },
         requester="test-requester",
     )
 
     result = write_tools.write_note(
-        "pending.md", "still waiting", approval_id=request["id"], requester="test-requester")
+        "pending.md",
+        "still waiting",
+        approval_id=request["id"],
+        requester="test-requester",
+    )
 
     assert result["status"] == "pending"
     assert result["is_mock"] is False
@@ -59,7 +68,11 @@ def test_real_mode_unknown_approval_id_returns_not_found(
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
 
     result = write_tools.write_note(
-        "ghost.md", "content", approval_id="d" * 32, requester="test-requester")
+        "ghost.md",
+        "content",
+        approval_id="d" * 32,
+        requester="test-requester",
+    )
 
     assert result["status"] == "not_found"
     assert result["is_mock"] is False
@@ -74,7 +87,11 @@ def test_real_mode_approved_id_writes_only_approved_content(
     approval.approve(request["approval_id"], approver_key="test-approver-secret")
 
     result = write_tools.write_note(
-        "final.md", "final content", approval_id=request["approval_id"], requester="test-requester")
+        "final.md",
+        "final content",
+        approval_id=request["approval_id"],
+        requester="test-requester",
+    )
 
     assert result["status"] == "written"
     assert result["is_mock"] is False
@@ -92,10 +109,14 @@ def test_approved_id_cannot_be_reused_for_different_content(
     approval.approve(request["approval_id"], approver_key="test-approver-secret")
 
     result = write_tools.write_note(
-        "safe.md", "replacement text", approval_id=request["approval_id"], requester="test-requester")
+        "safe.md",
+        "replacement text",
+        approval_id=request["approval_id"],
+        requester="test-requester",
+    )
 
     assert result["status"] == "approval_mismatch"
-    assert not (tmp_path / "notes" / hashlib.sha256(b"test-requester").hexdigest() / "safe.md").exists()
+    assert not (requester_notes_dir(tmp_path) / "safe.md").exists()
 
 
 def test_approved_id_cannot_be_reused_for_different_path(
@@ -107,10 +128,14 @@ def test_approved_id_cannot_be_reused_for_different_path(
     approval.approve(request["approval_id"], approver_key="test-approver-secret")
 
     result = write_tools.write_note(
-        "other.md", "approved text", approval_id=request["approval_id"], requester="test-requester")
+        "other.md",
+        "approved text",
+        approval_id=request["approval_id"],
+        requester="test-requester",
+    )
 
     assert result["status"] == "approval_mismatch"
-    assert not (tmp_path / "notes" / hashlib.sha256(b"test-requester").hexdigest() / "other.md").exists()
+    assert not (requester_notes_dir(tmp_path) / "other.md").exists()
 
 
 def test_approve_write_delegates_to_approval_module(monkeypatch, tmp_path):
@@ -143,9 +168,17 @@ def test_approval_cannot_be_replayed_after_successful_write(
     approval.approve(request["approval_id"], approver_key="test-approver-secret")
 
     first = write_tools.write_note(
-        "once.md", "one-time content", approval_id=request["approval_id"], requester="test-requester")
+        "once.md",
+        "one-time content",
+        approval_id=request["approval_id"],
+        requester="test-requester",
+    )
     second = write_tools.write_note(
-        "once.md", "one-time content", approval_id=request["approval_id"], requester="test-requester")
+        "once.md",
+        "one-time content",
+        approval_id=request["approval_id"],
+        requester="test-requester",
+    )
 
     assert first["status"] == "written"
     assert second["status"] == "invalid_transition"
@@ -157,7 +190,7 @@ def test_atomic_write_replaces_symlink_without_modifying_target(
 ):
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
-    notes_dir = tmp_path / "notes" / hashlib.sha256(b"test-requester").hexdigest()
+    notes_dir = requester_notes_dir(tmp_path)
     notes_dir.mkdir(parents=True)
     outside_file = tmp_path / "outside.txt"
     outside_file.write_text("do not change", encoding="utf-8")
@@ -166,7 +199,11 @@ def test_atomic_write_replaces_symlink_without_modifying_target(
     request = write_tools.write_note("linked.md", "approved note", requester="test-requester")
     approval.approve(request["approval_id"], approver_key="test-approver-secret")
     result = write_tools.write_note(
-        "linked.md", "approved note", approval_id=request["approval_id"], requester="test-requester")
+        "linked.md",
+        "approved note",
+        approval_id=request["approval_id"],
+        requester="test-requester",
+    )
 
     assert result["status"] == "written"
     assert outside_file.read_text(encoding="utf-8") == "do not change"
