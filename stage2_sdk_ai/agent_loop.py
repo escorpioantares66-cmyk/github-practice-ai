@@ -82,10 +82,6 @@ def _real_llm_pick_tool(
     requester: str | None = None,
 ) -> dict[str, Any]:
     key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not isinstance(requester, str) or not requester.strip():
-        raise UsageAccountingError(
-            "trusted requester identity is required for usage accounting"
-        )
     if not key:
         logger.warning(
             "OPENAI_API_KEY missing; refusing real-mode model call",
@@ -93,6 +89,10 @@ def _real_llm_pick_tool(
         )
         return {"tool": "final", "args": {"answer": "I could not safely process that request."}}
 
+    if not isinstance(requester, str) or not requester.strip():
+        raise UsageAccountingError(
+            "trusted requester identity is required for usage accounting"
+        )
     try:
         from openai import OpenAI
 
