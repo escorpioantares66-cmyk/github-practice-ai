@@ -305,3 +305,60 @@ def test_denial_audit_failure_keeps_denial_terminal_and_reports_incomplete_audit
     assert approval.approve(
         request["id"], approver_key="test-approver-secret"
     )["status"] == "invalid_transition"
+
+
+def test_request_audit_append_failure_leaves_request_unapprovable(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
+
+    def fail_request_audit(action, record):
+        if action == "request":
+            raise OSError("request audit unavailable")
+        raise AssertionError("unexpected audit action")
+
+    monkeypatch.setattr(approval, "log_audit", fail_request_audit)
+    try:
+        approval.request_approval("write_note", {"path": "unaudited.md", "content": "blocked"})
+    except approval.ApprovalAuditError as exc:
+        approval_id = exc.approval_id
+    else:
+        raise AssertionError("request audit failure must be reported")
+
+    stored = approval.check_approval(approval_id)
+    assert stored["status"] == "pending"
+    assert stored["request_audit_status"] == "failed"
+    assert stored["request_audit_error_type"] == "OSError"
+    assert approval.approve(approval_id, approver_key="test-approver-secret")["status"] == "approval_audit_incomplete"
+    assert approval.check_approval(approval_id)["status"] == "pending"
+
+
+def test_request_audit_status_persistence_failure_leaves_request_unapprovable(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
+    real_write = approval._write_record_atomically
+
+    def fail_request_audit_marker(path, record):
+        if record.get("request_audit_status") == "written":
+            raise OSError("approval record update unavailable")
+        return real_write(path, record)
+
+    monkeypatch.setattr(approval, "_write_record_atomically", fail_request_audit_marker)
+    try:
+        approval.request_approval("write_note", {"path": "audit-marker.md", "content": "blocked"})
+    except approval.ApprovalAuditError as exc:
+        approval_id = exc.approval_id
+    else:
+        raise AssertionError("audit marker persistence failure must be reported")
+
+    stored = approval.check_approval(approval_id)
+    assert stored["status"] == "pending"
+    assert stored["request_audit_status"] == "pending"
+    audit_lines = (tmp_path / "logs" / "audit.jsonl").read_text().splitlines()
+    assert any(json.loads(line)["action"] == "request" for line in audit_lines)
+    assert approval.approve(approval_id, approver_key="test-approver-secret")["status"] == "approval_audit_incomplete"
