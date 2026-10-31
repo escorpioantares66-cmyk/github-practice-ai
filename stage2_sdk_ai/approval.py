@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
 import re
 import secrets
@@ -22,6 +23,15 @@ from .secure_storage import (
 
 _approvals_dir = Path("approvals")
 _audit_file = Path("logs/audit.jsonl")
+logger = logging.getLogger(__name__)
+
+
+class CorruptApprovalRecordError(ValueError):
+    """An approval record is malformed or does not match its filename."""
+
+
+class AuditLogIntegrityError(RuntimeError):
+    """The append-only audit log contains an incomplete or invalid entry."""
 
 
 class ApprovalAuditError(RuntimeError):
@@ -94,11 +104,22 @@ def request_approval(
             )
         except FileExistsError:
             continue
-        with os.fdopen(fd, "w", encoding="utf-8") as approval_file:
-            json.dump(record, approval_file, indent=2)
-            approval_file.flush()
-            os.fsync(approval_file.fileno())
-        fsync_directory(_approvals_dir)
+        # Reserve the random identifier without exposing a partially written
+        # JSON record. The placeholder is fail-closed if the process crashes;
+        # the complete record becomes visible in one atomic replacement.
+        os.close(fd)
+        try:
+            _write_record_atomically(path, record)
+        except Exception:
+            try:
+                path.unlink(missing_ok=True)
+                fsync_directory(_approvals_dir)
+            except OSError:
+                logger.exception(
+                    "failed to clean incomplete approval reservation",
+                    extra={"approval_id": approval_id},
+                )
+            raise
         break
     # The request is not approvable until its audit append and durable
     # status marker both succeed. The initial pending marker fails closed.
@@ -129,9 +150,22 @@ def check_approval(approval_id: str) -> dict[str, Any]:
     if path is None:
         return {"status": "invalid_id", "id": approval_id}
     try:
-        return json.loads(read_private_text(path))
+        data = json.loads(read_private_text(path))
     except FileNotFoundError:
         return {"status": "not_found", "id": approval_id}
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        logger.exception(
+            "approval record requires operator review",
+            extra={"approval_id": approval_id},
+        )
+        return {"status": "corrupt_record", "id": approval_id}
+    if not isinstance(data, dict) or data.get("id") != approval_id:
+        logger.error(
+            "approval record identity mismatch; operator review required",
+            extra={"approval_id": approval_id},
+        )
+        return {"status": "corrupt_record", "id": approval_id}
+    return data
 
 
 def _transition(
@@ -352,27 +386,87 @@ def consume_approval(
     return consume_approval_request(approval_id, tool, args, requester)
 
 
+def _validate_audit_bytes(contents: bytes) -> None:
+    """Reject malformed entries and unterminated trailing records without repair."""
+    if not contents:
+        return
+    if not contents.endswith(b"\\n"):
+        raise AuditLogIntegrityError(
+            "audit log has an incomplete trailing entry; operator review required"
+        )
+    for line_number, raw_line in enumerate(contents.splitlines(), start=1):
+        try:
+            entry = json.loads(raw_line)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise AuditLogIntegrityError(
+                f"audit log entry {line_number} is invalid; operator review required"
+            ) from exc
+        if not isinstance(entry, dict) or not {
+            "action", "time", "record"
+        }.issubset(entry):
+            raise AuditLogIntegrityError(
+                f"audit log entry {line_number} has an invalid schema"
+            )
+
+
 def log_audit(action: str, record: dict[str, Any]) -> None:
+    """Append one durable JSONL event; refuse to append to a corrupt history."""
     _ensure_dirs()
     entry = {"action": action, "time": time.time(), "record": record}
-    fd = open_private_file(_audit_file, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
-    with os.fdopen(fd, "a", encoding="utf-8") as audit_file:
+    encoded = (json.dumps(entry, separators=(",", ":")) + "\\n").encode("utf-8")
+    fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
+    with os.fdopen(fd, "r+b") as audit_file:
         fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
         try:
-            audit_file.write(json.dumps(entry) + "\n")
-            audit_file.flush()
-            os.fsync(audit_file.fileno())
+            audit_file.seek(0)
+            _validate_audit_bytes(audit_file.read())
+            audit_file.seek(0, os.SEEK_END)
+            original_size = audit_file.tell()
+            view = memoryview(encoded)
+            try:
+                while view:
+                    written = os.write(audit_file.fileno(), view)
+                    if written <= 0:
+                        raise OSError("audit append made no forward progress")
+                    view = view[written:]
+                os.fsync(audit_file.fileno())
+            except Exception:
+                # Roll back a failed in-process append while still holding the
+                # exclusive lock. A process crash may leave a tail fragment;
+                # the next writer detects it and refuses to extend the log.
+                try:
+                    os.ftruncate(audit_file.fileno(), original_size)
+                    os.fsync(audit_file.fileno())
+                except OSError:
+                    logger.exception(
+                        "audit append rollback failed; operator review required"
+                    )
+                raise
         finally:
             fcntl.flock(audit_file.fileno(), fcntl.LOCK_UN)
 
 
 def list_pending() -> list[dict[str, Any]]:
+    """Return only valid, audited pending records; isolate corrupt files."""
     _ensure_dirs()
     pending = []
     for path in _approvals_dir.glob("*.json"):
         if path.is_symlink():
             continue
-        data = json.loads(read_private_text(path))
+        approval_id = path.stem
+        try:
+            data = json.loads(read_private_text(path))
+            if (
+                not isinstance(data, dict)
+                or data.get("id") != approval_id
+            ):
+                raise CorruptApprovalRecordError("record ID does not match filename")
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError, CorruptApprovalRecordError):
+            logger.exception(
+                "skipping corrupt approval record; operator review required",
+                extra={"approval_id": approval_id},
+            )
+            continue
         if (
             data.get("status") == "pending"
             and data.get("request_audit_status") == "written"
