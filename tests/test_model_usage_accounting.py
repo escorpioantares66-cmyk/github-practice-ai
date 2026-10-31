@@ -87,6 +87,11 @@ def test_direct_sdk_agent_run_keeps_reservation_on_unknown_usage(monkeypatch, tm
 
     monkeypatch.setenv("AGENT_QUOTA_DB_PATH", str(tmp_path / "quota.sqlite3"))
     monkeypatch.setattr(agent_loop, "_is_mock", lambda: False)
+
+    def fail_with_unknown_usage(*args, **kwargs):
+        raise UsageAccountingError("provider usage is unknown")
+
+    monkeypatch.setattr(agent_loop, "_run_agent_steps", fail_with_unknown_usage)
     with pytest.raises(UsageAccountingError):
         agent_loop.run_agent("q", requester="sdk-requester")
     usage = quota_store.get_daily_usage("sdk-requester", cost_guard._utc_day())
