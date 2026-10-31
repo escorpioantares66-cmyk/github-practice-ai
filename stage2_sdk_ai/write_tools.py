@@ -4,9 +4,10 @@ import os
 from pathlib import Path
 from typing import Any
 
+from . import approval
 from .approval import approve, consume_approval, consume_approval_request, request_approval
-from .secure_storage import ensure_private_directory, write_text_atomically
 from .logging_setup import get_logger
+from .secure_storage import ensure_private_directory, write_text_atomically
 
 logger = get_logger(__name__)
 
