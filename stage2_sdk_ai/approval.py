@@ -155,7 +155,7 @@ def _load_approval_record(path: Path, approval_id: str) -> dict[str, Any]:
         data = json.loads(read_private_text(path))
     except FileNotFoundError:
         raise
-    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+    except ValueError as exc:
         raise CorruptApprovalRecordError("approval record is malformed") from exc
     if not isinstance(data, dict) or data.get("id") != approval_id:
         raise CorruptApprovalRecordError("approval record identity mismatch")
