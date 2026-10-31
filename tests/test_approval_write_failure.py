@@ -74,10 +74,14 @@ def test_failure_metadata_write_error_does_not_hide_original_or_enable_replay(
         write_tools, "_atomic_write_note",
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")),
     )
-    monkeypatch.setattr(
-        approval, "_write_record_atomically",
-        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("approval store read-only")),
-    )
+    real_write_record = approval._write_record_atomically
+
+    def fail_only_failure_metadata(path, record):
+        if "execution_failure" in record:
+            raise OSError("approval store read-only")
+        return real_write_record(path, record)
+
+    monkeypatch.setattr(approval, "_write_record_atomically", fail_only_failure_metadata)
 
     result = write_tools.execute_approved_write(approval_id, requester="agent")
 
