@@ -10,16 +10,36 @@ _rate: dict[str, list[float]] = defaultdict(list)
 _MAX_PER_MIN = 10
 
 
-def _allowed_keys() -> list[str]:
-    """Return explicitly configured API keys.
+def _configured_requester_keys() -> list[tuple[str, str]]:
+    """Return (identity, secret) pairs from AGENT_API_KEYS.
 
-    API authentication must not depend on AI mock mode or the presence
-    of OPENAI_API_KEY. Missing AGENT_API_KEYS fails closed.
+    Preferred syntax is identity=secret, comma-separated. Legacy bare
+    secrets remain accepted and receive a deterministic fingerprint identity.
+    Keep an identity label stable when rotating its secret.
     """
     raw = os.getenv("AGENT_API_KEYS", "").strip()
-    if not raw:
-        return []
-    return [key.strip() for key in raw.split(",") if key.strip()]
+    configured: list[tuple[str, str]] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" in item:
+            identity, secret = item.split("=", 1)
+            identity, secret = identity.strip(), secret.strip()
+            if not identity or not secret:
+                continue
+        else:
+            secret = item
+            identity = "requester-" + hashlib.sha256(
+                secret.encode("utf-8")
+            ).hexdigest()[:12]
+        configured.append((identity, secret))
+    return configured
+
+
+def _allowed_keys() -> list[str]:
+    """Return explicitly configured API secrets; missing configuration fails closed."""
+    return [secret for _, secret in _configured_requester_keys()]
 
 
 def check_auth(api_key: str | None) -> dict[str, object]:
@@ -29,6 +49,16 @@ def check_auth(api_key: str | None) -> dict[str, object]:
     if not any(hmac.compare_digest(api_key, key) for key in allowed):
         return {"is_ok": False, "reason": "invalid key"}
     return {"is_ok": True, "reason": "ok"}
+
+
+def requester_identity(api_key: str | None) -> str | None:
+    """Resolve a valid API secret to its stable, non-secret requester identity."""
+    if not api_key:
+        return None
+    for identity, secret in _configured_requester_keys():
+        if hmac.compare_digest(api_key, secret):
+            return identity
+    return None
 
 
 def check_rate(api_key: str) -> dict[str, object]:
