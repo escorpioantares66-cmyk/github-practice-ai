@@ -5,14 +5,29 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .secure_storage import ensure_private_directory, open_private_file
-from .vector_store import RealVectorStore
+from .vector_store import MAX_QUERY_CHARS, RealVectorStore
 
 _store: RealVectorStore | None = None
 _notes_dir = Path("notes")
+MAX_SEARCH_TOP_K = 50
+
 
 def _is_mock() -> bool:
+    flag = os.getenv("STAGE2_SDK_AI_MOCK_MODE", "").strip().lower()
     key = os.getenv("OPENAI_API_KEY", "")
-    return key.startswith("sk-test-mocked") or key == ""
+    return flag in {"1", "true", "yes"} or key.startswith("sk-test-mocked")
+
+
+def _validate_search(query: str, top_k: int) -> None:
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must be non-empty text")
+    if len(query) > MAX_QUERY_CHARS:
+        raise ValueError(f"query exceeds {MAX_QUERY_CHARS} characters")
+    if isinstance(top_k, bool) or not isinstance(top_k, int):
+        raise ValueError("top_k must be an integer")
+    if not 1 <= top_k <= MAX_SEARCH_TOP_K:
+        raise ValueError(f"top_k must be between 1 and {MAX_SEARCH_TOP_K}")
+
 
 def get_store() -> RealVectorStore:
     global _store
@@ -21,7 +36,9 @@ def get_store() -> RealVectorStore:
         _store.load()
     return _store
 
+
 def search(query: str, top_k: int = 3) -> dict[str, Any]:
+    _validate_search(query, top_k)
     if _is_mock():
         return {
             "tool": "search",
@@ -32,6 +49,10 @@ def search(query: str, top_k: int = 3) -> dict[str, Any]:
             ],
             "is_mock": True,
         }
+    if not os.getenv("OPENAI_API_KEY"):
+        raise RuntimeError(
+            "OPENAI_API_KEY is required; mock results require explicit mock mode"
+        )
     store = get_store()
     results = store.similarity_search(query, top_k=top_k)
     return {
@@ -40,6 +61,7 @@ def search(query: str, top_k: int = 3) -> dict[str, Any]:
         "results": results,
         "is_mock": False,
     }
+
 
 def read_note(path: str) -> dict[str, Any]:
     if not isinstance(path, str) or not path.strip():
@@ -60,8 +82,6 @@ def read_note(path: str) -> dict[str, Any]:
             "is_mock": True,
         }
 
-    # Verify the directory chain and open the note with O_NOFOLLOW. The
-    # bounded read prevents loading an arbitrarily large note into memory.
     ensure_private_directory(_notes_dir)
     try:
         fd = open_private_file(safe_path, os.O_RDONLY)
@@ -81,6 +101,7 @@ def read_note(path: str) -> dict[str, Any]:
             "error": "not found",
             "is_mock": False,
         }
+
 
 TOOL_REGISTRY: dict[str, Callable[..., dict[str, Any]]] = {
     "search": search,
