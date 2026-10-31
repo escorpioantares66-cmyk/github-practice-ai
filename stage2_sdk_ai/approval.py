@@ -1063,11 +1063,7 @@ def _audit_safe_record(record: dict[str, Any]) -> dict[str, Any]:
 def log_audit(action: str, record: dict[str, Any]) -> None:
     """Append one durable JSONL event without storing operation payloads."""
     _ensure_dirs()
-    entry = {
-        "action": action,
-        "time": time.time(),
-        "record": _audit_safe_record(record),
-    }
+    entry = {"action": action, "time": time.time(), "record": record}
     fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
         fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
@@ -1080,6 +1076,7 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
                     "archive through operator procedure"
                 )
             sequence, previous_hash, _, _, _ = _audit_chain_state(existing)
+            entry["record"] = _audit_safe_record(record)
             _validate_audit_event(entry, sequence + 1)
             entry["seq"] = sequence + 1
             entry["previous_hash"] = previous_hash
