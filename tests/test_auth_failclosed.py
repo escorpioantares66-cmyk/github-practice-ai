@@ -61,3 +61,33 @@ def test_allowed_keys_empty_in_production_without_config(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-key")
     monkeypatch.delenv("AGENT_API_KEYS", raising=False)
     assert _allowed_keys() == []
+
+
+
+def test_requester_rate_limit_uses_stable_identity_across_secret_rotation(monkeypatch):
+    from stage2_sdk_ai import auth
+
+    auth.reset_rate()
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=old-secret")
+    assert auth.requester_identity("old-secret") == "automation"
+    for _ in range(auth._MAX_PER_MIN):
+        assert auth.check_requester_rate_limit("old-secret") is True
+
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=new-secret")
+    assert auth.requester_identity("new-secret") == "automation"
+    assert auth.check_requester_rate_limit("new-secret") is False
+    auth.reset_rate()
+
+
+def test_different_requester_identities_have_independent_rate_limits(monkeypatch):
+    from stage2_sdk_ai import auth
+
+    auth.reset_rate()
+    monkeypatch.setenv(
+        "AGENT_API_KEYS", "automation-a=secret-a,automation-b=secret-b"
+    )
+    for _ in range(auth._MAX_PER_MIN):
+        assert auth.check_requester_rate_limit("secret-a") is True
+    assert auth.check_requester_rate_limit("secret-a") is False
+    assert auth.check_requester_rate_limit("secret-b") is True
+    auth.reset_rate()
