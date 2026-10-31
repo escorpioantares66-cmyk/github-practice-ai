@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import Any
@@ -20,23 +21,30 @@ def _is_mock() -> bool:
     return key.startswith("sk-test-mocked") or key == ""
 
 
-def canonical_note_path(path: str) -> Path:
-    """Resolve note paths to the single filename location used by the writer."""
+def canonical_note_path(path: str, requester: str | None = None) -> Path:
+    """Resolve a filename into its owner-only note directory when authenticated."""
     if not isinstance(path, str) or not path.strip():
         raise ValueError("A note filename is required")
     filename = Path(path).name
     if filename in {"", ".", ".."}:
         raise ValueError("A note filename is required")
-    return _notes_dir / filename
+    if requester is None:
+        return _notes_dir / filename
+    if not isinstance(requester, str) or not requester.strip():
+        raise ValueError("A valid requester identity is required")
+    owner_dir = _notes_dir / hashlib.sha256(requester.encode("utf-8")).hexdigest()
+    return owner_dir / filename
 
 
 def _atomic_write_note(path: Path, content: str) -> None:
     """Write a note without following a destination symlink."""
-    ensure_private_directory(_notes_dir)
-    write_text_atomically(path, content, _notes_dir)
+    ensure_private_directory(path.parent)
+    write_text_atomically(path, content, path.parent)
 
 
-def _validate_note_payload(path: Any, content: Any) -> tuple[Path | None, str | None]:
+def _validate_note_payload(
+    path: Any, content: Any, requester: str | None = None
+) -> tuple[Path | None, str | None]:
     if not isinstance(content, str):
         return None, "Content must be text"
     if len(content) > MAX_NOTE_CHARS:
@@ -44,7 +52,7 @@ def _validate_note_payload(path: Any, content: Any) -> tuple[Path | None, str | 
     if not isinstance(path, str):
         return None, "Approved note path is not canonical"
     try:
-        safe_path = canonical_note_path(path)
+        safe_path = canonical_note_path(Path(path).name, requester=requester)
     except (TypeError, ValueError):
         return None, "A note filename is required"
     # The stored path must already be canonical. Do not silently reinterpret
@@ -154,7 +162,7 @@ def write_note(
     approval_id: str | None = None,
     requester: str = "agent",
 ) -> dict[str, Any]:
-    safe_path = canonical_note_path(path)
+    safe_path = canonical_note_path(path, requester=requester)
     mock_mode = _is_mock()
 
     if not isinstance(content, str) or len(content) > MAX_NOTE_CHARS:
@@ -275,7 +283,9 @@ def execute_approved_write(
             result_status="invalid_approved_payload_operator_review",
         )
 
-    safe_path, error = _validate_note_payload(args.get("path"), args.get("content"))
+    safe_path, error = _validate_note_payload(
+        args.get("path"), args.get("content"), requester=requester
+    )
     if error or safe_path is None:
         validation_error = ValueError(error or "Invalid approved payload")
         return _report_execution_failure(
