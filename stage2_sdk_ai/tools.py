@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .vector_store import RealVectorStore
+from .secure_storage import ensure_private_directory, open_private_file
 
 _store: RealVectorStore | None = None
 _notes_dir = Path("notes")
@@ -41,6 +42,15 @@ def search(query: str, top_k: int = 3) -> dict[str, Any]:
     }
 
 def read_note(path: str) -> dict[str, Any]:
+    if not isinstance(path, str) or not path.strip():
+        return {
+            "tool": "read_note",
+            "path": "",
+            "content": "",
+            "error": "invalid note path",
+            "is_mock": _is_mock(),
+        }
+
     safe_path = _notes_dir / Path(path).name
     if _is_mock():
         return {
@@ -49,8 +59,14 @@ def read_note(path: str) -> dict[str, Any]:
             "content": f"[MOCK NOTE] content of {safe_path}",
             "is_mock": True,
         }
+
+    # Verify the directory chain and open the note with O_NOFOLLOW. The
+    # bounded read prevents loading an arbitrarily large note into memory.
+    ensure_private_directory(_notes_dir)
     try:
-        content = safe_path.read_text(encoding="utf-8")[:2000]
+        fd = open_private_file(safe_path, os.O_RDONLY)
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            content = handle.read(2001)[:2000]
         return {
             "tool": "read_note",
             "path": str(safe_path),
