@@ -67,7 +67,12 @@ def load_s3_checkpoint(
     try:
         response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
         body = response["Body"]
-        raw = body.read(MAX_CHECKPOINT_BYTES + 1)
+        try:
+            raw = body.read(MAX_CHECKPOINT_BYTES + 1)
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
         if len(raw) > MAX_CHECKPOINT_BYTES:
             raise AuditCheckpointStoreError("S3 checkpoint exceeds the size limit")
         checkpoint = json.loads(
