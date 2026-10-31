@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 from typing import Any, Callable
@@ -16,6 +17,17 @@ def _is_mock() -> bool:
     flag = os.getenv("STAGE2_SDK_AI_MOCK_MODE", "").strip().lower()
     key = os.getenv("OPENAI_API_KEY", "")
     return flag in {"1", "true", "yes"} or key.startswith("sk-test-mocked")
+
+
+def _requester_notes_dir(requester: str | None) -> Path:
+    """Derive a filesystem-safe, non-identifying private directory per requester."""
+    if requester is None:
+        # Preserve the library's explicit non-API/legacy usage.
+        return _notes_dir
+    if not isinstance(requester, str) or not requester.strip():
+        raise ValueError("A valid requester identity is required")
+    identity_hash = hashlib.sha256(requester.encode("utf-8")).hexdigest()
+    return _notes_dir / identity_hash
 
 
 def _validate_search(query: str, top_k: int) -> None:
@@ -68,8 +80,8 @@ def search(query: str, top_k: int = 3) -> dict[str, Any]:
     }
 
 
-def read_note(path: str) -> dict[str, Any]:
-    if not isinstance(path, str) or not path.strip():
+def read_note(path: str, requester: str | None = None) -> dict[str, Any]:
+    if not isinstance(path, str) or not path.strip() or len(path) > 255:
         return {
             "tool": "read_note",
             "path": "",
@@ -78,7 +90,20 @@ def read_note(path: str) -> dict[str, Any]:
             "is_mock": _is_mock(),
         }
 
-    safe_path = _notes_dir / Path(path).name
+    # Notes are addressed by filename only. API calls always supply the
+    # authenticated requester identity; model-supplied paths cannot select
+    # another requester's directory.
+    filename = Path(path).name
+    if filename in {"", ".", ".."}:
+        return {
+            "tool": "read_note",
+            "path": "",
+            "content": "",
+            "error": "invalid note path",
+            "is_mock": _is_mock(),
+        }
+    note_dir = _requester_notes_dir(requester)
+    safe_path = note_dir / filename
     if _is_mock():
         return {
             "tool": "read_note",
@@ -87,7 +112,7 @@ def read_note(path: str) -> dict[str, Any]:
             "is_mock": True,
         }
 
-    ensure_private_directory(_notes_dir)
+    ensure_private_directory(note_dir)
     try:
         fd = open_private_file(safe_path, os.O_RDONLY)
         with os.fdopen(fd, "r", encoding="utf-8") as handle:

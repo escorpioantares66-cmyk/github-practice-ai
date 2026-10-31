@@ -103,7 +103,7 @@ def test_run_agent_real_mode_takes_else_branch_to_final(monkeypatch):
     assert result["answer"] == "done"
 
 
-def test_run_agent_real_mode_unknown_tool_records_error_and_stops(monkeypatch):
+def test_run_agent_real_mode_unknown_tool_fails_closed(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
     monkeypatch.setattr(agent_loop_mod, "_is_mock", lambda: False)
     monkeypatch.setattr(
@@ -112,5 +112,5 @@ def test_run_agent_real_mode_unknown_tool_records_error_and_stops(monkeypatch):
         lambda query, history: {"tool": "no_such_tool", "args": {}},
     )
     result = agent_loop_mod.run_agent("hi", max_steps=2)
-    assert result["answer"] == "Stopped after 2 steps"
-    assert any("error" in step for step in result["steps"])
+    assert result["answer"] == "I could not safely process that request."
+    assert result["steps"] == []
