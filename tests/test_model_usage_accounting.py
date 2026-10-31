@@ -43,3 +43,23 @@ def test_missing_provider_usage_stops_model_call(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-live-test")
     with pytest.raises(UsageAccountingError):
         _real_llm_pick_tool("hello", [], requester="requester-a")
+
+
+
+def test_usage_is_charged_to_reservation_day_across_utc_midnight(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_QUOTA_DB_PATH", str(tmp_path / "quota.sqlite3"))
+    day = ["2026-10-31"]
+    monkeypatch.setattr(cost_guard, "_utc_day", lambda: day[0])
+    reservation_id = "utc-boundary-reservation"
+    assert cost_guard.reserve_request("requester-a", reservation_id)
+
+    day[0] = "2026-11-01"
+    cost_guard.record_model_usage(
+        "requester-a", 1000, 500, reservation_id=reservation_id
+    )
+    old_day = quota_store.get_daily_usage("requester-a", "2026-10-31")
+    new_day = quota_store.get_daily_usage("requester-a", "2026-11-01")
+    assert old_day["input_tokens"] == 1000
+    assert old_day["output_tokens"] == 500
+    assert new_day["input_tokens"] == 0
+    cost_guard.release_request(reservation_id)
