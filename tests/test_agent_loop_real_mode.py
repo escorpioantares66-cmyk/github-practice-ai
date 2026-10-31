@@ -9,6 +9,8 @@ logic without installing openai or making a network call.
 import sys
 import types
 
+import pytest
+
 import stage2_sdk_ai.agent_loop as agent_loop_mod
 from stage2_sdk_ai.agent_loop import _real_llm_pick_tool
 
@@ -68,11 +70,11 @@ def test_args_not_a_dict_falls_back_to_mock(monkeypatch):
     assert result["tool"] in ("search", "read_note", "final")
 
 
-def test_api_exception_falls_back_to_mock(monkeypatch):
+def test_api_exception_is_ambiguous_and_keeps_quota_hold(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
     _install_fake_openai(monkeypatch, raise_exc=RuntimeError("simulated API failure"))
-    result = _real_llm_pick_tool("hi", [], requester="test-requester")
-    assert result["tool"] in ("search", "read_note", "final")
+    with pytest.raises(agent_loop_mod.UsageAccountingError):
+        _real_llm_pick_tool("hi", [], requester="test-requester")
 
 
 def test_openai_not_installed_falls_back_to_mock(monkeypatch):
