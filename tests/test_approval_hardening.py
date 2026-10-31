@@ -496,3 +496,45 @@ def test_audit_event_validation_rejects_incomplete_execution_failure_metadata(
         pass
     else:
         raise AssertionError("execution failure with invalid approval time was accepted")
+
+
+def test_request_approval_rejects_invalid_payload_before_writing(
+    monkeypatch, tmp_path
+):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    invalid_requests = [
+        ("", {"path": "x.md"}, "requester"),
+        (" " * 121, {"path": "x.md"}, "requester"),
+        ("write_note", [], "requester"),
+        ("write_note", {"value": float("nan")}, "requester"),
+        ("write_note", {"value": object()}, "requester"),
+        ("write_note", {"path": "x.md"}, ""),
+        ("write_note", {"path": "x.md"}, "r" * 257),
+    ]
+
+    for tool, args, requester in invalid_requests:
+        try:
+            approval.request_approval(tool, args, requester=requester)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid approval request was accepted")
+
+    approvals_dir = tmp_path / "approvals"
+    assert not approvals_dir.exists()
+    assert not (tmp_path / "logs" / "audit.jsonl").exists()
+
+
+def test_request_approval_accepts_valid_json_payload_and_logs_it(
+    monkeypatch, tmp_path
+):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    request = approval.request_approval(
+        "write_note", {"path": "safe.md", "content": "hello"},
+        requester="agent-1",
+    )
+
+    assert request["request_audit_status"] == "written"
+    assert approval.check_approval(request["id"])["args"] == {
+        "path": "safe.md", "content": "hello"
+    }
