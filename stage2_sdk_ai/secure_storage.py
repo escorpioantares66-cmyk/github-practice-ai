@@ -18,36 +18,49 @@ class UnsafeStoragePathError(ValueError):
     """Raised when a configured storage path is not a safe local directory."""
 
 
-def ensure_private_directory(path: Path) -> Path:
-    """Create/check a directory chain and restrict the leaf directory to 0700."""
+def _open_directory_chain(path: Path, create: bool = False) -> int:
+    """Open a directory by walking each component relative to verified dirfds."""
     target = Path(os.path.abspath(os.fspath(path)))
-    current = Path(target.anchor)
-    for part in target.parts[1:]:
-        current = current / part
-        try:
-            current.mkdir(mode=0o700)
-        except FileExistsError:
-            pass
-        try:
-            info = current.lstat()
-        except OSError as exc:
-            raise UnsafeStoragePathError(f"Cannot inspect storage directory: {current}") from exc
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise UnsafeStoragePathError(
-                f"Storage path component is not a real directory: {current}"
-            )
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(target.anchor, flags)
     try:
-        os.chmod(target, 0o700, follow_symlinks=False)
-    except (NotImplementedError, OSError) as exc:
-        raise UnsafeStoragePathError(f"Cannot secure storage directory: {target}") from exc
+        for part in target.parts[1:]:
+            try:
+                next_fd = os.open(part, flags, dir_fd=fd)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(part, 0o700, dir_fd=fd)
+                next_fd = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        os.fchmod(fd, 0o700)
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def ensure_private_directory(path: Path) -> Path:
+    """Create/check a private directory using descriptor-relative traversal."""
+    target = Path(os.path.abspath(os.fspath(path)))
+    fd = _open_directory_chain(target, create=True)
+    os.close(fd)
     return target
 
 
 def open_private_file(path: Path, flags: int, mode: int = 0o600) -> int:
-    """Open a file without following a final-component symlink."""
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    cloexec = getattr(os, "O_CLOEXEC", 0)
-    fd = os.open(path, flags | nofollow | cloexec, mode)
+    """Open a regular file relative to a verified, no-follow parent directory."""
+    parent_fd = _open_directory_chain(Path(path).parent, create=False)
+    try:
+        fd = os.open(
+            Path(path).name,
+            flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            mode,
+            dir_fd=parent_fd,
+        )
+    finally:
+        os.close(parent_fd)
     info = os.fstat(fd)
     if not stat.S_ISREG(info.st_mode):
         os.close(fd)
@@ -72,23 +85,42 @@ def read_private_text(path: Path) -> str:
 
 
 def write_text_atomically(path: Path, content: str, directory: Path) -> None:
-    """Write owner-only content and atomically replace a file in a safe directory."""
+    """Atomically replace a file using only the verified directory descriptor."""
     safe_directory = ensure_private_directory(directory)
-    if Path(path).parent != directory and Path(os.path.abspath(path)).parent != safe_directory:
+    destination = Path(path)
+    if Path(os.path.abspath(destination.parent)) != safe_directory:
         raise UnsafeStoragePathError(
             "Atomic-write destination must be directly inside its storage directory"
         )
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{Path(path).name}.", suffix=".tmp", dir=safe_directory
-    )
+    directory_fd = _open_directory_chain(safe_directory, create=False)
+    temporary_name = f".{destination.name}.{os.urandom(12).hex()}.tmp"
+    fd = -1
     try:
+        fd = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+            dir_fd=directory_fd,
+        )
         os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary_name, safe_directory / Path(path).name)
-        fsync_directory(safe_directory)
+        os.replace(
+            temporary_name,
+            destination.name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        os.fsync(directory_fd)
     finally:
-        if os.path.exists(temporary_name):
-            os.unlink(temporary_name)
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(temporary_name, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+        os.close(directory_fd)
