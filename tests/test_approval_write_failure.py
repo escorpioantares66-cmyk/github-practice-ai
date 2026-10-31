@@ -451,9 +451,20 @@ def test_audit_partial_write_is_rolled_back_before_next_append(
             raise OSError("simulated interrupted append")
         return real_write(fd, data)
 
+    def valid_request_record(record_id):
+        return {
+            "id": record_id,
+            "tool": "write_note",
+            "args": {"path": "rollback-test.md"},
+            "requester": "rollback-test",
+            "status": "pending",
+            "request_audit_status": "written",
+            "created": 1.0,
+        }
+
     monkeypatch.setattr(approval.os, "write", partial_then_fail)
     try:
-        approval.log_audit("request", {"id": "c" * 32})
+        approval.log_audit("request", valid_request_record("c" * 32))
     except OSError as exc:
         assert "interrupted append" in str(exc)
     else:
@@ -463,7 +474,7 @@ def test_audit_partial_write_is_rolled_back_before_next_append(
     assert audit_path.read_bytes() == b""
 
     monkeypatch.setattr(approval.os, "write", real_write)
-    approval.log_audit("request", {"id": "d" * 32})
+    approval.log_audit("request", valid_request_record("d" * 32))
     lines = audit_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0])["record"]["id"] == "d" * 32
