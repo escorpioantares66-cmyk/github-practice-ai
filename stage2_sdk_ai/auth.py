@@ -64,6 +64,11 @@ def check_auth(api_key: str | None) -> dict[str, object]:
         return {"is_ok": False, "reason": "missing api key"}
     if not any(hmac.compare_digest(api_key, key) for key in allowed):
         return {"is_ok": False, "reason": "invalid key"}
+    if any(
+        hmac.compare_digest(api_key, secret)
+        for _, secret in _configured_approver_keys()
+    ):
+        return {"is_ok": False, "reason": "credential roles must be separate"}
     return {"is_ok": True, "reason": "ok"}
 
 
@@ -107,8 +112,13 @@ def _configured_approver_keys() -> list[tuple[str, str]]:
 
 
 def verify_approver_key(approver_key: str | None) -> bool:
-    """Accept only explicitly configured approval credentials."""
+    """Accept only approver credentials not shared with requester access."""
     if not approver_key:
+        return False
+    if any(
+        hmac.compare_digest(approver_key, secret)
+        for secret in _allowed_keys()
+    ):
         return False
     return any(
         hmac.compare_digest(approver_key, secret)
