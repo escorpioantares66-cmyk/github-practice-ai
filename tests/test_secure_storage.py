@@ -3,7 +3,8 @@ import stat
 
 import pytest
 
-from stage2_sdk_ai import approval, tools as read_tools, write_tools
+from stage2_sdk_ai import approval, write_tools
+from stage2_sdk_ai import tools as read_tools
 from stage2_sdk_ai.secure_storage import UnsafeStoragePathError
 
 
