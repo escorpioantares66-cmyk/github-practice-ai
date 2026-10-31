@@ -1,5 +1,6 @@
 """Real-mode write tests use isolated temporary storage for every test."""
 from pathlib import Path
+import hashlib
 
 from stage2_sdk_ai import approval, write_tools
 
@@ -26,7 +27,7 @@ def test_real_mode_no_approval_id_requests_bound_approval(
     record = approval.check_approval(result["approval_id"])
     assert record["tool"] == "write_note"
     assert record["args"] == {
-        "path": str(tmp_path / "notes" / "real_note.md"),
+        "path": str(tmp_path / "notes" / hashlib.sha256(b"test-requester").hexdigest() / "real_note.md"),
         "content": "hello world",
     }
 
@@ -37,9 +38,10 @@ def test_real_mode_unapproved_id_returns_pending(monkeypatch, tmp_path):
     request = approval.request_approval(
         "write_note",
         {
-            "path": str(tmp_path / "notes" / "pending.md"),
+            "path": str(tmp_path / "notes" / hashlib.sha256(b"test-requester").hexdigest() / "pending.md"),
             "content": "still waiting",
         },
+        requester="test-requester",
     )
 
     result = write_tools.write_note(
@@ -93,7 +95,7 @@ def test_approved_id_cannot_be_reused_for_different_content(
         "safe.md", "replacement text", approval_id=request["approval_id"], requester="test-requester")
 
     assert result["status"] == "approval_mismatch"
-    assert not (tmp_path / "notes" / "safe.md").exists()
+    assert not (tmp_path / "notes" / hashlib.sha256(b"test-requester").hexdigest() / "safe.md").exists()
 
 
 def test_approved_id_cannot_be_reused_for_different_path(
@@ -108,7 +110,7 @@ def test_approved_id_cannot_be_reused_for_different_path(
         "other.md", "approved text", approval_id=request["approval_id"], requester="test-requester")
 
     assert result["status"] == "approval_mismatch"
-    assert not (tmp_path / "notes" / "other.md").exists()
+    assert not (tmp_path / "notes" / hashlib.sha256(b"test-requester").hexdigest() / "other.md").exists()
 
 
 def test_approve_write_delegates_to_approval_module(monkeypatch, tmp_path):
@@ -155,8 +157,8 @@ def test_atomic_write_replaces_symlink_without_modifying_target(
 ):
     configure_paths(monkeypatch, tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
-    notes_dir = tmp_path / "notes"
-    notes_dir.mkdir()
+    notes_dir = tmp_path / "notes" / hashlib.sha256(b"test-requester").hexdigest()
+    notes_dir.mkdir(parents=True)
     outside_file = tmp_path / "outside.txt"
     outside_file.write_text("do not change", encoding="utf-8")
     (notes_dir / "linked.md").symlink_to(outside_file)
