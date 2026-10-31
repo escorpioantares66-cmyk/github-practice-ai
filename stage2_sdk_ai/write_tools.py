@@ -94,7 +94,10 @@ def _report_execution_failure(
         return {
             **base,
             "status": "execution_failure_recording_failed",
-            "error": "Write failed after approval consumption; failure metadata could not be confirmed; operator review required",
+            "error": (
+                "Write failed after approval consumption; failure metadata "
+                "could not be confirmed; operator review required"
+            ),
         }
 
     if record.get("status") != "consumed":
@@ -110,7 +113,10 @@ def _report_execution_failure(
         return {
             **base,
             "status": "execution_failure_recording_failed",
-            "error": "Write failed after approval consumption; approval record needs operator inspection",
+            "error": (
+                "Write failed after approval consumption; approval record "
+                "needs operator inspection"
+            ),
         }
 
     if record.get("audit_status") == "failed":
@@ -126,7 +132,10 @@ def _report_execution_failure(
         return {
             **base,
             "status": "execution_failed_audit_incomplete",
-            "error": "Write failed; approval failure metadata was saved but audit logging failed; operator review required",
+            "error": (
+                "Write failed; approval failure metadata was saved but audit "
+                "logging failed; operator review required"
+            ),
         }
 
     return {
@@ -134,7 +143,6 @@ def _report_execution_failure(
         "status": "execution_failed",
         "error": "Write failed after approval consumption; operator review required",
     }
-}
 
 
 def write_note(
