@@ -160,7 +160,7 @@ def write_note(
     path: str,
     content: str,
     approval_id: str | None = None,
-    requester: str = "agent",
+    requester: str | None = None,
 ) -> dict[str, Any]:
     safe_path = canonical_note_path(path, requester=requester)
     mock_mode = _is_mock()
@@ -193,7 +193,7 @@ def write_note(
         request = request_approval(
             "write_note",
             {"path": str(safe_path), "content": content},
-            requester=requester,
+            requester=requester or "agent",
         )
         return {
             "tool": "write_note",
@@ -207,7 +207,7 @@ def write_note(
         approval_id,
         "write_note",
         {"path": str(safe_path), "content": content},
-        requester=requester,
+        requester=requester or "agent",
     )
     if consumed.get("status") != "consumed":
         return {
