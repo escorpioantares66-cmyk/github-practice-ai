@@ -536,7 +536,6 @@ def test_corrupt_record_is_rejected_by_approve_and_consume(monkeypatch, tmp_path
     }
 
 
-
 def test_successful_write_persists_completed_outcome_and_audit(monkeypatch, tmp_path):
     approval_id = _approved_request(monkeypatch, tmp_path)
 
@@ -558,6 +557,7 @@ def test_successful_write_persists_completed_outcome_and_audit(monkeypatch, tmp_
         for entry in audit
     )
     assert approval.list_execution_recovery() == []
+    assert approval.verify_audit_log()["valid"]
 
 
 def test_success_recording_failure_leaves_started_outcome_for_inspection(
