@@ -153,9 +153,9 @@ def check_approval(approval_id: str) -> dict[str, Any]:
         data = json.loads(read_private_text(path))
     except FileNotFoundError:
         return {"status": "not_found", "id": approval_id}
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+    except (json.JSONDecodeError, UnicodeDecodeError):
         logger.exception(
-            "approval record requires operator review",
+            "approval record is malformed; operator review required",
             extra={"approval_id": approval_id},
         )
         return {"status": "corrupt_record", "id": approval_id}
