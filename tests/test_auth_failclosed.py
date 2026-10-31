@@ -117,3 +117,74 @@ def test_rate_limit_is_atomic_under_concurrent_requests(monkeypatch):
         results = list(pool.map(auth.check_rate_limit, ["parallel-worker"] * 100))
     assert sum(results) == 10
     auth.reset_rate()
+
+
+def test_malformed_requester_key_config_fails_closed_as_a_whole(monkeypatch):
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=secret-a,,backup=secret-b")
+    assert _allowed_keys() == []
+    assert check_auth("secret-a")["is_ok"] is False
+    assert auth.requester_identity("secret-a") is None
+
+
+def test_duplicate_requester_identity_fails_closed(monkeypatch):
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=secret-a,automation=secret-b")
+    assert _allowed_keys() == []
+    assert check_auth("secret-a")["is_ok"] is False
+    assert check_auth("secret-b")["is_ok"] is False
+
+
+def test_duplicate_requester_secret_across_identities_fails_closed(monkeypatch):
+    monkeypatch.setenv("AGENT_API_KEYS", "automation-a=shared-secret,automation-b=shared-secret")
+    assert _allowed_keys() == []
+    assert check_auth("shared-secret")["is_ok"] is False
+
+
+def test_empty_identity_or_secret_fails_closed(monkeypatch):
+    for config in ("=secret", "automation=", "automation=   "):
+        monkeypatch.setenv("AGENT_API_KEYS", config)
+        assert _allowed_keys() == []
+        assert check_auth("secret")["is_ok"] is False
+
+
+def test_legacy_bare_secrets_keep_deterministic_identities(monkeypatch):
+    monkeypatch.setenv("AGENT_API_KEYS", "legacy-secret-a,legacy-secret-b")
+    first = auth.requester_identity("legacy-secret-a")
+    assert first is not None
+    assert first.startswith("requester-")
+    assert auth.requester_identity("legacy-secret-a") == first
+    assert auth.requester_identity("legacy-secret-b") != first
+
+
+def test_malformed_approver_config_fails_closed(monkeypatch):
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=secret-a,reviewer=secret-b")
+    assert auth.verify_approver_key("secret-a") is False
+    assert auth.verify_approver_key("secret-b") is False
+
+
+def test_requester_and_approver_credentials_must_be_distinct(monkeypatch):
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=shared-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=shared-secret")
+    assert auth.verify_api_key("shared-secret") is False
+    assert auth.verify_approver_key("shared-secret") is False
+
+
+def test_distinct_requester_and_approver_credentials_are_accepted(monkeypatch):
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=requester-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=approver-secret")
+    assert auth.verify_api_key("requester-secret") is True
+    assert auth.verify_approver_key("approver-secret") is True
+
+
+def test_rate_limit_uses_monotonic_clock(monkeypatch):
+    auth.reset_rate()
+    clock = [100.0]
+    monkeypatch.setattr(auth.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(auth.time, "time", lambda: 10_000_000.0)
+
+    for _ in range(auth._MAX_PER_MIN):
+        assert auth.check_rate_limit("monotonic-worker") is True
+    assert auth.check_rate_limit("monotonic-worker") is False
+
+    clock[0] += 61.0
+    assert auth.check_rate_limit("monotonic-worker") is True
+    auth.reset_rate()

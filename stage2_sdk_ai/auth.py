@@ -12,32 +12,46 @@ _MAX_PER_MIN = 10
 _rate_lock = threading.Lock()
 
 
-def _configured_requester_keys() -> list[tuple[str, str]]:
-    """Return (identity, secret) pairs from AGENT_API_KEYS.
+def _parse_key_config(env_name: str, legacy_prefix: str) -> list[tuple[str, str]]:
+    """Parse identity=secret pairs, rejecting the entire config if ambiguous.
 
-    Preferred syntax is identity=secret, comma-separated. Legacy bare
-    secrets remain accepted and receive a deterministic fingerprint identity.
-    Keep an identity label stable when rotating its secret.
+    Legacy bare secrets remain supported with deterministic fingerprint
+    identities. Empty entries, malformed pairs, duplicate identities, and
+    duplicate secrets fail closed instead of silently changing access policy.
     """
-    raw = os.getenv("AGENT_API_KEYS", "").strip()
+    raw = os.getenv(env_name, "").strip()
+    if not raw:
+        return []
+
     configured: list[tuple[str, str]] = []
-    for item in raw.split(","):
-        item = item.strip()
+    identities: set[str] = set()
+    secrets: set[str] = set()
+    for raw_item in raw.split(","):
+        item = raw_item.strip()
         if not item:
-            continue
+            return []
         if "=" in item:
             identity, secret = item.split("=", 1)
             identity, secret = identity.strip(), secret.strip()
             if not identity or not secret:
-                continue
+                return []
         else:
             secret = item
-            identity = "requester-" + hashlib.sha256(
+            identity = legacy_prefix + hashlib.sha256(
                 secret.encode("utf-8")
             ).hexdigest()[:12]
+
+        if identity in identities or secret in secrets:
+            return []
+        identities.add(identity)
+        secrets.add(secret)
         configured.append((identity, secret))
     return configured
 
+
+def _configured_requester_keys() -> list[tuple[str, str]]:
+    """Return validated requester identity/secret pairs."""
+    return _parse_key_config("AGENT_API_KEYS", "requester-")
 
 def _allowed_keys() -> list[str]:
     """Return explicitly configured API secrets; missing configuration fails closed."""
@@ -50,6 +64,11 @@ def check_auth(api_key: str | None) -> dict[str, object]:
         return {"is_ok": False, "reason": "missing api key"}
     if not any(hmac.compare_digest(api_key, key) for key in allowed):
         return {"is_ok": False, "reason": "invalid key"}
+    if any(
+        hmac.compare_digest(api_key, secret)
+        for _, secret in _configured_approver_keys()
+    ):
+        return {"is_ok": False, "reason": "credential roles must be separate"}
     return {"is_ok": True, "reason": "ok"}
 
 
@@ -65,7 +84,7 @@ def requester_identity(api_key: str | None) -> str | None:
 
 def check_rate(api_key: str) -> dict[str, object]:
     """Atomically enforce a per-process sliding-window limit."""
-    now = time.time()
+    now = time.monotonic()
     with _rate_lock:
         window = [t for t in _rate[api_key] if now - t < 60]
         _rate[api_key] = window
@@ -88,30 +107,18 @@ def check_rate_limit(api_key: str) -> bool:
     return check_rate(api_key).get("is_ok", False)
 
 def _configured_approver_keys() -> list[tuple[str, str]]:
-    """Return stable approver identity/secret pairs from AGENT_APPROVER_KEYS."""
-    raw = os.getenv("AGENT_APPROVER_KEYS", "").strip()
-    configured: list[tuple[str, str]] = []
-    for item in raw.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        if "=" in item:
-            identity, secret = item.split("=", 1)
-            identity, secret = identity.strip(), secret.strip()
-            if not identity or not secret:
-                continue
-        else:
-            secret = item
-            identity = "approver-" + hashlib.sha256(
-                secret.encode("utf-8")
-            ).hexdigest()[:12]
-        configured.append((identity, secret))
-    return configured
+    """Return validated approver identity/secret pairs."""
+    return _parse_key_config("AGENT_APPROVER_KEYS", "approver-")
 
 
 def verify_approver_key(approver_key: str | None) -> bool:
-    """Accept only explicitly configured approval credentials."""
+    """Accept only approver credentials not shared with requester access."""
     if not approver_key:
+        return False
+    if any(
+        hmac.compare_digest(approver_key, secret)
+        for secret in _allowed_keys()
+    ):
         return False
     return any(
         hmac.compare_digest(approver_key, secret)
