@@ -150,6 +150,13 @@ def _real_llm_pick_tool(
             extra={"event": "usage_accounting_failed", "requester": requester},
         )
         raise UsageAccountingError("provider usage could not be durably recorded") from exc
+    if (
+        input_tokens > cost_guard.MAX_PROMPT_TOKENS_PER_CALL
+        or output_tokens > cost_guard.MAX_COMPLETION_TOKENS_PER_CALL
+    ):
+        raise UsageAccountingError(
+            "provider usage exceeded the request's reserved token ceiling"
+        )
 
     try:
         text = response.choices[0].message.content or ""
@@ -243,6 +250,14 @@ def run_agent(
     quota_reservation_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the agent only under a valid daily quota reservation in real mode."""
+    if not isinstance(query, str) or not query.strip() or len(query) > 500:
+        raise ValueError("query must contain 1 to 500 characters")
+    if (
+        isinstance(top_k, bool)
+        or not isinstance(top_k, int)
+        or not 1 <= top_k <= 50
+    ):
+        raise ValueError("top_k must be between 1 and 50")
     if (
         isinstance(max_steps, bool)
         or not isinstance(max_steps, int)
