@@ -228,11 +228,21 @@ def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
     if requester is None:
         raise HTTPException(status_code=401, detail="Invalid API key identity")
 
-    r = appr_mod.request_approval(
+    try:
+        r = appr_mod.request_approval(
         "write_note",
         {"path": str(safe_path), "content": req.content},
         requester=requester,
-    )
+        )
+    except appr_mod.ApprovalAuditError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "approval_audit_incomplete",
+                "approval_id": exc.approval_id,
+                "recovery": "Operator review required; request cannot be approved.",
+            },
+        ) from exc
     approval_id = r.get("id") or r.get("approval_id")
 
     return {
