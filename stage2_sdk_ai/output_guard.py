@@ -4,19 +4,19 @@ import re
 from typing import Any
 
 _EMAIL = re.compile(
-    r"(?i)\\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"(?i)\b[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@"
     r"[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?"
-    r"(?:\\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+\\b"
+    r"(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+\b"
 )
-_SSN = re.compile(r"\\b\\d{3}-\\d{2}-\\d{4}\\b")
-_CARD = re.compile(r"(?<!\\d)(?:\\d[ -]?){13,19}(?!\\d)")
+_SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+_CARD = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")
 _PHONE = re.compile(
-    r"(?<!\\w)(?:\\+?\\d{1,3}[ .()-]?)?(?:\\(?\\d{2,4}\\)?[ .()-]?)"
-    r"\\d{2,4}[ .()-]?\\d{3,4}(?!\\w)"
+    r"(?<!\w)(?:\+?\d{1,3}[ .()-]?)?(?:\(?\d{2,4}\)?[ .()-]?)"
+    r"\d{2,4}[ .()-]?\d{3,4}(?!\w)"
 )
 _STREET_ADDRESS = re.compile(
-    r"\\b\\d{1,6}\\s+[A-Za-z0-9.'-]+(?:\\s+[A-Za-z0-9.'-]+){0,3}\\s+"
-    r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl)\\b\\.?",
+    r"\b\d{1,6}\s+[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,3}\s+"
+    r"(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Court|Ct|Way|Place|Pl)\b\.?",
     re.IGNORECASE,
 )
 
