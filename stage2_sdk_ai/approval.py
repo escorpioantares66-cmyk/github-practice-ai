@@ -586,6 +586,11 @@ def _validate_audit_event(entry: Any, line_number: int) -> None:
         if (
             status != "consumed"
             or record.get("approval_audit_status") != "written"
+            or not isinstance(record.get("approver"), str)
+            or not record["approver"].strip()
+            or isinstance(record.get("approved_at"), bool)
+            or not isinstance(record.get("approved_at"), (int, float))
+            or not math.isfinite(record["approved_at"])
             or isinstance(record.get("consumed_at"), bool)
             or not isinstance(record.get("consumed_at"), (int, float))
             or not math.isfinite(record["consumed_at"])
@@ -595,12 +600,21 @@ def _validate_audit_event(entry: Any, line_number: int) -> None:
         failure = record.get("execution_failure")
         if (
             status != "consumed"
+            or record.get("approval_audit_status") != "written"
+            or not isinstance(record.get("approver"), str)
+            or not record["approver"].strip()
+            or isinstance(record.get("approved_at"), bool)
+            or not isinstance(record.get("approved_at"), (int, float))
+            or not math.isfinite(record["approved_at"])
+            or isinstance(record.get("consumed_at"), bool)
+            or not isinstance(record.get("consumed_at"), (int, float))
+            or not math.isfinite(record["consumed_at"])
             or not isinstance(failure, dict)
             or isinstance(failure.get("failed_at"), bool)
             or not isinstance(failure.get("failed_at"), (int, float))
             or not math.isfinite(failure["failed_at"])
             or not isinstance(failure.get("error_type"), str)
-            or not failure["error_type"]
+            or not failure["error_type"].strip()
             or len(failure["error_type"]) > 120
             or not isinstance(failure.get("error_message"), str)
             or len(failure["error_message"]) > 1000
