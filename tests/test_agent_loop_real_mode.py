@@ -98,7 +98,10 @@ def test_run_agent_real_mode_takes_else_branch_to_final(monkeypatch):
     monkeypatch.setattr(
         agent_loop_mod,
         "_real_llm_pick_tool",
-        lambda query, history, requester=None, quota_reservation_id=None: {"tool": "final", "args": {"answer": "done"}},
+        lambda query, history, requester=None, quota_reservation_id=None: {
+            "tool": "final",
+            "args": {"answer": "done"},
+        },
     )
     result = agent_loop_mod.run_agent("hi", requester="test-requester")
     assert result["answer"] == "done"
@@ -110,7 +113,10 @@ def test_run_agent_real_mode_unknown_tool_fails_closed(monkeypatch):
     monkeypatch.setattr(
         agent_loop_mod,
         "_real_llm_pick_tool",
-        lambda query, history, requester=None, quota_reservation_id=None: {"tool": "no_such_tool", "args": {}},
+        lambda query, history, requester=None, quota_reservation_id=None: {
+            "tool": "no_such_tool",
+            "args": {},
+        },
     )
     result = agent_loop_mod.run_agent("hi", max_steps=2, requester="test-requester")
     assert result["answer"] == "I could not safely process that request."
