@@ -546,7 +546,7 @@ def record_execution_success(approval_id: str) -> dict[str, Any]:
         audit_record["execution_outcome"]["audit_status"] = "written"
         try:
             log_audit("execution_succeeded", audit_record)
-        except Exception as exc:
+        except Exception:
             data["execution_outcome"]["audit_status"] = "failed"
             try:
                 _write_record_atomically(path, data)
