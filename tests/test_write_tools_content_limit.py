@@ -12,7 +12,7 @@ def test_oversized_note_is_rejected_before_approval(monkeypatch, tmp_path):
         write_tools, "request_approval", unexpected_approval
     )
 
-    result = write_tools.write_note("large.md", "x" * 5001)
+    result = write_tools.write_note("large.md", "x" * 5001, requester="test-requester")
 
     assert result["status"] == "rejected"
     assert "exceeds 5000 characters" in result["error"]
@@ -36,7 +36,7 @@ def test_note_at_character_limit_is_accepted_for_approval(
         write_tools, "request_approval", fake_request_approval
     )
 
-    result = write_tools.write_note("valid.md", "x" * 5000)
+    result = write_tools.write_note("valid.md", "x" * 5000, requester="test-requester")
 
     assert result["status"] == "needs_approval"
     assert captured["tool"] == "write_note"

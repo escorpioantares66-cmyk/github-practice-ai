@@ -150,6 +150,7 @@ def eval_approval_bypass(write_fn) -> dict:
         "not_found",
         "denied",
         "approval_required",
+        "rejected",
     }
     for payload in APPROVAL_BYPASS_PAYLOADS:
         try:

@@ -55,7 +55,7 @@ def test_approval_bypass_blocked(monkeypatch):
 
     result = eval_approval_bypass(
         lambda path, content: write_tools.write_note(
-            path, content, approval_id=""
+            path, content, approval_id="", requester="red-team"
         )
     )
     assert result["blocked"] == len(result["details"])

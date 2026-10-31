@@ -20,10 +20,7 @@ def _is_mock() -> bool:
 
 
 def _requester_notes_dir(requester: str | None) -> Path:
-    """Derive a filesystem-safe, non-identifying private directory per requester."""
-    if requester is None:
-        # Preserve the library's explicit non-API/legacy usage.
-        return _notes_dir
+    """Return an isolated note directory; never fall back to shared storage."""
     if not isinstance(requester, str) or not requester.strip():
         raise ValueError("A valid requester identity is required")
     identity_hash = hashlib.sha256(requester.encode("utf-8")).hexdigest()
@@ -102,7 +99,16 @@ def read_note(path: str, requester: str | None = None) -> dict[str, Any]:
             "error": "invalid note path",
             "is_mock": _is_mock(),
         }
-    note_dir = _requester_notes_dir(requester)
+    try:
+        note_dir = _requester_notes_dir(requester)
+    except ValueError:
+        return {
+            "tool": "read_note",
+            "path": "",
+            "content": "",
+            "error": "A valid requester identity is required",
+            "is_mock": _is_mock(),
+        }
     safe_path = note_dir / filename
     if _is_mock():
         return {
