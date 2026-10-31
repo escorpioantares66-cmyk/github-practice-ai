@@ -84,7 +84,7 @@ def requester_identity(api_key: str | None) -> str | None:
 
 def check_rate(api_key: str) -> dict[str, object]:
     """Atomically enforce a per-process sliding-window limit."""
-    now = time.time()
+    now = time.monotonic()
     with _rate_lock:
         window = [t for t in _rate[api_key] if now - t < 60]
         _rate[api_key] = window
