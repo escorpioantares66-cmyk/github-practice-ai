@@ -8,6 +8,7 @@ possible time-of-check/time-of-use race.
 """
 from __future__ import annotations
 
+import errno
 import os
 import stat
 from pathlib import Path
@@ -52,8 +53,18 @@ def _open_directory_chain(path: Path, create: bool = False) -> int:
             except FileNotFoundError:
                 if not create:
                     raise
-                os.mkdir(part, 0o700, dir_fd=fd)
+                try:
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    # Another creator won the race; validate what now exists.
+                    pass
                 next_fd = os.open(part, flags, dir_fd=fd)
+            except OSError as exc:
+                if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                    raise UnsafeStoragePathError(
+                        f"Storage directory contains a symlink or non-directory: {part}"
+                    ) from exc
+                raise
             os.close(fd)
             fd = next_fd
         if create:
@@ -138,7 +149,7 @@ def write_text_atomically(path: Path, content: str, directory: Path) -> None:
             src_dir_fd=directory_fd,
             dst_dir_fd=directory_fd,
         )
-        os.fsync(directory_fd)
+        fsync_directory(safe_directory)
     finally:
         if fd >= 0:
             os.close(fd)
