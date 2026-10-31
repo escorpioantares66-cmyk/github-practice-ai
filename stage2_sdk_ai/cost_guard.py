@@ -69,10 +69,14 @@ def clear() -> None:
     reset_cost()
 
 
-def reserve_request(api_key: str, reservation_id: str) -> bool:
-    if not isinstance(api_key, str) or not api_key:
+def reserve_request(requester: str, reservation_id: str) -> bool:
+    if (
+        not isinstance(requester, str)
+        or not requester.strip()
+        or len(requester) > 256
+    ):
         return False
-    identity = _budget_key(api_key)
+    identity = requester
     return quota_store.reserve_budget(
         identity,
         _utc_day(),
