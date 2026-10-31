@@ -160,6 +160,42 @@ def deny(
     return _transition(approval_id, "denied", approver_key, reason)
 
 
+def record_execution_failure(
+    approval_id: str, error_type: str, error_message: str
+) -> dict[str, Any]:
+    """Record failed side effects without reopening a consumed approval.
+
+    The approved payload remains in the private record for operator-led
+    recovery. This function never changes status back to approved.
+    """
+    _ensure_dirs()
+    path = _approval_path(approval_id)
+    if path is None:
+        return {"status": "invalid_id", "id": approval_id}
+
+    with _locked_record(path):
+        try:
+            data = json.loads(read_private_text(path))
+        except FileNotFoundError:
+            return {"status": "not_found", "id": approval_id}
+
+        if data.get("status") != "consumed":
+            return {
+                "status": "invalid_transition",
+                "id": approval_id,
+                "current_status": data.get("status"),
+            }
+
+        data["execution_failure"] = {
+            "failed_at": time.time(),
+            "error_type": error_type[:120],
+            "error_message": error_message[:1000],
+        }
+        _write_record_atomically(path, data)
+        log_audit("execution_failed", data)
+        return data
+
+
 def consume_approval_request(
     approval_id: str,
     tool: str,
