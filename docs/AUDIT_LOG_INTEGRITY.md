@@ -12,16 +12,15 @@ Canonical JSON uses sorted keys, compact separators, UTF-8, and rejects non-fini
 
 Existing three-field entries (`action`, `time`, `record`) are accepted as a legacy prefix. On the first new append, the first chained entry's `previous_hash` commits to the SHA-256 digest of the exact legacy-prefix bytes. This does not retroactively prove that legacy entries were authentic before the upgrade; it detects changes to that prefix after the first chained entry is written.
 
-## Verify the log
+## External checkpoints and verification
 
-Call `stage2_sdk_ai.approval.verify_audit_log()`. It validates the complete log under the same exclusive file lock used by appends and returns:
+Create a checkpoint with `stage2_sdk_ai.approval.create_audit_checkpoint()`. It returns a versioned object containing the chained sequence, legacy-prefix entry count, head hash, and creation time. Store this object independently of the host and audit directory (for example, in a separately administered secrets/configuration system or offline operator record).
 
-- `valid`: true only when the complete local history validates
-- `entries`: total legacy plus chained entries
-- `chained_entries`: number of chained entries
-- `head_hash`: current chain head (or the legacy-prefix digest before the first chained append)
+Pass the retained object to `stage2_sdk_ai.approval.verify_audit_log(expected_checkpoint)`. Verification checks the complete local chain and confirms that the checkpoint sequence still exists with the same hash and legacy-prefix count. A checkpoint remains valid when newer entries are appended. If the log is truncated behind the checkpoint, replaced with an empty file, or diverges at the checkpoint sequence, verification raises `AuditLogIntegrityError`. A malformed or modified checkpoint is also rejected.
 
-Keep a copy of `head_hash` outside the machine and outside the audit directory after important milestones. Compare a later verification result with that independently retained value to detect whole-log replacement, truncation, or a rewrite that recalculates every local hash.
+A checkpoint created before any chained event can anchor an existing legacy-only prefix (sequence zero plus the legacy-prefix digest). Keep checkpoints after important milestones and rotate/store them independently. Checkpoints kept only beside the log are not independent trust anchors.
+
+The verifier without an expected checkpoint proves only internal consistency. It cannot detect deletion of a valid suffix. External checkpoint verification is therefore required for operational truncation detection.
 
 ## Security boundary
 
