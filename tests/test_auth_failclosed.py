@@ -91,3 +91,22 @@ def test_different_requester_identities_have_independent_rate_limits(monkeypatch
     assert auth.check_requester_rate_limit("secret-a") is False
     assert auth.check_requester_rate_limit("secret-b") is True
     auth.reset_rate()
+
+
+
+def test_approver_rate_limit_uses_stable_identity_across_secret_rotation(monkeypatch):
+    from stage2_sdk_ai import auth
+
+    auth.reset_rate()
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=old-approver-secret")
+    assert auth.verify_approver_key("old-approver-secret")
+    identity = auth.approver_identity("old-approver-secret")
+    assert identity == "reviewer"
+    for _ in range(auth._MAX_PER_MIN):
+        assert auth.check_rate_limit(identity)
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=new-approver-secret")
+    assert auth.verify_approver_key("new-approver-secret")
+    assert auth.approver_identity("new-approver-secret") == identity
+    assert not auth.check_rate_limit(identity)
+    auth.reset_rate()
