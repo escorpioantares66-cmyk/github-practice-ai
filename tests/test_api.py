@@ -104,6 +104,30 @@ def test_write_without_api_key_is_401(client):
     assert resp.status_code == 401
 
 
+def test_oversized_write_body_is_rejected_before_json_validation(client):
+    from stage2_sdk_ai.api import MAX_REQUEST_BODY_BYTES
+
+    response = client.post(
+        "/write",
+        content=b'{"path":"large.md","content":"' + b"x" * MAX_REQUEST_BODY_BYTES + b'"}',
+        headers={"X-API-Key": VALID_KEY, "Content-Type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Request body too large"
+
+
+def test_oversized_deny_body_is_rejected_before_json_validation(client):
+    from stage2_sdk_ai.api import MAX_REQUEST_BODY_BYTES
+
+    response = client.post(
+        "/deny",
+        content=b'{"approval_id":"' + b"d" * 32 + b'","reason":"' + b"x" * MAX_REQUEST_BODY_BYTES + b'"}',
+        headers={"X-Approver-Key": "any", "Content-Type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Request body too large"
+
+
 def test_every_response_carries_a_request_id_header(client):
     resp = client.get("/healthz")
     assert resp.status_code == 200
