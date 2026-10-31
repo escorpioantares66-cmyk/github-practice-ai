@@ -267,7 +267,9 @@ def _load_approval_record(path: Path, approval_id: str) -> dict[str, Any]:
         outcome_status = execution.get("status")
         started_at = execution.get("started_at")
         if (
-            outcome_status not in {"started", "completed", "failed", "uncertain", "blocked"}
+            outcome_status not in {
+                "started", "completed", "failed", "uncertain", "blocked"
+            }
             or isinstance(started_at, bool)
             or not isinstance(started_at, (int, float))
             or not math.isfinite(started_at)
@@ -513,7 +515,11 @@ def record_execution_success(approval_id: str) -> dict[str, Any]:
         except CorruptApprovalRecordError:
             return {"status": "corrupt_record", "id": approval_id}
         execution = data.get("execution_outcome")
-        if data.get("status") != "consumed" or not isinstance(execution, dict) or execution.get("status") != "started":
+        if (
+            data.get("status") != "consumed"
+            or not isinstance(execution, dict)
+            or execution.get("status") != "started"
+        ):
             return {"status": "invalid_transition", "id": approval_id}
         data["execution_outcome"] = {
             "status": "completed", "started_at": execution["started_at"],
@@ -522,8 +528,11 @@ def record_execution_success(approval_id: str) -> dict[str, Any]:
         try:
             _write_record_atomically(path, data)
         except Exception as exc:
-            logger.error("note write completed but execution outcome could not be persisted",
-                         exc_info=exc, extra={"approval_id": approval_id})
+            logger.error(
+                "note write completed but execution outcome could not be persisted",
+                exc_info=exc,
+                extra={"approval_id": approval_id},
+            )
             return {"status": "execution_outcome_recording_failed", "id": approval_id}
         audit_record = dict(data)
         audit_record["execution_outcome"] = dict(data["execution_outcome"])
@@ -535,8 +544,10 @@ def record_execution_success(approval_id: str) -> dict[str, Any]:
             try:
                 _write_record_atomically(path, data)
             except Exception:
-                logger.exception("failed to persist successful execution audit failure marker",
-                                 extra={"approval_id": approval_id})
+                logger.exception(
+                    "failed to persist successful execution audit failure marker",
+                    extra={"approval_id": approval_id},
+                )
             return {"status": "execution_succeeded_audit_incomplete", "id": approval_id}
         data["execution_outcome"]["audit_status"] = "written"
         try:
@@ -747,6 +758,14 @@ def _validate_audit_event(entry: Any, line_number: int) -> None:
             or not math.isfinite(record["consumed_at"])
         ):
             invalid()
+        if "execution_outcome" in record:
+            outcome = record["execution_outcome"]
+            if (
+                not isinstance(outcome, dict)
+                or outcome.get("status") != "started"
+                or outcome.get("started_at") != record["consumed_at"]
+            ):
+                invalid()
     elif action == "execution_succeeded":
         outcome = record.get("execution_outcome")
         if (
@@ -1091,8 +1110,15 @@ def list_execution_recovery() -> list[dict[str, Any]]:
         try:
             data = _load_approval_record(path, approval_id)
         except (OSError, CorruptApprovalRecordError):
-            logger.exception("skipping corrupt execution record; operator review required",
-                             extra={"approval_id": approval_id})
+            logger.exception(
+                "corrupt execution record requires operator review",
+                extra={"approval_id": approval_id},
+            )
+            recovery.append({
+                "approval_id": approval_id,
+                "execution_status": "corrupt_record",
+                "execution_audit_status": None,
+            })
             continue
         if data.get("status") != "consumed":
             continue
@@ -1107,11 +1133,22 @@ def list_execution_recovery() -> list[dict[str, Any]]:
             "path": args.get("path") if isinstance(args, dict) else None,
             "consumed_at": data.get("consumed_at"),
             "execution_status": outcome_status,
-            "execution_audit_status": outcome.get("audit_status") if isinstance(outcome, dict) else None,
-            "started_at": outcome.get("started_at") if isinstance(outcome, dict) else None,
-            "finished_at": outcome.get("completed_at", outcome.get("finished_at")) if isinstance(outcome, dict) else None,
-            "error_type": outcome.get("error_type") if isinstance(outcome, dict) else None,
-            "error_message": outcome.get("error_message") if isinstance(outcome, dict) else None,
+            "execution_audit_status": (
+                outcome.get("audit_status") if isinstance(outcome, dict) else None
+            ),
+            "started_at": (
+                outcome.get("started_at") if isinstance(outcome, dict) else None
+            ),
+            "finished_at": (
+                outcome.get("completed_at", outcome.get("finished_at"))
+                if isinstance(outcome, dict) else None
+            ),
+            "error_type": (
+                outcome.get("error_type") if isinstance(outcome, dict) else None
+            ),
+            "error_message": (
+                outcome.get("error_message") if isinstance(outcome, dict) else None
+            ),
         })
     return sorted(recovery, key=lambda item: item.get("consumed_at") or 0)
 
