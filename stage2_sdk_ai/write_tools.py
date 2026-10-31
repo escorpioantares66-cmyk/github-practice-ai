@@ -6,6 +6,9 @@ from typing import Any
 
 from .approval import approve, consume_approval, consume_approval_request, request_approval
 from .secure_storage import ensure_private_directory, write_text_atomically
+from .logging_setup import get_logger
+
+logger = get_logger(__name__)
 
 _notes_dir = Path("notes")
 MAX_NOTE_CHARS = 5_000
@@ -161,7 +164,34 @@ def execute_approved_write(
             "is_mock": False,
         }
 
-    _atomic_write_note(safe_path, args["content"])
+    try:
+        _atomic_write_note(safe_path, args["content"])
+    except Exception as exc:
+        # Consumption remains terminal: never restore this approval to
+        # "approved" after a failed side effect. Record enough private audit
+        # context for an operator to inspect and recover manually.
+        approval_record = approval.record_execution_failure(
+            approval_id, type(exc).__name__, str(exc)
+        )
+        logger.error(
+            "approved note write failed after approval was consumed",
+            exc_info=exc,
+            extra={
+                "approval_id": approval_id,
+                "path": str(safe_path),
+                "approval_status": approval_record.get("status"),
+                "recovery": "operator_review_required",
+            },
+        )
+        return {
+            "tool": "write_note",
+            "path": str(safe_path),
+            "status": "execution_failed",
+            "approval_id": approval_id,
+            "error": "Write failed after approval consumption; operator review required",
+            "is_mock": False,
+        }
+
     return {
         "tool": "write_note",
         "path": str(safe_path),
