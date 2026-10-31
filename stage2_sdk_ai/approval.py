@@ -230,6 +230,11 @@ def _load_approval_record(path: Path, approval_id: str) -> dict[str, Any]:
         and "approval_audit_status" not in data
     ):
         raise CorruptApprovalRecordError("missing approval audit state")
+    if (
+        data["status"] == "consumed"
+        and data.get("approval_audit_status") != "written"
+    ):
+        raise CorruptApprovalRecordError("consumed approval has incomplete approval audit")
 
     for timestamp_field in ("approved_at", "denied_at", "consumed_at"):
         timestamp = data.get(timestamp_field)
@@ -518,6 +523,7 @@ def record_execution_success(approval_id: str) -> dict[str, Any]:
         execution = data.get("execution_outcome")
         if (
             data.get("status") != "consumed"
+            or data.get("approval_audit_status") != "written"
             or not isinstance(execution, dict)
             or execution.get("status") != "started"
         ):
@@ -1106,6 +1112,11 @@ def list_execution_recovery() -> list[dict[str, Any]]:
     recovery: list[dict[str, Any]] = []
     for path in _approvals_dir.glob("*.json"):
         if path.is_symlink():
+            recovery.append({
+                "approval_id": path.stem,
+                "execution_status": "symlink_record",
+                "execution_audit_status": None,
+            })
             continue
         approval_id = path.stem
         try:
