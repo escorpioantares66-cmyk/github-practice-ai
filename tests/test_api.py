@@ -339,7 +339,15 @@ def test_concurrent_execute_has_exactly_one_winner(client, monkeypatch, tmp_path
         responses = list(pool.map(lambda _: execute(), range(2)))
 
     assert sorted(response.status_code for response in responses) == [200, 409]
-    assert (tmp_path / "notes" / "race.md").read_text(encoding="utf-8") == "one authorized write"
+    import hashlib
+    from stage2_sdk_ai import auth
+
+    owner_dir = hashlib.sha256(
+        auth.requester_identity(VALID_KEY).encode("utf-8")
+    ).hexdigest()
+    assert (
+        tmp_path / "notes" / owner_dir / "race.md"
+    ).read_text(encoding="utf-8") == "one authorized write"
 
 
 
