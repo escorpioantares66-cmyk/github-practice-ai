@@ -153,9 +153,14 @@ def write_endpoint(req: WriteReq, api_key: str = Depends(_check_auth)):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    requester = auth.requester_identity(api_key)
+    if requester is None:
+        raise HTTPException(status_code=401, detail="Invalid API key identity")
+
     r = appr_mod.request_approval(
         "write_note",
         {"path": str(safe_path), "content": req.content},
+        requester=requester,
     )
     approval_id = r.get("id") or r.get("approval_id")
 
@@ -221,7 +226,11 @@ def execute_write_endpoint(
     """Execute a stored approved write; clients cannot submit replacement data."""
     from stage2_sdk_ai.write_tools import execute_approved_write
 
-    result = execute_approved_write(req.approval_id)
+    requester = auth.requester_identity(api_key)
+    if requester is None:
+        raise HTTPException(status_code=401, detail="Invalid API key identity")
+
+    result = execute_approved_write(req.approval_id, requester=requester)
     status = result.get("status")
     if status == "not_found":
         raise HTTPException(status_code=404, detail="Approval not found")
@@ -233,6 +242,8 @@ def execute_write_endpoint(
         raise HTTPException(status_code=409, detail="Approval was already consumed or denied")
     if status == "approval_mismatch":
         raise HTTPException(status_code=409, detail="Approval does not authorize this operation")
+    if status == "requester_mismatch":
+        raise HTTPException(status_code=403, detail="Approval belongs to a different requester")
     if status == "invalid_approved_payload":
         raise HTTPException(status_code=409, detail=result.get("error", status))
     return result
