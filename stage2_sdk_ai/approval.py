@@ -815,7 +815,10 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
     _ensure_dirs()
     # Validate the complete in-memory record before redaction so non-JSON and
     # non-finite values remain rejected rather than silently discarded.
-    json.dumps(record, allow_nan=False)
+    try:
+        json.dumps(record, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise AuditLogIntegrityError("audit event contains invalid JSON data") from exc
     safe_record = _audit_safe_record(record)
     entry = {"action": action, "time": time.time(), "record": safe_record}
     fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
