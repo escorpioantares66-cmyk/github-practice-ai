@@ -111,6 +111,12 @@ def check_rate_limit(
         return False
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ValueError("rate limit must be a positive integer")
+    if (
+        isinstance(window_seconds, bool)
+        or not isinstance(window_seconds, int)
+        or window_seconds < 1
+    ):
+        raise ValueError("rate window must be a positive integer")
     current = time.time() if now is None else now
     cutoff = current - window_seconds
     with _transaction() as connection:
@@ -152,13 +158,15 @@ def reserve_budget(
         or not math.isfinite(amount_usd) or amount_usd < 0
         or isinstance(daily_limit, bool) or not isinstance(daily_limit, (int, float))
         or not math.isfinite(daily_limit) or daily_limit <= 0
+        or isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int)
+        or ttl_seconds < 1
     ):
         raise ValueError("invalid quota reservation")
     current = time.time() if now is None else now
     with _transaction() as connection:
         connection.execute(
-            "DELETE FROM reservations WHERE expires_at<=? OR utc_day<>?",
-            (current, utc_day),
+            "DELETE FROM reservations WHERE expires_at<=?",
+            (current,),
         )
         spent = connection.execute(
             "SELECT amount_usd FROM daily_usage WHERE identity=? AND utc_day=?",
@@ -186,16 +194,14 @@ def release_budget(reservation_id: str) -> None:
         )
 
 
-def has_reservation(
-    identity: str, utc_day: str, reservation_id: str,
-) -> bool:
+def has_reservation(identity: str, reservation_id: str) -> bool:
     with _db() as connection:
         row = connection.execute(
             """
             SELECT 1 FROM reservations
-            WHERE identity=? AND utc_day=? AND reservation_id=? AND expires_at>?
+            WHERE identity=? AND reservation_id=? AND expires_at>?
             """,
-            (identity, utc_day, reservation_id, time.time()),
+            (identity, reservation_id, time.time()),
         ).fetchone()
     return row is not None
 
@@ -249,8 +255,8 @@ def reserve_estimated_cost(
     with _transaction() as connection:
         now = time.time()
         connection.execute(
-            "DELETE FROM reservations WHERE expires_at<=? OR utc_day<>?",
-            (now, utc_day),
+            "DELETE FROM reservations WHERE expires_at<=?",
+            (now,),
         )
         spent = connection.execute(
             "SELECT amount_usd FROM daily_usage WHERE identity=? AND utc_day=?",
