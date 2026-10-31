@@ -321,6 +321,8 @@ def execute_write_endpoint(
         "execution_failed",
         "execution_failed_audit_incomplete",
         "execution_failure_recording_failed",
+        "consumption_audit_incomplete",
+        "invalid_approved_payload_operator_review",
     }:
         raise HTTPException(
             status_code=500,
