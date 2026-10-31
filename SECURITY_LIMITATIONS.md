@@ -77,3 +77,20 @@ content, prompts, or credentials. This preserves event sequencing and
 correlation by approval ID without duplicating user-supplied payloads in the
 audit history. Existing historical audit entries are not rewritten by this
 change and may still contain previously recorded arguments.
+
+
+## Filesystem ownership and path boundaries
+
+Private storage directories and regular files must be owned by the application's
+effective operating-system user. Private files must be regular files with a
+single hard link; opens use nonblocking mode so a substituted FIFO cannot hang
+the process before its type is checked. Symlinks are rejected during
+descriptor-relative traversal and at the final file component.
+
+The storage helper starts traversal from the nearest accessible ancestor.
+That anchor is opened by absolute path, so its own ancestor chain must be
+trusted and must not be attacker-controlled. Components below the selected
+anchor are traversed relative to directory descriptors without following
+symlinks. These controls do not isolate hostile processes running under the
+same operating-system UID; use a dedicated service account and private
+persistent volume for production.

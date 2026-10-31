@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import stat
 
 import pytest
@@ -132,3 +133,52 @@ def test_read_note_rejects_symlinked_notes_directory(monkeypatch, tmp_path):
 
     with pytest.raises(UnsafeStoragePathError):
         read_tools.read_note("note.md", requester="test-requester")
+
+
+
+def test_private_directory_must_be_owned_by_effective_user(monkeypatch, tmp_path):
+    from stage2_sdk_ai import secure_storage
+
+    current_uid = os.geteuid()
+    monkeypatch.setattr(secure_storage.os, "geteuid", lambda: current_uid + 1)
+    with pytest.raises(UnsafeStoragePathError, match="owned by the application user"):
+        secure_storage.ensure_private_directory(tmp_path / "private")
+
+
+def test_private_file_must_be_owned_by_effective_user(monkeypatch, tmp_path):
+    from stage2_sdk_ai import secure_storage
+
+    private_dir = tmp_path / "private"
+    secure_storage.ensure_private_directory(private_dir)
+    target = private_dir / "record.json"
+    target.write_text("{}", encoding="utf-8")
+    current_uid = os.geteuid()
+    monkeypatch.setattr(secure_storage.os, "geteuid", lambda: current_uid + 1)
+
+    with pytest.raises(UnsafeStoragePathError, match="owned by the application user"):
+        secure_storage.open_private_file(target, os.O_RDONLY)
+
+
+def test_fifo_is_rejected_without_blocking(tmp_path):
+    from stage2_sdk_ai.secure_storage import open_private_file
+
+    private_dir = tmp_path / "private"
+    private_dir.mkdir(mode=0o700)
+    fifo = private_dir / "pipe"
+    os.mkfifo(fifo)
+
+    with pytest.raises(UnsafeStoragePathError, match="not a regular file"):
+        open_private_file(fifo, os.O_RDONLY)
+
+
+def test_hard_linked_private_file_is_rejected(tmp_path):
+    from stage2_sdk_ai.secure_storage import open_private_file
+
+    private_dir = tmp_path / "private"
+    private_dir.mkdir(mode=0o700)
+    stored = private_dir / "record.json"
+    stored.write_text("sensitive", encoding="utf-8")
+    os.link(stored, tmp_path / "outside-link")
+
+    with pytest.raises(UnsafeStoragePathError, match="additional hard links"):
+        open_private_file(stored, os.O_RDONLY)

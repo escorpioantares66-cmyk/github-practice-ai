@@ -34,6 +34,8 @@ def _open_directory_chain(path: Path, create: bool = False) -> int:
 
     # Android/Termux may deny opening '/'. Find an accessible ancestor above
     # the target, then verify every remaining component without following links.
+    # The absolute path used to open this anchor is part of the trusted host
+    # path boundary; do not place it beneath an attacker-controlled ancestor.
     anchor = target.parent
     while True:
         try:
@@ -67,6 +69,11 @@ def _open_directory_chain(path: Path, create: bool = False) -> int:
                 raise
             os.close(fd)
             fd = next_fd
+        info = os.fstat(fd)
+        if info.st_uid != os.geteuid():
+            raise UnsafeStoragePathError(
+                "Private storage directory must be owned by the application user"
+            )
         if create:
             os.fchmod(fd, 0o700)
         return fd
@@ -89,7 +96,10 @@ def open_private_file(path: Path, flags: int, mode: int = 0o600) -> int:
     try:
         fd = os.open(
             Path(path).name,
-            flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            flags
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0),
             mode,
             dir_fd=parent_fd,
         )
@@ -99,6 +109,16 @@ def open_private_file(path: Path, flags: int, mode: int = 0o600) -> int:
     if not stat.S_ISREG(info.st_mode):
         os.close(fd)
         raise UnsafeStoragePathError(f"Storage target is not a regular file: {path}")
+    if info.st_uid != os.geteuid():
+        os.close(fd)
+        raise UnsafeStoragePathError(
+            "Private storage file must be owned by the application user"
+        )
+    if info.st_nlink != 1:
+        os.close(fd)
+        raise UnsafeStoragePathError(
+            "Private storage file must not have additional hard links"
+        )
     os.fchmod(fd, mode)
     return fd
 
