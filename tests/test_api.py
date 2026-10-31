@@ -310,6 +310,46 @@ def test_approve_unknown_id_returns_not_found(client, monkeypatch):
     assert response.status_code == 404
 
 
+def test_operator_recovery_requires_approver_credentials(client):
+    response = client.get("/operator/recovery", headers={"X-API-Key": VALID_KEY})
+    assert response.status_code == 403
+
+
+def test_operator_recovery_returns_redacted_unresolved_execution(
+    client, monkeypatch
+):
+    from stage2_sdk_ai import approval
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "recovery-approver-secret")
+    requester = auth.requester_identity(VALID_KEY)
+    path = "notes/recovery-inspection.md"
+    request = approval.request_approval(
+        "write_note",
+        {"path": path, "content": "private note content must not be exposed"},
+        requester=requester,
+    )
+    approval_id = request["id"]
+    approved = approval.approve(approval_id, "recovery-approver-secret")
+    assert approved["status"] == "approved"
+    consumed = approval.consume_approval_request(
+        approval_id, "write_note", requester=requester
+    )
+    assert consumed["status"] == "consumed"
+
+    response = client.get(
+        "/operator/recovery",
+        headers={"X-Approver-Key": "recovery-approver-secret"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["items"][0]["approval_id"] == approval_id
+    assert body["items"][0]["execution_status"] == "started"
+    assert body["items"][0]["path"] == path
+    assert "private note content" not in response.text
+
+
 def test_concurrent_execute_has_exactly_one_winner(client, monkeypatch, tmp_path):
     from concurrent.futures import ThreadPoolExecutor
 
