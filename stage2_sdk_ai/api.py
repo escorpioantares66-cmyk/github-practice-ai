@@ -16,7 +16,78 @@ if not hasattr(pydantic.BaseModel, "model_fields"):
 
 logger = get_logger(__name__)
 
+# Bound request bodies before Starlette/FastAPI parses JSON. This protects
+# endpoints with small field-level limits (such as /write and /deny) from
+# oversized JSON payloads that would otherwise be parsed before validation.
+MAX_REQUEST_BODY_BYTES = 1_048_576  # 1 MiB
+
+
+class RequestBodyLimitMiddleware:
+    """ASGI middleware that caps body bytes before application parsing."""
+
+    def __init__(self, app, max_body_bytes: int = MAX_REQUEST_BODY_BYTES):
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        content_length = next(
+            (value for key, value in scope.get("headers", []) if key.lower() == b"content-length"),
+            None,
+        )
+        if content_length is not None:
+            try:
+                declared_length = int(content_length)
+            except ValueError:
+                declared_length = -1
+            if declared_length > self.max_body_bytes:
+                await self._too_large(scope, send)
+                return
+
+        # Buffer at most limit+1 bytes. This also enforces the limit when the
+        # client omits Content-Length or streams a chunked request body.
+        messages = []
+        total = 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                messages.append(message)
+                break
+            body = message.get("body", b"")
+            total += len(body)
+            if total > self.max_body_bytes:
+                await self._too_large(scope, send)
+                return
+            messages.append(message)
+            if not message.get("more_body", False):
+                break
+
+        async def replay_receive():
+            if messages:
+                return messages.pop(0)
+            return await receive()
+
+        await self.app(scope, replay_receive, send)
+
+    @staticmethod
+    async def _too_large(scope, send):
+        body = b'{"detail":"Request body too large"}'
+        await send({
+            "type": "http.response.start",
+            "status": 413,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+        })
+        await send({"type": "http.response.body", "body": body})
+
+
 app = FastAPI(title="github-practice-ai v7.0-prod")
+app.add_middleware(RequestBodyLimitMiddleware)
 
 
 @app.middleware("http")
