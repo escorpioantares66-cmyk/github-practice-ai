@@ -61,8 +61,11 @@ def _write_record_atomically(path: Path, record: dict[str, Any]) -> None:
 
 
 def request_approval(
-    tool: str, args: dict[str, Any], requester: str = "agent"
+    tool: str, args: dict[str, Any], requester: str
 ) -> dict[str, Any]:
+    """Create an approval owned by an authenticated requester identity."""
+    if not isinstance(requester, str) or not requester.strip():
+        raise ValueError("A requester identity is required")
     _ensure_dirs()
     record = {
         "tool": tool,
@@ -161,12 +164,13 @@ def consume_approval_request(
     approval_id: str,
     tool: str,
     args: dict[str, Any] | None = None,
+    requester: str | None = None,
 ) -> dict[str, Any]:
     """Atomically consume an approved operation and return its stored payload.
 
     When args is supplied, it must exactly match the approved arguments.
-    Omitting args is reserved for trusted server-side execution that loads
-    the immutable approved payload from the record itself.
+    Execution must provide the authenticated requester identity; ownership is
+    checked under the same lock before the one-time consume transition.
     """
     _ensure_dirs()
     path = _approval_path(approval_id)
@@ -188,6 +192,9 @@ def consume_approval_request(
                 "current_status": data.get("status"),
             }
 
+        if not requester or data.get("requester") != requester:
+            return {"status": "requester_mismatch", "id": approval_id}
+
         if data.get("tool") != tool or (
             args is not None and data.get("args") != args
         ):
@@ -201,10 +208,13 @@ def consume_approval_request(
 
 
 def consume_approval(
-    approval_id: str, tool: str, args: dict[str, Any]
+    approval_id: str,
+    tool: str,
+    args: dict[str, Any],
+    requester: str | None = None,
 ) -> dict[str, Any]:
-    """Consume an approval only when the caller's exact args match."""
-    return consume_approval_request(approval_id, tool, args)
+    """Consume an approval only for its owner and exact approved args."""
+    return consume_approval_request(approval_id, tool, args, requester)
 
 
 def log_audit(action: str, record: dict[str, Any]) -> None:
