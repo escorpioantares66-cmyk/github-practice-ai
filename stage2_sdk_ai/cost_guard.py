@@ -96,6 +96,7 @@ def record_model_usage(
     input_tokens: int,
     output_tokens: int,
     model: str = MODEL_NAME,
+    reservation_id: str | None = None,
 ) -> dict:
     if model != MODEL_NAME:
         raise ValueError("usage pricing is not configured for this model")
@@ -103,8 +104,15 @@ def record_model_usage(
     amount = (
         input_tokens * input_rate + output_tokens * output_rate
     ) / 1_000_000
+    usage_day = (
+        quota_store.reservation_day(requester, reservation_id)
+        if reservation_id is not None
+        else _utc_day()
+    )
+    if usage_day is None:
+        raise ValueError("active requester quota reservation is required")
     result = quota_store.record_model_usage(
-        requester, _utc_day(), input_tokens, output_tokens, amount
+        requester, usage_day, input_tokens, output_tokens, amount
     )
     with _cost_lock:
         COSTS[requester] = float(result["total"])
