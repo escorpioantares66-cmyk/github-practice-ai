@@ -13,8 +13,11 @@ assume it coordinates separate machines/containers with independent disks.
 The database must live on persistent storage; ephemeral deployment filesystems
 will lose quota history on replacement or redeploy.
 
-The API reserves a conservative worst-case allowance before running its
-bounded three-call agent loop. Reservations expire after one hour if a process
+The API and direct SDK real-mode agent runs reserve a conservative worst-case
+allowance before running the bounded three-call agent loop. Direct SDK callers
+must pass a trusted requester identity; missing identities fail before any
+provider request. The API passes its authenticated requester and pre-created
+reservation into the agent loop. Reservations expire after one hour if a process
 crashes and are released when a request completes. Actual usage is recorded
 from the provider response's prompt and completion token counts. Missing usage
 or a failed durable usage write stops further agent execution. The default
