@@ -706,3 +706,24 @@ def test_unauthorized_oversized_deny_is_rejected_before_body_limit(client):
     assert response.status_code == 403
     assert response.json()["detail"] == "Invalid or missing approver credentials"
     assert response.headers.get("x-request-id")
+
+
+
+def test_requester_rate_limit_runs_before_large_body_buffering(client):
+    from stage2_sdk_ai.api import MAX_REQUEST_BODY_BYTES
+
+    for _ in range(10):
+        response = client.post(
+            "/query",
+            json={"query": "rate-limit preflight"},
+            headers={"X-API-Key": VALID_KEY},
+        )
+        assert response.status_code == 200
+
+    response = client.post(
+        "/write",
+        content=b"x" * (MAX_REQUEST_BODY_BYTES + 1),
+        headers={"X-API-Key": VALID_KEY, "Content-Type": "application/json"},
+    )
+    assert response.status_code == 429
+    assert response.json()["detail"] == "Rate limit exceeded"
