@@ -6,6 +6,7 @@ fastapi.testclient.TestClient to drive real requests through the app --
 including the X-API-Key header, auth failures, rate limiting, request-id
 tracing, and unhandled-exception handling.
 """
+import hashlib
 import os
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-mocked")
@@ -223,7 +224,6 @@ def test_write_rejects_empty_note_path(client):
 
 
 def test_complete_approved_write_lifecycle(client, monkeypatch, tmp_path):
-    import hashlib
     from pathlib import Path
 
     from stage2_sdk_ai import auth
@@ -339,7 +339,6 @@ def test_concurrent_execute_has_exactly_one_winner(client, monkeypatch, tmp_path
         responses = list(pool.map(lambda _: execute(), range(2)))
 
     assert sorted(response.status_code for response in responses) == [200, 409]
-    import hashlib
     from stage2_sdk_ai import auth
 
     owner_dir = hashlib.sha256(
