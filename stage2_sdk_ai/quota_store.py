@@ -206,6 +206,18 @@ def has_reservation(identity: str, reservation_id: str) -> bool:
     return row is not None
 
 
+def reservation_day(identity: str, reservation_id: str) -> str | None:
+    with _db() as connection:
+        row = connection.execute(
+            """
+            SELECT utc_day FROM reservations
+            WHERE identity=? AND reservation_id=? AND expires_at>?
+            """,
+            (identity, reservation_id, time.time()),
+        ).fetchone()
+    return str(row[0]) if row else None
+
+
 def record_model_usage(
     identity: str, utc_day: str, input_tokens: int, output_tokens: int,
     amount_usd: float,
