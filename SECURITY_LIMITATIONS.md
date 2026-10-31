@@ -65,3 +65,20 @@ untrusted request-body fields; derive them from authenticated application
 context. The legacy shared `notes/<filename>` location is no longer used by
 these SDK operations. If existing shared notes must be retained, migrate them
 to the correct owner directory through a separately reviewed operator process.
+
+
+## Filesystem ownership and path boundaries
+
+Private storage directories and regular files must be owned by the application's
+effective operating-system user. Private files must be regular files with a
+single hard link; opens use nonblocking mode so a substituted FIFO cannot hang
+the process before its type is checked. Symlinks are rejected during
+descriptor-relative traversal and at the final file component.
+
+The storage helper starts traversal from the nearest accessible ancestor.
+That anchor is opened by absolute path, so its own ancestor chain must be
+trusted and must not be attacker-controlled. Components below the selected
+anchor are traversed relative to directory descriptors without following
+symlinks. These controls do not isolate hostile processes running under the
+same operating-system UID; use a dedicated service account and private
+persistent volume for production.
