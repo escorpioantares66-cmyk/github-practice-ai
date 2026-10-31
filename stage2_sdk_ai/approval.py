@@ -577,17 +577,10 @@ def list_pending() -> list[dict[str, Any]]:
             continue
         approval_id = path.stem
         try:
-            data = json.loads(read_private_text(path))
-            if (
-                not isinstance(data, dict)
-                or data.get("id") != approval_id
-            ):
-                raise CorruptApprovalRecordError("record ID does not match filename")
+            data = _load_approval_record(path, approval_id)
         except (
-    json.JSONDecodeError,
-    UnicodeDecodeError,
-    OSError,
-    CorruptApprovalRecordError,
+            OSError,
+            CorruptApprovalRecordError,
         ):
             logger.exception(
                 "skipping corrupt approval record; operator review required",
@@ -595,8 +588,8 @@ def list_pending() -> list[dict[str, Any]]:
             )
             continue
         if (
-            data.get("status") == "pending"
-            and data.get("request_audit_status") == "written"
+            data["status"] == "pending"
+            and data["request_audit_status"] == "written"
         ):
             pending.append(data)
     return pending
