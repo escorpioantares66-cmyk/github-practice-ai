@@ -115,7 +115,31 @@ def write_note(
             "is_mock": False,
         }
 
-    _atomic_write_note(safe_path, content)
+    try:
+        _atomic_write_note(safe_path, content)
+    except Exception as exc:
+        approval_record = approval.record_execution_failure(
+            approval_id, type(exc).__name__, str(exc)
+        )
+        logger.error(
+            "approved note write failed after approval was consumed",
+            exc_info=exc,
+            extra={
+                "approval_id": approval_id,
+                "path": str(safe_path),
+                "approval_status": approval_record.get("status"),
+                "recovery": "operator_review_required",
+            },
+        )
+        return {
+            "tool": "write_note",
+            "path": str(safe_path),
+            "status": "execution_failed",
+            "approval_id": approval_id,
+            "error": "Write failed after approval consumption; operator review required",
+            "is_mock": False,
+        }
+
     return {
         "tool": "write_note",
         "path": str(safe_path),
