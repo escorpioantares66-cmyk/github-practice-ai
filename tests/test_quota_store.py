@@ -94,3 +94,17 @@ def test_database_symlink_is_rejected(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_QUOTA_DB_PATH", str(link))
     with pytest.raises(quota_store.QuotaStoreError):
         quota_store.check_rate_limit("requester-a", "api", 10)
+
+
+
+def test_shared_quota_parent_is_rejected_without_chmod(monkeypatch, tmp_path):
+    import stat
+
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o755)
+    db = shared / "quotas.sqlite3"
+    monkeypatch.setenv("AGENT_QUOTA_DB_PATH", str(db))
+    with pytest.raises(quota_store.QuotaStoreError):
+        quota_store.check_rate_limit("requester-a", "api", 10)
+    assert stat.S_IMODE(shared.stat().st_mode) == 0o755
