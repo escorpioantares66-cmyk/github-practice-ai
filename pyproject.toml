@@ -47,7 +47,7 @@ python_files = "test_*.py"
 addopts = "-v --cov=stage2_sdk_ai --cov-report=term --cov-fail-under=80"
 
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=84.1.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
