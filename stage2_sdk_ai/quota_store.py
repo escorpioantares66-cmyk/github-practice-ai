@@ -24,11 +24,32 @@ def _path() -> Path:
     target = Path(configured).expanduser() if configured else DEFAULT_DB_PATH
     target = Path(os.path.abspath(target))
     try:
-        ensure_private_directory(target.parent)
+        parent = target.parent
+        if parent.exists():
+            parent_info = parent.lstat()
+            if (
+                not stat.S_ISDIR(parent_info.st_mode)
+                or stat.S_IMODE(parent_info.st_mode) & 0o077
+                or (
+                    hasattr(os, "getuid")
+                    and parent_info.st_uid != os.getuid()
+                )
+            ):
+                raise QuotaStoreError(
+                    "quota database parent must be an owner-only directory"
+                )
+        ensure_private_directory(parent)
         if target.is_symlink():
             raise QuotaStoreError("quota database cannot be a symlink")
-        if target.exists() and not stat.S_ISREG(target.lstat().st_mode):
-            raise QuotaStoreError("quota database must be a regular file")
+        if target.exists():
+            target_info = target.lstat()
+            if (
+                not stat.S_ISREG(target_info.st_mode)
+                or target_info.st_nlink != 1
+            ):
+                raise QuotaStoreError(
+                    "quota database must be a single-link regular file"
+                )
     except (OSError, ValueError) as exc:
         raise QuotaStoreError("quota storage path is unsafe or unavailable") from exc
     return target
