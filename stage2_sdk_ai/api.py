@@ -438,8 +438,11 @@ def execute_write_endpoint(
         raise HTTPException(status_code=409, detail=result.get("error", status))
     if status in {
         "execution_failed",
+        "execution_outcome_uncertain",
         "execution_failed_audit_incomplete",
         "execution_failure_recording_failed",
+        "execution_outcome_recording_failed",
+        "execution_succeeded_audit_incomplete",
         "consumption_audit_incomplete",
         "approval_audit_incomplete",
         "invalid_approved_payload_operator_review",
@@ -453,6 +456,20 @@ def execute_write_endpoint(
             },
         )
     return result
+
+
+@app.get("/operator/recovery")
+def operator_recovery_endpoint(
+    approver_key: str = Depends(_check_approver_auth),
+):
+    """Expose recovery metadata only to a rate-limited configured approver."""
+    identity = auth.approver_identity(approver_key)
+    if not auth.check_rate_limit(identity, role="approver"):
+        raise HTTPException(status_code=429, detail="Approver rate limit exceeded")
+    from stage2_sdk_ai import approval as approval_module
+
+    items = approval_module.list_execution_recovery()
+    return {"count": len(items), "items": items}
 
 
 def health():
