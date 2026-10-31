@@ -117,14 +117,18 @@ def write_note(
     }
 
 
-def execute_approved_write(approval_id: str) -> dict[str, Any]:
+def execute_approved_write(
+    approval_id: str, requester: str | None = None
+) -> dict[str, Any]:
     """Execute only the exact payload persisted in a valid approved record.
 
     The caller cannot supply a path or content. The approval is consumed
     atomically before any filesystem side effect, so concurrent requests
     cannot both execute the same authorization.
     """
-    consumed = consume_approval_request(approval_id, "write_note")
+    consumed = consume_approval_request(
+        approval_id, "write_note", requester=requester
+    )
     if consumed.get("status") != "consumed":
         return {
             "tool": "write_note",
