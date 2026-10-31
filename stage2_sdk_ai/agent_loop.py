@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from typing import Any
 
 from . import cost_guard
@@ -158,7 +159,7 @@ def _real_llm_pick_tool(
         return {"tool": "final", "args": {"answer": "I could not safely process that request."}}
 
 
-def run_agent(
+def _run_agent_steps(
     query: str, max_steps: int = 3, top_k: int = 3, requester: str | None = None
 ) -> dict[str, Any]:
     history: list[dict[str, Any]] = []
@@ -217,3 +218,58 @@ def _collect_sources(history):
         elif step.get("tool") == "read_note":
             sources.append({"path": result.get("path", ""), "text": result.get("content", "")})
     return sources
+
+
+
+def run_agent(
+    query: str,
+    max_steps: int = 3,
+    top_k: int = 3,
+    requester: str | None = None,
+    quota_reservation_id: str | None = None,
+) -> dict[str, Any]:
+    """Run the agent only under a valid daily quota reservation in real mode."""
+    if _is_mock():
+        return _run_agent_steps(query, max_steps=max_steps, top_k=top_k, requester=requester)
+    if not isinstance(requester, str) or not requester.strip():
+        raise UsageAccountingError("trusted requester identity is required for model usage")
+
+    owned_reservation = None
+    if quota_reservation_id is None:
+        owned_reservation = uuid.uuid4().hex
+        try:
+            reserved = cost_guard.reserve_request(requester, owned_reservation)
+        except Exception as exc:
+            raise UsageAccountingError("durable cost quota storage is unavailable") from exc
+        if not reserved:
+            return {
+                "query": query,
+                "answer": "daily cost limit $1 exceeded",
+                "steps": [],
+                "sources": [],
+                "blocked": True,
+                "is_mock": False,
+            }
+        quota_reservation_id = owned_reservation
+    else:
+        try:
+            valid_reservation = cost_guard.verify_request_reservation(
+                requester, quota_reservation_id
+            )
+        except Exception as exc:
+            raise UsageAccountingError("durable cost quota storage is unavailable") from exc
+        if not valid_reservation:
+            raise UsageAccountingError("an active requester quota reservation is required")
+
+    try:
+        return _run_agent_steps(
+            query, max_steps=max_steps, top_k=top_k, requester=requester
+        )
+    except UsageAccountingError:
+        # Unknown/unrecorded provider usage must keep the worst-case hold until
+        # its recovery TTL; releasing it could permit unaccounted spend.
+        owned_reservation = None
+        raise
+    finally:
+        if owned_reservation is not None:
+            cost_guard.release_request(owned_reservation)
