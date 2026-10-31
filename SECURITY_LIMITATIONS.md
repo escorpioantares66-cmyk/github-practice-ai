@@ -67,6 +67,18 @@ these SDK operations. If existing shared notes must be retained, migrate them
 to the correct owner directory through a separately reviewed operator process.
 
 
+## Audit data minimization
+
+Approval records retain their full arguments in the owner-only approval store
+because the approved operation needs those values at execution time. The
+append-only audit log intentionally records only a redaction marker and the
+number of argument fields; it does not store argument values such as note
+content, prompts, or credentials. This preserves event sequencing and
+correlation by approval ID without duplicating user-supplied payloads in the
+audit history. Existing historical audit entries are not rewritten by this
+change and may still contain previously recorded arguments.
+
+
 ## Filesystem ownership and path boundaries
 
 Private storage directories and regular files must be owned by the application's
