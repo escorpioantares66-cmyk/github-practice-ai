@@ -1,0 +1,42 @@
+name: ci-completion-report
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["ci-hardened-v1.1"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report CI result
+        env:
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion || 'manual' }}
+          CI_BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          CI_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          CI_URL: ${{ github.event.workflow_run.html_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id || github.run_id }}
+        run: |
+          {
+            echo "## CI completion report"
+            echo
+            echo "- **Workflow:** ci-hardened-v1.1"
+            echo "- **Result:** \`$CI_CONCLUSION\`"
+            echo "- **Branch:** \`$CI_BRANCH\`"
+            echo "- **Commit:** \`$CI_SHA\`"
+            echo "- **Run:** [View CI run]($CI_URL)"
+            echo
+            if [ "$CI_CONCLUSION" = "success" ]; then
+              echo "All configured CI jobs passed. No automated code changes were made."
+            elif [ "$CI_CONCLUSION" = "manual" ]; then
+              echo "Manual workflow-dispatch test. This verifies the reporting workflow runs; it does not represent a CI result."
+            else
+              echo "CI did not pass. Inspect the linked run and job logs; this reporting workflow does not modify source code."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "CI report completed with conclusion: $CI_CONCLUSION (run $CI_RUN_ID)"

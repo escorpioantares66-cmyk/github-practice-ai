@@ -11,20 +11,11 @@ from stage2_sdk_ai.safety_report import generate_safety_report
 
 
 def _get_input_fn():
-    for n in ["check_input", "validate_input", "is_safe_input", "check"]:
-        if hasattr(input_guard, n):
-            return getattr(input_guard, n)
-    return lambda x: {"is_safe": False, "blocked": True}
+    return input_guard.check_input
+
 
 def _get_output_fn():
-    for n in ["check_output", "validate_output", "filter_output"]:
-        if hasattr(output_guard, n):
-            return getattr(output_guard, n)
-
-    def _fallback(text, sources=None):
-        return {"filtered": True, "confidence": "low"}
-
-    return _fallback
+    return output_guard.check_output
 
 def test_injection_payloads_blocked():
     fn = _get_input_fn()
@@ -36,10 +27,7 @@ def test_pii_samples_filtered():
     fn = _get_output_fn()
 
     def wrapper(text):
-        try:
-            return fn(text, sources=["safe doc"])
-        except TypeError:
-            return fn(text)
+        return fn(text, sources=["safe doc"])
 
     result = eval_pii_guard(wrapper)
     assert result["total"] == len(PII_SAMPLES)
@@ -49,47 +37,32 @@ def test_cost_spike_blocked():
     for n in ["reset_cost", "reset", "clear"]:
         if hasattr(cost_guard, n):
             getattr(cost_guard, n)()
-    add_fn = getattr(cost_guard, "add_cost", getattr(cost_guard, "add", lambda *a: None))
-    check_fn = None
-    for n in ["check_cost", "check_limit", "check", "is_over_limit"]:
-        if hasattr(cost_guard, n):
-            check_fn = getattr(cost_guard, n)
-            break
-
-    def _default_check(*a):
-        return {"blocked": True}
-
-    if check_fn is None:
-        check_fn = _default_check
+    add_fn = cost_guard.add_cost
+    check_fn = cost_guard.check_cost
     result = eval_cost_guard(add_fn, check_fn)
     assert result["spike_blocked"] is True
     for n in ["reset_cost", "reset", "clear"]:
         if hasattr(cost_guard, n):
             getattr(cost_guard, n)()
 
-def test_approval_bypass_blocked():
+def test_approval_bypass_blocked(monkeypatch):
+    # Exercise the real approval path, not the mock-mode shortcut or a fake
+    # fallback response. An empty approval ID must never execute a write.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-live-test-not-a-real-credential")
     for n in ["reset_approvals", "reset", "clear"]:
         if hasattr(approval, n):
             getattr(approval, n)()
 
-    def write_wrapper(p, c):
-        try:
-            return write_tools.write_note(p, c, approval_id="")
-        except TypeError:
-            try:
-                return write_tools.write_note(p, c)
-            except TypeError:
-                return {"status": "needs_approval"}
-
-    result = eval_approval_bypass(write_wrapper)
-    assert result["blocked"] >= 2
+    result = eval_approval_bypass(
+        lambda path, content: write_tools.write_note(
+            path, content, approval_id=""
+        )
+    )
+    assert result["blocked"] == len(result["details"])
 
 def test_output_guard_confidence_levels():
     fn = _get_output_fn()
-    try:
-        r = fn("answer from sources", sources=["answer from sources doc"])
-    except TypeError:
-        r = fn("answer from sources")
+    r = fn("answer from sources", sources=["answer from sources doc"])
     conf = r.get("confidence", "low") if isinstance(r, dict) else "low"
     assert conf in ["low", "medium", "high"]
 
@@ -121,41 +94,56 @@ def test_direct_injection_block():
                 assert res.get("blocked", False) is True
 
 def test_direct_cost_limit():
-    for n in ["reset_cost", "reset", "clear"]:
-        if hasattr(cost_guard, n):
-            getattr(cost_guard, n)()
-    if hasattr(cost_guard, "add_cost"):
-        try:
-            cost_guard.add_cost("test-key-123", "word " * 10000)
-        except TypeError:
-            cost_guard.add_cost("word " * 10000)
-    check_fn = None
-    for n in ["check_limit", "check_cost", "check", "is_over_limit"]:
-        if hasattr(cost_guard, n):
-            check_fn = getattr(cost_guard, n)
-            break
-    if check_fn:
+    cost_guard.reset_cost()
+    cost_guard.add_cost("test-key-123", "word " * 10_000)
+    result = cost_guard.check_cost("test-key-123", "x")
+    assert result["blocked"] is True
+    cost_guard.reset_cost()
 
-        def _call_check():
-            try:
-                return check_fn("test-key-123", "x")
-            except TypeError:
-                try:
-                    return check_fn("x")
-                except TypeError:
-                    return check_fn()
 
-        res = _call_check()
-        if isinstance(res, bool):
-            assert res is False
-        else:
-            is_blocked = (
-                res.get("blocked", False)
-                or not res.get("is_ok", True)
-                or not res.get("allowed", True)
-                or res.get("over_limit", False)
-            )
-            assert is_blocked
-    for n in ["reset_cost", "reset", "clear"]:
-        if hasattr(cost_guard, n):
-            getattr(cost_guard, n)()
+
+def test_red_team_exceptions_are_failures():
+    failed_input = eval_input_guard(
+        lambda _payload: (_ for _ in ()).throw(RuntimeError("guard failed"))
+    )
+    assert failed_input["pass_rate"] == 0
+    assert all(item["blocked"] is False for item in failed_input["details"])
+
+    failed_pii = eval_pii_guard(
+        lambda _payload: (_ for _ in ()).throw(RuntimeError("filter failed"))
+    )
+    assert failed_pii["pass_rate"] == 0
+    assert all(item["filtered"] is False for item in failed_pii["details"])
+
+
+def test_low_confidence_does_not_count_as_pii_redaction():
+    result = eval_pii_guard(
+        lambda payload: {
+            "filtered": True,
+            "confidence": "low",
+            "text": payload,
+        }
+    )
+    assert result["pass_rate"] == 0
+
+
+def test_pii_evaluator_requires_redacted_output():
+    result = eval_pii_guard(
+        lambda payload: output_guard.check_output(payload, sources=[])
+    )
+    assert result["pass_rate"] == 1
+
+
+def test_cost_and_approval_evaluator_exceptions_are_failures():
+    cost_result = eval_cost_guard(
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("cost add failed")),
+        lambda *_args: {"blocked": True},
+    )
+    assert cost_result["pass"] is False
+    assert cost_result["spike_blocked"] is False
+
+    approval_result = eval_approval_bypass(
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("approval failed"))
+    )
+    assert approval_result["pass_rate"] == 0
+    assert all(item["blocked"] is False for item in approval_result["details"])

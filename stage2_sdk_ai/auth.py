@@ -1,46 +1,83 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
+import threading
 import time
 from collections import defaultdict
 
 _rate: dict[str, list[float]] = defaultdict(list)
 _MAX_PER_MIN = 10
+_rate_lock = threading.Lock()
+
+
+def _configured_requester_keys() -> list[tuple[str, str]]:
+    """Return (identity, secret) pairs from AGENT_API_KEYS.
+
+    Preferred syntax is identity=secret, comma-separated. Legacy bare
+    secrets remain accepted and receive a deterministic fingerprint identity.
+    Keep an identity label stable when rotating its secret.
+    """
+    raw = os.getenv("AGENT_API_KEYS", "").strip()
+    configured: list[tuple[str, str]] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" in item:
+            identity, secret = item.split("=", 1)
+            identity, secret = identity.strip(), secret.strip()
+            if not identity or not secret:
+                continue
+        else:
+            secret = item
+            identity = "requester-" + hashlib.sha256(
+                secret.encode("utf-8")
+            ).hexdigest()[:12]
+        configured.append((identity, secret))
+    return configured
 
 
 def _allowed_keys() -> list[str]:
-    """Return explicitly configured API keys.
-
-    API authentication must not depend on AI mock mode or the presence
-    of OPENAI_API_KEY. Missing AGENT_API_KEYS fails closed.
-    """
-    raw = os.getenv("AGENT_API_KEYS", "").strip()
-    if not raw:
-        return []
-    return [key.strip() for key in raw.split(",") if key.strip()]
+    """Return explicitly configured API secrets; missing configuration fails closed."""
+    return [secret for _, secret in _configured_requester_keys()]
 
 
 def check_auth(api_key: str | None) -> dict[str, object]:
     allowed = _allowed_keys()
     if not api_key:
         return {"is_ok": False, "reason": "missing api key"}
-    if api_key not in allowed:
+    if not any(hmac.compare_digest(api_key, key) for key in allowed):
         return {"is_ok": False, "reason": "invalid key"}
     return {"is_ok": True, "reason": "ok"}
 
 
+def requester_identity(api_key: str | None) -> str | None:
+    """Resolve a valid API secret to its stable, non-secret requester identity."""
+    if not api_key:
+        return None
+    for identity, secret in _configured_requester_keys():
+        if hmac.compare_digest(api_key, secret):
+            return identity
+    return None
+
+
 def check_rate(api_key: str) -> dict[str, object]:
+    """Atomically enforce a per-process sliding-window limit."""
     now = time.time()
-    window = [t for t in _rate[api_key] if now - t < 60]
-    _rate[api_key] = window
-    if len(window) >= _MAX_PER_MIN:
-        return {"is_ok": False, "reason": f"rate limit {_MAX_PER_MIN}/min"}
-    _rate[api_key].append(now)
-    return {"is_ok": True, "reason": "ok"}
+    with _rate_lock:
+        window = [t for t in _rate[api_key] if now - t < 60]
+        _rate[api_key] = window
+        if len(window) >= _MAX_PER_MIN:
+            return {"is_ok": False, "reason": f"rate limit {_MAX_PER_MIN}/min"}
+        window.append(now)
+        return {"is_ok": True, "reason": "ok"}
 
 
 def reset_rate() -> None:
-    _rate.clear()
+    with _rate_lock:
+        _rate.clear()
 
 
 def verify_api_key(api_key: str | None) -> bool:
@@ -49,3 +86,53 @@ def verify_api_key(api_key: str | None) -> bool:
 
 def check_rate_limit(api_key: str) -> bool:
     return check_rate(api_key).get("is_ok", False)
+
+def _configured_approver_keys() -> list[tuple[str, str]]:
+    """Return stable approver identity/secret pairs from AGENT_APPROVER_KEYS."""
+    raw = os.getenv("AGENT_APPROVER_KEYS", "").strip()
+    configured: list[tuple[str, str]] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if "=" in item:
+            identity, secret = item.split("=", 1)
+            identity, secret = identity.strip(), secret.strip()
+            if not identity or not secret:
+                continue
+        else:
+            secret = item
+            identity = "approver-" + hashlib.sha256(
+                secret.encode("utf-8")
+            ).hexdigest()[:12]
+        configured.append((identity, secret))
+    return configured
+
+
+def verify_approver_key(approver_key: str | None) -> bool:
+    """Accept only explicitly configured approval credentials."""
+    if not approver_key:
+        return False
+    return any(
+        hmac.compare_digest(approver_key, secret)
+        for _, secret in _configured_approver_keys()
+    )
+
+
+def approver_identity(approver_key: str) -> str:
+    """Resolve a valid approver secret to its stable configured identity."""
+    for identity, secret in _configured_approver_keys():
+        if hmac.compare_digest(approver_key, secret):
+            return identity
+    raise ValueError("Approver identity is not configured")
+
+
+def requester_rate_limit_identity(api_key: str | None) -> str | None:
+    """Use the configured requester identity, not its rotating secret, for limits."""
+    return requester_identity(api_key)
+
+
+def check_requester_rate_limit(api_key: str | None) -> bool:
+    """Apply the requester rate limit to its stable configured identity."""
+    identity = requester_rate_limit_identity(api_key)
+    return bool(identity and check_rate_limit(identity))

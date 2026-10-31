@@ -14,12 +14,14 @@ def test_generate_safety_report_all_fail_is_needs_fix():
     appr = {"pass_rate": 0.0}
     report = generate_safety_report(inj, pii, cost, appr, tests_passed=0)
     assert report["overall"] == "NEEDS_FIX"
+    assert report["recommendation"].startswith("Do not deploy")
     assert report["levels"]["L2_input_output"] == "FAIL"
     assert report["levels"]["L3_auth_ratelimit_cost"] == "FAIL"
     assert report["levels"]["L4_human_approval"] == "FAIL"
     assert report["levels"]["L5_redteam"] == "FAIL"
     # L1 is always PASS -- there is no readonly check to fail.
     assert report["levels"]["L1_readonly"] == "PASS"
+    assert report["recommendation"].startswith("Do not deploy")
 
 
 def test_generate_safety_report_mixed_pass_fail():
@@ -51,6 +53,7 @@ def test_generate_safety_report_custom_coverage_label():
     )
     assert report["coverage_gate"] == "80%+ (verified)"
     assert report["overall"] == "SAFE_TO_DEPLOY"
+    assert report["recommendation"] == "Deploy with L1-L5 active."
 
 
 def test_report_to_markdown_renders_all_sections():

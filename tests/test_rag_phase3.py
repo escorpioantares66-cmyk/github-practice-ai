@@ -1,3 +1,7 @@
+import os
+
+os.environ.setdefault("OPENAI_API_KEY", "sk-test-mocked")
+
 from stage2_sdk_ai.api import health, query
 from stage2_sdk_ai.rag_chain import query_rag
 from stage2_sdk_ai.vector_store import RealVectorStore

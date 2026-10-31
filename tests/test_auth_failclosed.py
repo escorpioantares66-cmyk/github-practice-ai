@@ -11,6 +11,9 @@ These tests verify:
      rejects every key -- fail closed.
   3. Production mode with AGENT_API_KEYS configured accepts only those keys.
 """
+from concurrent.futures import ThreadPoolExecutor
+
+from stage2_sdk_ai import auth
 from stage2_sdk_ai.auth import _allowed_keys, check_auth
 
 
@@ -61,3 +64,56 @@ def test_allowed_keys_empty_in_production_without_config(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-key")
     monkeypatch.delenv("AGENT_API_KEYS", raising=False)
     assert _allowed_keys() == []
+
+
+def test_requester_rate_limit_uses_stable_identity_across_secret_rotation(monkeypatch):
+
+    auth.reset_rate()
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=old-secret")
+    assert auth.requester_identity("old-secret") == "automation"
+    for _ in range(auth._MAX_PER_MIN):
+        assert auth.check_requester_rate_limit("old-secret") is True
+
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=new-secret")
+    assert auth.requester_identity("new-secret") == "automation"
+    assert auth.check_requester_rate_limit("new-secret") is False
+    auth.reset_rate()
+
+
+def test_different_requester_identities_have_independent_rate_limits(monkeypatch):
+
+    auth.reset_rate()
+    monkeypatch.setenv(
+        "AGENT_API_KEYS", "automation-a=secret-a,automation-b=secret-b"
+    )
+    for _ in range(auth._MAX_PER_MIN):
+        assert auth.check_requester_rate_limit("secret-a") is True
+    assert auth.check_requester_rate_limit("secret-a") is False
+    assert auth.check_requester_rate_limit("secret-b") is True
+    auth.reset_rate()
+
+
+def test_approver_rate_limit_uses_stable_identity_across_secret_rotation(monkeypatch):
+
+    auth.reset_rate()
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=old-approver-secret")
+    assert auth.verify_approver_key("old-approver-secret")
+    identity = auth.approver_identity("old-approver-secret")
+    assert identity == "reviewer"
+    for _ in range(auth._MAX_PER_MIN):
+        assert auth.check_rate_limit(identity)
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=new-approver-secret")
+    assert auth.verify_approver_key("new-approver-secret")
+    assert auth.approver_identity("new-approver-secret") == identity
+    assert not auth.check_rate_limit(identity)
+    auth.reset_rate()
+
+
+def test_rate_limit_is_atomic_under_concurrent_requests(monkeypatch):
+    auth.reset_rate()
+    monkeypatch.setattr(auth, "_MAX_PER_MIN", 10)
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        results = list(pool.map(auth.check_rate_limit, ["parallel-worker"] * 100))
+    assert sum(results) == 10
+    auth.reset_rate()
