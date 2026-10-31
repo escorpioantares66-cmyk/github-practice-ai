@@ -279,3 +279,20 @@ def test_audit_hash_chain_anchors_legacy_prefix(monkeypatch, tmp_path):
         pass
     else:
         raise AssertionError("modified legacy prefix was accepted")
+
+
+def test_audit_hash_chain_rejects_duplicate_json_keys(monkeypatch, tmp_path):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    approval._ensure_dirs()
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    audit_path.write_text(
+        '{"action":"request","action":"denied","time":1.0,'
+        '"record":{"id":"' + "c" * 32 + '"}}' + chr(10),
+        encoding="utf-8",
+    )
+    try:
+        approval.verify_audit_log()
+    except approval.AuditLogIntegrityError:
+        pass
+    else:
+        raise AssertionError("duplicate JSON keys were accepted")
