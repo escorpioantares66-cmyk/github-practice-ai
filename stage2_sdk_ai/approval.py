@@ -267,7 +267,8 @@ def _load_approval_record(path: Path, approval_id: str) -> dict[str, Any]:
         outcome_status = execution.get("status")
         started_at = execution.get("started_at")
         if (
-            outcome_status not in {
+            data["status"] != "consumed"
+            or outcome_status not in {
                 "started", "completed", "failed", "uncertain", "blocked"
             }
             or isinstance(started_at, bool)
