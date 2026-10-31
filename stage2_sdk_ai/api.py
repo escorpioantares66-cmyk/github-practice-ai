@@ -271,6 +271,9 @@ def query_endpoint(req: QueryReq, api_key: str = Depends(_check_auth)):
         # Keep the worst-case reservation when provider usage is unknown or
         # could not be durably stored. It expires only after the recovery TTL.
         raise
+    except Exception:
+        cost_guard.release_request(reservation_id)
+        raise
     else:
         cost_guard.release_request(reservation_id)
     out = output_guard.check_output(res.get("answer", ""), res.get("sources", []))
