@@ -4,8 +4,10 @@
 
 Requester and approver rate-limit events and daily model usage are stored in
 SQLite at `.agent_state/quotas.sqlite3` by default. Override the location with
-`AGENT_QUOTA_DB_PATH`. The parent directory is created with mode 0700 and the
-database is restricted to mode 0600. SQLite write transactions serialize quota
+`AGENT_QUOTA_DB_PATH`. A missing parent directory is created with mode 0700; an existing parent must
+already be owned by the application user and have no group/other permissions.
+The application refuses unsafe parents rather than changing permissions on a
+shared directory. The database is restricted to mode 0600. SQLite write transactions serialize quota
 decisions across local worker processes sharing the same persistent filesystem.
 
 This is a **single-host** design. Do not put the SQLite database on NFS or
