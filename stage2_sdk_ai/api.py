@@ -184,7 +184,7 @@ def _check_approver_auth(
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "version": "v7.0-prod", "tests": "39 passed"}
+    return {"status": "ok", "version": "v7.0-prod"}
 
 @app.get("/")
 def root():
