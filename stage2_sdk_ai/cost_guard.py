@@ -140,6 +140,11 @@ def check_cost(api_key: str, text: str = "") -> dict:
     usage = quota_store.get_daily_usage(key, _utc_day())
     total = float(usage["total"])
     reserved = float(usage["reserved"])
+    with _cost_lock:
+        if total:
+            COSTS[key] = total
+        else:
+            COSTS.pop(key, None)
     projected = total + reserved + estimate
     allowed = projected <= DAILY_LIMIT
     return {
