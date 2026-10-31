@@ -68,6 +68,7 @@ def _report_execution_failure(
     path: Path,
     original_error: Exception,
     result_status: str = "execution_failed",
+    outcome_status: str = "failed",
 ) -> dict[str, Any]:
     """Log the side-effect failure before attempting fallible recovery writes."""
     logger.error(
@@ -89,7 +90,8 @@ def _report_execution_failure(
     }
     try:
         record = approval.record_execution_failure(
-            approval_id, type(original_error).__name__, str(original_error)
+            approval_id, type(original_error).__name__, str(original_error),
+            outcome_status=outcome_status,
         )
     except Exception as reporting_error:
         logger.error(
@@ -236,6 +238,7 @@ def write_note(
         return _report_execution_failure(
             approval_id, safe_path, audit_error,
             result_status="consumption_audit_incomplete",
+            outcome_status="blocked",
         )
 
     try:
@@ -250,7 +253,28 @@ def write_note(
                 if isinstance(exc, AtomicWriteDurabilityError)
                 else "execution_failed"
             ),
+            outcome_status=(
+                "uncertain" if isinstance(exc, AtomicWriteDurabilityError) else "failed"
+            ),
         )
+
+    outcome = approval.record_execution_success(approval_id)
+    if outcome.get("status") != "completed":
+        logger.error(
+            "note write completed but its final execution outcome needs operator review",
+            extra={"approval_id": approval_id, "outcome_status": outcome.get("status")},
+        )
+        return {
+            "tool": "write_note",
+            "path": str(safe_path),
+            "status": outcome.get("status", "execution_outcome_recording_failed"),
+            "approval_id": approval_id,
+            "error": (
+                "Note write completed; verify the destination and execution audit "
+                "before taking further action"
+            ),
+            "is_mock": False,
+        }
 
     return {
         "tool": "write_note",
@@ -300,6 +324,7 @@ def execute_approved_write(
             Path("<unknown-approved-path>"),
             audit_error,
             result_status="consumption_audit_incomplete",
+            outcome_status="blocked",
         )
 
     args = consumed.get("args")
@@ -309,6 +334,7 @@ def execute_approved_write(
             Path("<invalid-approved-path>"),
             ValueError("Approved payload must be an object"),
             result_status="invalid_approved_payload_operator_review",
+            outcome_status="blocked",
         )
 
     safe_path, error = _validate_note_payload(
@@ -321,6 +347,7 @@ def execute_approved_write(
             Path("<invalid-approved-path>"),
             validation_error,
             result_status="invalid_approved_payload_operator_review",
+            outcome_status="blocked",
         )
 
     try:
@@ -337,7 +364,28 @@ def execute_approved_write(
                 if isinstance(exc, AtomicWriteDurabilityError)
                 else "execution_failed"
             ),
+            outcome_status=(
+                "uncertain" if isinstance(exc, AtomicWriteDurabilityError) else "failed"
+            ),
         )
+
+    outcome = approval.record_execution_success(approval_id)
+    if outcome.get("status") != "completed":
+        logger.error(
+            "note write completed but its final execution outcome needs operator review",
+            extra={"approval_id": approval_id, "outcome_status": outcome.get("status")},
+        )
+        return {
+            "tool": "write_note",
+            "path": str(safe_path),
+            "status": outcome.get("status", "execution_outcome_recording_failed"),
+            "approval_id": approval_id,
+            "error": (
+                "Note write completed; verify the destination and execution audit "
+                "before taking further action"
+            ),
+            "is_mock": False,
+        }
 
     return {
         "tool": "write_note",

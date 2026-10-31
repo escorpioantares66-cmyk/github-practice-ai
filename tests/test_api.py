@@ -310,6 +310,45 @@ def test_approve_unknown_id_returns_not_found(client, monkeypatch):
     assert response.status_code == 404
 
 
+def test_operator_recovery_requires_approver_credentials(client):
+    response = client.get("/operator/recovery", headers={"X-API-Key": VALID_KEY})
+    assert response.status_code == 403
+
+
+def test_operator_recovery_returns_redacted_unresolved_execution(
+    client, monkeypatch
+):
+    from stage2_sdk_ai import approval
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "recovery-approver-secret")
+    requester = auth.requester_identity(VALID_KEY)
+    path = "notes/recovery-inspection.md"
+    request = approval.request_approval(
+        "write_note",
+        {"path": path, "content": "private note content must not be exposed"},
+        requester=requester,
+    )
+    approval_id = request["id"]
+    approved = approval.approve(approval_id, "recovery-approver-secret")
+    assert approved["status"] == "approved"
+    consumed = approval.consume_approval_request(
+        approval_id, "write_note", requester=requester
+    )
+    assert consumed["status"] == "consumed"
+
+    response = client.get(
+        "/operator/recovery",
+        headers={"X-Approver-Key": "recovery-approver-secret"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["items"][0]["approval_id"] == approval_id
+    assert body["items"][0]["execution_status"] == "started"
+    assert body["items"][0]["path"] == path
+    assert "private note content" not in response.text
+
 def test_concurrent_execute_has_exactly_one_winner(client, monkeypatch, tmp_path):
     from concurrent.futures import ThreadPoolExecutor
 
@@ -727,3 +766,49 @@ def test_requester_rate_limit_runs_before_large_body_buffering(client):
     )
     assert response.status_code == 429
     assert response.json()["detail"] == "Rate limit exceeded"
+
+
+@pytest.mark.parametrize("operation", ["approve", "deny", "execute"])
+def test_corrupt_approval_records_return_operator_error_not_success(
+    client, monkeypatch, operation
+):
+    from stage2_sdk_ai import approval
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=approver-secret")
+    created = client.post(
+        "/write",
+        json={"path": "corrupt-record.md", "content": "approved content"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert created.status_code == 200
+    approval_id = created.json()["approval_id"]
+
+    if operation == "execute":
+        approved = client.post(
+            f"/approve?approval_id={approval_id}",
+            headers={"X-Approver-Key": "approver-secret"},
+        )
+        assert approved.status_code == 200
+
+    approval._approval_path(approval_id).write_text("{malformed", encoding="utf-8")
+
+    if operation == "approve":
+        response = client.post(
+            f"/approve?approval_id={approval_id}",
+            headers={"X-Approver-Key": "approver-secret"},
+        )
+    elif operation == "deny":
+        response = client.post(
+            "/deny",
+            json={"approval_id": approval_id, "reason": "operator test"},
+            headers={"X-Approver-Key": "approver-secret"},
+        )
+    else:
+        response = client.post(
+            "/write/execute",
+            json={"approval_id": approval_id},
+            headers={"X-API-Key": VALID_KEY},
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["error"] == "corrupt_approval_record"
