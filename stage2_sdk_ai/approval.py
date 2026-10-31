@@ -557,7 +557,7 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int]:
         line = raw_line.rstrip(b"\r\n")
         try:
             entry = json.loads(line, object_pairs_hook=_reject_duplicate_json_keys)
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        except ValueError as exc:
             raise AuditLogIntegrityError(
                 f"audit log entry {line_number} is invalid; operator review required"
             ) from exc
