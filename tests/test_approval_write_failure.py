@@ -476,7 +476,7 @@ def test_audit_log_invalid_complete_line_is_not_rewritten(
     monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
     audit_path = tmp_path / "logs" / "audit.jsonl"
     audit_path.parent.mkdir(parents=True)
-    damaged = b"{not-json}\\n"
+    damaged = b"{not-json}\n"
     audit_path.write_bytes(damaged)
 
     try:
