@@ -360,7 +360,10 @@ def deny_endpoint(
     )
     status = result.get("status")
     if status in {"unauthorized", "self_approval_denied"}:
-        raise HTTPException(status_code=403, detail="Approver must be a distinct configured identity")
+        raise HTTPException(
+            status_code=403,
+            detail="Approver must be a distinct configured identity",
+        )
     if status == "expired":
         raise HTTPException(status_code=410, detail="Approval request has expired")
     if status == "not_found":
