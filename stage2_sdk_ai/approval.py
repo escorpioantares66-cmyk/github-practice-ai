@@ -551,8 +551,13 @@ def _validate_audit_event(entry: Any, line_number: int) -> None:
         "denied": {
             "approval_audit_status", "approver", "denied_at", "reason",
         },
-        "consumed": {"approval_audit_status", "consumed_at"},
-        "execution_failed": {"approval_audit_status", "consumed_at", "execution_failure"},
+        "consumed": {
+            "approval_audit_status", "approver", "approved_at", "consumed_at",
+        },
+        "execution_failed": {
+            "approval_audit_status", "approver", "approved_at", "consumed_at",
+            "execution_failure",
+        },
     }
     if set(record) != base_fields | action_fields[action]:
         invalid()
