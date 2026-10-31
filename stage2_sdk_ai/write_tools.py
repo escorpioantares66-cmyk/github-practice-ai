@@ -54,6 +54,89 @@ def _validate_note_payload(path: Any, content: Any) -> tuple[Path | None, str | 
     return safe_path, None
 
 
+def _report_execution_failure(
+    approval_id: str, path: Path, original_error: Exception
+) -> dict[str, Any]:
+    """Log the side-effect failure before attempting fallible recovery writes."""
+    logger.error(
+        "approved note write failed after approval was consumed",
+        exc_info=original_error,
+        extra={
+            "approval_id": approval_id,
+            "path": str(path),
+            "approval_status": "consumed",
+            "recovery": "operator_review_required",
+            "failure_record_status": "pending",
+        },
+    )
+    base = {
+        "tool": "write_note",
+        "path": str(path),
+        "approval_id": approval_id,
+        "is_mock": False,
+    }
+    try:
+        record = approval.record_execution_failure(
+            approval_id, type(original_error).__name__, str(original_error)
+        )
+    except Exception as reporting_error:
+        logger.error(
+            "failed to persist approved write failure metadata",
+            exc_info=reporting_error,
+            extra={
+                "approval_id": approval_id,
+                "path": str(path),
+                "approval_status": "consumed",
+                "recovery": "operator_review_required",
+                "original_error_type": type(original_error).__name__,
+            },
+        )
+        return {
+            **base,
+            "status": "execution_failure_recording_failed",
+            "error": "Write failed after approval consumption; failure metadata could not be confirmed; operator review required",
+        }
+
+    if record.get("status") != "consumed":
+        logger.error(
+            "approved write failure metadata was not recorded",
+            extra={
+                "approval_id": approval_id,
+                "approval_status": record.get("status"),
+                "recovery": "operator_review_required",
+                "original_error_type": type(original_error).__name__,
+            },
+        )
+        return {
+            **base,
+            "status": "execution_failure_recording_failed",
+            "error": "Write failed after approval consumption; approval record needs operator inspection",
+        }
+
+    if record.get("audit_status") == "failed":
+        logger.error(
+            "approved write failure metadata saved but audit append failed",
+            extra={
+                "approval_id": approval_id,
+                "approval_status": "consumed",
+                "recovery": "operator_review_required",
+                "audit_error_type": record.get("audit_error_type"),
+            },
+        )
+        return {
+            **base,
+            "status": "execution_failed_audit_incomplete",
+            "error": "Write failed; approval failure metadata was saved but audit logging failed; operator review required",
+        }
+
+    return {
+        **base,
+        "status": "execution_failed",
+        "error": "Write failed after approval consumption; operator review required",
+    }
+}
+
+
 def write_note(
     path: str,
     content: str,
@@ -119,27 +202,7 @@ def write_note(
     try:
         _atomic_write_note(safe_path, content)
     except Exception as exc:
-        approval_record = approval.record_execution_failure(
-            approval_id, type(exc).__name__, str(exc)
-        )
-        logger.error(
-            "approved note write failed after approval was consumed",
-            exc_info=exc,
-            extra={
-                "approval_id": approval_id,
-                "path": str(safe_path),
-                "approval_status": approval_record.get("status"),
-                "recovery": "operator_review_required",
-            },
-        )
-        return {
-            "tool": "write_note",
-            "path": str(safe_path),
-            "status": "execution_failed",
-            "approval_id": approval_id,
-            "error": "Write failed after approval consumption; operator review required",
-            "is_mock": False,
-        }
+        return _report_execution_failure(approval_id, safe_path, exc)
 
     return {
         "tool": "write_note",
@@ -192,30 +255,9 @@ def execute_approved_write(
     try:
         _atomic_write_note(safe_path, args["content"])
     except Exception as exc:
-        # Consumption remains terminal: never restore this approval to
-        # "approved" after a failed side effect. Record enough private audit
-        # context for an operator to inspect and recover manually.
-        approval_record = approval.record_execution_failure(
-            approval_id, type(exc).__name__, str(exc)
-        )
-        logger.error(
-            "approved note write failed after approval was consumed",
-            exc_info=exc,
-            extra={
-                "approval_id": approval_id,
-                "path": str(safe_path),
-                "approval_status": approval_record.get("status"),
-                "recovery": "operator_review_required",
-            },
-        )
-        return {
-            "tool": "write_note",
-            "path": str(safe_path),
-            "status": "execution_failed",
-            "approval_id": approval_id,
-            "error": "Write failed after approval consumption; operator review required",
-            "is_mock": False,
-        }
+        # Never restore consumed authorization; secondary reporting failures
+        # must not hide the original filesystem exception.
+        return _report_execution_failure(approval_id, safe_path, exc)
 
     return {
         "tool": "write_note",
