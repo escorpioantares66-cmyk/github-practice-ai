@@ -4,9 +4,9 @@ This module deliberately does not move, rewrite, or delete source evidence.
 """
 from __future__ import annotations
 
+import json
 import math
 import time
-from pathlib import Path
 from typing import Any
 
 from . import approval
@@ -32,7 +32,7 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
     excluded: dict[str, int] = {}
     approval_count = 0
 
-    approval._ensure_dirs()
+    # A planner must not create missing storage directories or files.
     for path in sorted(approval._approvals_dir.glob("*.json")):
         approval_count += 1
         reason = None
@@ -46,15 +46,15 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
                 reason = "corrupt_or_unreadable"
             else:
                 created = float(record["created"])
-                if created >= cutoff:
-                    reason = "within_retention"
-                elif created > current + approval.MAX_APPROVAL_CLOCK_SKEW_SECONDS:
+                if created > current + approval.MAX_APPROVAL_CLOCK_SKEW_SECONDS:
                     reason = "future_dated"
+                elif created >= cutoff:
+                    reason = "within_retention"
                 elif record.get("request_audit_status") != "written":
                     reason = "request_audit_incomplete"
                 elif record["status"] == "pending":
-                    # A pending record older than the 15-minute approval TTL
-                    # is no longer executable, but still needs complete audit.
+                    # Expired pending requests cannot be executed, but their
+                    # original request event must still be fully audited.
                     if not approval._approval_expired(created, current):
                         reason = "still_executable"
                 elif record["status"] in {"approved", "denied"}:
@@ -77,17 +77,22 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
         else:
             excluded[reason] = excluded.get(reason, 0) + 1
 
-    # Verify the entire active chain before reporting any audit events as
-    # eligible. Stage 1 only plans a verified archive snapshot; it never
-    # extracts disconnected hash-chain fragments or truncates the source.
-    audit_state = approval.verify_audit_log()
-    audit_contents = read_private_text(approval._audit_file)
+    # Validate the complete active chain without calling verify_audit_log(),
+    # which opens a missing audit file with O_CREAT and would mutate storage.
+    audit_path = approval._audit_file
+    if audit_path.is_symlink():
+        raise approval.AuditLogIntegrityError("audit log cannot be a symlink")
+    if audit_path.exists():
+        audit_contents = read_private_text(audit_path).encode("utf-8")
+    else:
+        audit_contents = b""
+    sequence, head_hash, total, legacy_count, _ = approval._audit_chain_state(
+        audit_contents
+    )
     old_audit_events = 0
     for raw_line in audit_contents.splitlines():
         if not raw_line:
             continue
-        import json
-
         event = json.loads(raw_line)
         if float(event["time"]) < cutoff:
             old_audit_events += 1
@@ -103,9 +108,10 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
         "eligible_approval_ids": eligible,
         "approval_records_excluded": excluded,
         "audit_log_verified": True,
-        "audit_entries_scanned": audit_state["entries"],
+        "audit_entries_scanned": total,
+        "audit_legacy_entries": legacy_count,
         "audit_entries_older_than_cutoff": old_audit_events,
-        "audit_head_sequence": audit_state["chained_entries"],
-        "audit_head_hash": audit_state["head_hash"],
+        "audit_head_sequence": sequence,
+        "audit_head_hash": head_hash,
         "audit_archive_mode": "verified_snapshot_required",
     }
