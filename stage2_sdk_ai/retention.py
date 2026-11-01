@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import stat
 import time
 from typing import Any
 
@@ -32,6 +34,22 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
     excluded: dict[str, int] = {}
     approval_count = 0
 
+    # Validate existing storage metadata without chmod, mkdir, or file creation.
+    if approval._approvals_dir.is_symlink():
+        raise approval.ApprovalStoreIntegrityError(
+            "approval directory cannot be a symlink"
+        )
+    if approval._approvals_dir.exists():
+        directory_info = approval._approvals_dir.lstat()
+        if (
+            not stat.S_ISDIR(directory_info.st_mode)
+            or directory_info.st_uid != os.geteuid()
+            or stat.S_IMODE(directory_info.st_mode) & 0o077
+        ):
+            raise approval.ApprovalStoreIntegrityError(
+                "approval directory must be private and owned by the application user"
+            )
+
     # A planner must not create missing storage directories or files.
     for path in sorted(approval._approvals_dir.glob("*.json")):
         approval_count += 1
@@ -39,8 +57,18 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
         if path.is_symlink():
             reason = "symlink"
         else:
+            file_info = path.lstat()
+            if (
+                not stat.S_ISREG(file_info.st_mode)
+                or file_info.st_uid != os.geteuid()
+                or file_info.st_nlink != 1
+                or stat.S_IMODE(file_info.st_mode) & 0o077
+            ):
+                reason = "unsafe_file"
             approval_id = path.stem
             try:
+                if reason is not None:
+                    raise OSError("approval record is not a private regular file")
                 record = approval._load_approval_record(path, approval_id)
             except (OSError, ValueError):
                 reason = "corrupt_or_unreadable"
@@ -83,6 +111,16 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
     if audit_path.is_symlink():
         raise approval.AuditLogIntegrityError("audit log cannot be a symlink")
     if audit_path.exists():
+        audit_info = audit_path.lstat()
+        if (
+            not stat.S_ISREG(audit_info.st_mode)
+            or audit_info.st_uid != os.geteuid()
+            or audit_info.st_nlink != 1
+            or stat.S_IMODE(audit_info.st_mode) & 0o077
+        ):
+            raise approval.AuditLogIntegrityError(
+                "audit log must be a private single-link regular file"
+            )
         audit_contents = read_private_text(audit_path).encode("utf-8")
     else:
         audit_contents = b""
