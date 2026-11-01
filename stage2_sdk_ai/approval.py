@@ -1094,7 +1094,7 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
             original_size = audit_file.tell()
             if original_size != len(existing):
                 raise AuditLogIntegrityError(
-                    "audit log changed while its append lock was held; "
+                    "audit log size changed while its append lock was held; "
                     "operator review required"
                 )
             if original_size + len(encoded) > MAX_AUDIT_LOG_BYTES:
