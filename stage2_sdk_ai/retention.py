@@ -238,6 +238,34 @@ def _read_approval_snapshot(approval_id: str, cutoff: float, now: float) -> byte
     return raw
 
 
+def _validate_audit_coverage(
+    records: dict[str, bytes], audit_contents: bytes
+) -> None:
+    """Require each archived record's completed lifecycle events in the chain."""
+    actions_by_id: dict[str, set[str]] = {}
+    for raw_line in audit_contents.splitlines():
+        if not raw_line:
+            continue
+        event = json.loads(raw_line)
+        event_record = event.get("record")
+        if isinstance(event_record, dict) and isinstance(event_record.get("id"), str):
+            actions_by_id.setdefault(event_record["id"], set()).add(event["action"])
+
+    for approval_id, raw in records.items():
+        record = json.loads(raw)
+        required = {"request"}
+        if record["status"] == "approved":
+            required.add("approved")
+        elif record["status"] == "denied":
+            required.add("denied")
+        elif record["status"] == "consumed":
+            required.update({"consumed", "execution_succeeded"})
+        if not required.issubset(actions_by_id.get(approval_id, set())):
+            raise approval.AuditLogIntegrityError(
+                "approval record is missing a required audit lifecycle event"
+            )
+
+
 def _decode_archive(archive_bytes: bytes) -> dict[str, Any]:
     if len(archive_bytes) > MAX_ARCHIVE_BYTES:
         raise ValueError("archive exceeds the configured size limit")
@@ -274,7 +302,7 @@ def _decode_archive(archive_bytes: bytes) -> dict[str, Any]:
             if hashlib.sha256(raw).hexdigest() != item["sha256"]:
                 raise ValueError
             parsed = json.loads(raw)
-            if parsed.get("id") != approval_id:
+            if not isinstance(parsed, dict) or parsed.get("id") != approval_id:
                 raise ValueError
         if hashlib.sha256(audit_bytes).hexdigest() != data["audit_log_sha256"]:
             raise ValueError
@@ -357,6 +385,7 @@ def archive_retention(
             else:
                 audit_bytes = b""
             sequence, head_hash, _, _, _ = approval._audit_chain_state(audit_bytes)
+            _validate_audit_coverage(record_payloads, audit_bytes)
 
             records = {
                 approval_id: {
