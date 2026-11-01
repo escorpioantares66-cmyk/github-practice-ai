@@ -4,6 +4,7 @@ This module deliberately does not move, rewrite, or delete source evidence.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import math
 import os
@@ -12,7 +13,7 @@ import time
 from typing import Any
 
 from . import approval
-from .secure_storage import read_private_text
+from .secure_storage import open_private_file
 
 RETENTION_DAYS = 90
 RETENTION_SECONDS = RETENTION_DAYS * 24 * 60 * 60
@@ -121,7 +122,17 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
             raise approval.AuditLogIntegrityError(
                 "audit log must be a private single-link regular file"
             )
-        audit_contents = read_private_text(audit_path).encode("utf-8")
+        fd = open_private_file(audit_path, os.O_RDONLY)
+        with os.fdopen(fd, "rb") as audit_file:
+            fcntl.flock(audit_file.fileno(), fcntl.LOCK_SH)
+            try:
+                audit_contents = audit_file.read(approval.MAX_AUDIT_LOG_BYTES + 1)
+                if len(audit_contents) > approval.MAX_AUDIT_LOG_BYTES:
+                    raise approval.AuditLogIntegrityError(
+                        "audit log exceeds the configured 64 MiB validation limit"
+                    )
+            finally:
+                fcntl.flock(audit_file.fileno(), fcntl.LOCK_UN)
     else:
         audit_contents = b""
     sequence, head_hash, total, legacy_count, _ = approval._audit_chain_state(
