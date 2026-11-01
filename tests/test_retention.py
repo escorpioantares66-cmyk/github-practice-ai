@@ -155,7 +155,9 @@ def test_archive_verification_detects_tampering(monkeypatch, tmp_path):
     archive_dir = tmp_path / "archive"
     result = archive_retention(now=now, archive_dir=archive_dir)
     archive_path = archive_dir / f"snapshot-{result['archive_id']}.json"
-    archive_path.write_bytes(archive_path.read_bytes() + b" ")
+    envelope = json.loads(archive_path.read_text(encoding="utf-8"))
+    envelope["manifest"]["retention_days"] = 91
+    archive_path.write_text(json.dumps(envelope), encoding="utf-8")
 
     with pytest.raises(ValueError, match="archive"):
         verify_archive(archive_path)
