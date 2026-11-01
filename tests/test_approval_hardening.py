@@ -248,6 +248,30 @@ def test_audit_hash_chain_detects_deleted_or_reordered_entries(monkeypatch, tmp_
         raise AssertionError("reordered audit history was accepted")
 
 
+def test_audit_append_refuses_to_cross_validation_limit(monkeypatch, tmp_path):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    first = approval.request_approval("write_note", {"path": "first.md"})
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    original_audit = audit_path.read_bytes()
+
+    # Leave room for only one extra byte: the next valid event must be rejected
+    # before any bytes are appended, otherwise verification becomes impossible.
+    monkeypatch.setattr(
+        approval, "MAX_AUDIT_LOG_BYTES", len(original_audit) + 1
+    )
+    try:
+        approval.request_approval("write_note", {"path": "second.md"})
+    except approval.ApprovalAuditError as exc:
+        second_id = exc.approval_id
+    else:
+        raise AssertionError("audit append crossed the configured size limit")
+
+    assert audit_path.read_bytes() == original_audit
+    assert approval.verify_audit_log()["valid"] is True
+    assert approval.check_approval(second_id)["request_audit_status"] == "failed"
+    assert approval.check_approval(first["id"])["request_audit_status"] == "written"
+
+
 def test_audit_hash_chain_anchors_legacy_prefix(monkeypatch, tmp_path):
     setup_approval_dirs(monkeypatch, tmp_path)
     approval._ensure_dirs()

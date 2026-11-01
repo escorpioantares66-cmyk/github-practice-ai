@@ -1092,6 +1092,16 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
             ).encode("utf-8")
             audit_file.seek(0, os.SEEK_END)
             original_size = audit_file.tell()
+            if original_size != len(existing):
+                raise AuditLogIntegrityError(
+                    "audit log size changed while its append lock was held; "
+                    "operator review required"
+                )
+            if original_size + len(encoded) > MAX_AUDIT_LOG_BYTES:
+                raise AuditLogIntegrityError(
+                    "audit append would exceed the configured 64 MiB validation limit; "
+                    "archive through operator procedure"
+                )
             view = memoryview(encoded)
             try:
                 while view:
