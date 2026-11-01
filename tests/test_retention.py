@@ -98,3 +98,74 @@ def test_retention_planner_does_not_create_missing_storage(monkeypatch, tmp_path
     assert result["audit_entries_scanned"] == 0
     assert not approvals.exists()
     assert not audit.parent.exists()
+
+
+from stage2_sdk_ai.retention import archive_retention, verify_archive
+
+
+def test_archive_retention_copies_and_verifies_without_removing_sources(
+    monkeypatch, tmp_path
+):
+    now = 1_800_000_000.0
+    record = _create_old_request(
+        monkeypatch, tmp_path, now - RETENTION_SECONDS - 10
+    )
+    approval_path = tmp_path / "approvals" / f"{record['id']}.json"
+    approval_before = approval_path.read_bytes()
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    audit_before = audit_path.read_bytes()
+    archive_dir = tmp_path / "archive"
+
+    result = archive_retention(now=now, archive_dir=archive_dir)
+
+    assert result["created"] is True
+    assert result["valid"] is True
+    assert result["approval_records_copied"] == 1
+    assert result["source_modified"] is False
+    assert approval_path.read_bytes() == approval_before
+    assert audit_path.read_bytes() == audit_before
+    assert approval_path.exists()
+    assert audit_path.exists()
+    assert verify_archive(archive_dir / f"snapshot-{result['archive_id']}.json")[
+        "valid"
+    ] is True
+
+
+def test_archive_retention_is_idempotent(monkeypatch, tmp_path):
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    archive_dir = tmp_path / "archive"
+
+    first = archive_retention(now=now, archive_dir=archive_dir)
+    second = archive_retention(now=now, archive_dir=archive_dir)
+
+    assert first["created"] is True
+    assert second["created"] is False
+    assert first["archive_id"] == second["archive_id"]
+    assert second["valid"] is True
+
+
+def test_archive_verification_detects_tampering(monkeypatch, tmp_path):
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    archive_dir = tmp_path / "archive"
+    result = archive_retention(now=now, archive_dir=archive_dir)
+    archive_path = archive_dir / f"snapshot-{result['archive_id']}.json"
+    archive_path.write_bytes(archive_path.read_bytes() + b" ")
+
+    with pytest.raises(ValueError, match="archive"):
+        verify_archive(archive_path)
+
+
+def test_archive_rejects_symlink_destination(monkeypatch, tmp_path):
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    archive_dir = tmp_path / "archive"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    archive_dir.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(Exception):
+        archive_retention(now=now, archive_dir=archive_dir)
+
+    assert list(outside.iterdir()) == []
