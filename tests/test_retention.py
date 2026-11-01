@@ -16,6 +16,7 @@ def _create_old_request(monkeypatch, tmp_path, created):
 def test_retention_planner_uses_strict_90_day_boundary(monkeypatch, tmp_path):
     now = 1_800_000_000.0
     old = _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 1)
+    monkeypatch.setattr(approval.time, "time", lambda: now)
     approval.request_approval("write_note", {"path": "notes/boundary.md"})
     result = plan_retention(now=now)
 
