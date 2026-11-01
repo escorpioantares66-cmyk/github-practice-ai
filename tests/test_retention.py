@@ -16,9 +16,7 @@ def _create_old_request(monkeypatch, tmp_path, created):
 def test_retention_planner_uses_strict_90_day_boundary(monkeypatch, tmp_path):
     now = 1_800_000_000.0
     old = _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 1)
-    boundary = approval.request_approval(
-        "write_note", {"path": "notes/boundary.md"}
-    )
+    approval.request_approval("write_note", {"path": "notes/boundary.md"})
     result = plan_retention(now=now)
 
     assert result["retention_days"] == 90
@@ -80,6 +78,7 @@ def test_retention_planner_fails_closed_on_corrupt_audit_log(monkeypatch, tmp_pa
     audit = tmp_path / "logs" / "audit.jsonl"
     audit.parent.mkdir(mode=0o700)
     audit.write_text('{"broken":true}\n', encoding="utf-8")
+    audit.chmod(0o600)
     monkeypatch.setattr(approval, "_audit_file", audit)
 
     with pytest.raises(approval.AuditLogIntegrityError):
