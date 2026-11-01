@@ -44,7 +44,7 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
         if (
             not stat.S_ISDIR(directory_info.st_mode)
             or directory_info.st_uid != os.geteuid()
-            or stat.S_IMODE(directory_info.st_mode) & 0o077
+            or stat.S_IMODE(directory_info.st_mode) != 0o700
         ):
             raise approval.ApprovalStoreIntegrityError(
                 "approval directory must be private and owned by the application user"
@@ -62,7 +62,7 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
                 not stat.S_ISREG(file_info.st_mode)
                 or file_info.st_uid != os.geteuid()
                 or file_info.st_nlink != 1
-                or stat.S_IMODE(file_info.st_mode) & 0o077
+                or stat.S_IMODE(file_info.st_mode) != 0o600
             ):
                 reason = "unsafe_file"
             approval_id = path.stem
@@ -116,7 +116,7 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
             not stat.S_ISREG(audit_info.st_mode)
             or audit_info.st_uid != os.geteuid()
             or audit_info.st_nlink != 1
-            or stat.S_IMODE(audit_info.st_mode) & 0o077
+            or stat.S_IMODE(audit_info.st_mode) != 0o600
         ):
             raise approval.AuditLogIntegrityError(
                 "audit log must be a private single-link regular file"
