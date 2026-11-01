@@ -115,12 +115,15 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
     for path in sorted(approval._approvals_dir.glob("*.json")):
         approval_count += 1
         reason = None
-        try:
-            _private_regular_file(path)
-            record = approval._load_approval_record(path, path.stem)
-        except (OSError, ValueError):
-            reason = "corrupt_or_unreadable"
+        if path.is_symlink():
+            reason = "symlink"
         else:
+            try:
+                _private_regular_file(path)
+                record = approval._load_approval_record(path, path.stem)
+            except (OSError, ValueError, approval.ApprovalStoreIntegrityError):
+                reason = "corrupt_or_unreadable"
+        if reason is None:
             created = float(record["created"])
             if created > current + approval.MAX_APPROVAL_CLOCK_SKEW_SECONDS:
                 reason = "future_dated"
@@ -248,6 +251,7 @@ def _decode_archive(archive_bytes: bytes) -> dict[str, Any]:
     if (
         not isinstance(manifest, dict)
         or manifest.get("format_version") != ARCHIVE_FORMAT_VERSION
+        or not isinstance(manifest.get("archive_id"), str)
         or not isinstance(data, dict)
         or hashlib.sha256(_canonical_json(data)).hexdigest()
         != manifest.get("data_sha256")
@@ -282,6 +286,20 @@ def _decode_archive(archive_bytes: bytes) -> dict[str, Any]:
             raise ValueError
     except (KeyError, TypeError, ValueError, approval.AuditLogIntegrityError) as exc:
         raise ValueError("archive payload integrity verification failed") from exc
+    expected_archive_id = hashlib.sha256(
+        _canonical_json({
+            "cutoff_timestamp": data["cutoff_timestamp"],
+            "data_sha256": manifest["data_sha256"],
+        })
+    ).hexdigest()
+    if manifest["archive_id"] != expected_archive_id:
+        raise ValueError("archive identifier does not match its contents")
+    if (
+        manifest.get("approval_record_count") != len(data["approval_records"])
+        or manifest.get("audit_log_bytes") != len(audit_bytes)
+        or manifest.get("retention_days") != RETENTION_DAYS
+    ):
+        raise ValueError("archive manifest metadata does not match its contents")
     return envelope
 
 
@@ -322,7 +340,9 @@ def archive_retention(
                     record_payloads[approval_id] = _read_approval_snapshot(
                         approval_id, initial_plan["cutoff_timestamp"], current
                     )
-                except (OSError, ValueError):
+                except (
+                    OSError, ValueError, approval.ApprovalStoreIntegrityError
+                ):
                     # A record that changed or became unsafe after planning is
                     # skipped, never force-copied.
                     continue
