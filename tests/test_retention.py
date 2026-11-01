@@ -3,7 +3,13 @@ import json
 import pytest
 
 from stage2_sdk_ai import approval
-from stage2_sdk_ai.retention import RETENTION_SECONDS, plan_retention
+from stage2_sdk_ai.retention import (
+    RETENTION_SECONDS,
+    archive_retention,
+    plan_retention,
+    verify_archive,
+)
+from stage2_sdk_ai.secure_storage import UnsafeStoragePathError
 
 
 def _create_old_request(monkeypatch, tmp_path, created):
@@ -100,8 +106,6 @@ def test_retention_planner_does_not_create_missing_storage(monkeypatch, tmp_path
     assert not audit.parent.exists()
 
 
-from stage2_sdk_ai.retention import archive_retention, verify_archive
-
 
 def test_archive_retention_copies_and_verifies_without_removing_sources(
     monkeypatch, tmp_path
@@ -165,7 +169,7 @@ def test_archive_rejects_symlink_destination(monkeypatch, tmp_path):
     outside.mkdir()
     archive_dir.symlink_to(outside, target_is_directory=True)
 
-    with pytest.raises(Exception):
+    with pytest.raises(UnsafeStoragePathError):
         archive_retention(now=now, archive_dir=archive_dir)
 
     assert list(outside.iterdir()) == []
