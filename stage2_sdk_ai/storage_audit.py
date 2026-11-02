@@ -408,15 +408,19 @@ def run_storage_audit(now: float | None = None) -> dict[str, Any]:
             findings.append(_finding(
                 "critical",
                 f"{area_name}_symlink_detected",
-                f"{area_name} contains {inventory['symlinks']} symlink path(s); they were not followed.",
-                "Inspect the affected storage path and replace unsafe links only through a reviewed recovery procedure.",
+                f"{area_name} contains {inventory['symlinks']} symlink path(s); "
+                "they were not followed.",
+                "Inspect the affected storage path and replace unsafe links only "
+                "through a reviewed recovery procedure.",
             ))
         if inventory["unsafe_permissions"]:
             findings.append(_finding(
                 "warning",
                 f"{area_name}_permissions",
-                f"{area_name} contains {inventory['unsafe_permissions']} path(s) with unexpected ownership, permissions, or link count.",
-                "Review ownership, mode 0700 for directories, and mode 0600 plus single-link status for files.",
+                f"{area_name} contains {inventory['unsafe_permissions']} path(s) with "
+                "unexpected ownership, permissions, or link count.",
+                "Review ownership, mode 0700 for directories, and mode 0600 plus "
+                "single-link status for files.",
             ))
         if inventory["unreadable_entries"] or inventory["status"] in {
             "unreadable", "changed_during_scan"
@@ -425,14 +429,16 @@ def run_storage_audit(now: float | None = None) -> dict[str, Any]:
                 "warning",
                 f"{area_name}_incomplete_scan",
                 f"{area_name} could not be fully inspected.",
-                "Check filesystem access and rerun the audit; do not infer that uninspected data is absent.",
+                "Check filesystem access and rerun the audit; do not infer that "
+                "uninspected data is absent.",
             ))
         if inventory["truncated"]:
             findings.append(_finding(
                 "warning",
                 f"{area_name}_scan_limited",
                 f"{area_name} exceeded the configured scan depth or entry limit.",
-                "Increase the explicit scan limits only after confirming the storage tree is trusted.",
+                "Increase the explicit scan limits only after confirming the "
+                "storage tree is trusted.",
             ))
 
     if active_audit["status"] == "present":
@@ -441,37 +447,47 @@ def run_storage_audit(now: float | None = None) -> dict[str, Any]:
             findings.append(_finding(
                 "warning",
                 "active_audit_log_near_capacity",
-                f"The active audit log is using {active_bytes} bytes of its {approval.MAX_AUDIT_LOG_BYTES}-byte limit.",
-                "Follow the verified operator rotation procedure; do not truncate without an independently retained checkpoint.",
+                f"The active audit log is using {active_bytes} bytes of its "
+                f"{approval.MAX_AUDIT_LOG_BYTES}-byte limit.",
+                "Follow the verified operator rotation procedure; do not truncate "
+                "without an independently retained checkpoint.",
             ))
 
     if approvals["regular_files"]:
         findings.append(_finding(
             "warning",
             "approval_records_remain_in_active_store",
-            "Approval records and per-record lock files remain in the active store after retention snapshots; this audit does not remove them.",
-            "Keep unresolved execution and recovery records available. Design a separately reviewed lifecycle/archive index before any deletion.",
+            "Approval records and per-record lock files remain in the active store "
+            "after retention snapshots; this audit does not remove them.",
+            "Keep unresolved execution and recovery records available. Design a "
+            "separately reviewed lifecycle/archive index before any deletion.",
         ))
     if segments["regular_files"]:
         findings.append(_finding(
             "warning",
             "audit_archive_grows_without_pruning",
-            "Verified audit segments are retained and are not automatically deleted, so total audit history can grow without a finite cap.",
-            "Preserve all segments; monitor capacity and arrange an independently administered backup before considering a separate retention policy.",
+            "Verified audit segments are retained and are not automatically deleted, "
+            "so total audit history can grow without a finite cap.",
+            "Preserve all segments; monitor capacity and arrange an independently "
+            "administered backup before considering a separate retention policy.",
         ))
     if notes["regular_files"]:
         findings.append(_finding(
             "warning",
             "notes_have_no_automatic_retention",
-            "Note files persist in requester-scoped directories and this project has no automatic note-retention policy.",
-            "Define ownership, backup, and expiry rules before proposing cleanup; do not delete user notes automatically.",
+            "Note files persist in requester-scoped directories and this project has "
+            "no automatic note-retention policy.",
+            "Define ownership, backup, and expiry rules before proposing cleanup; "
+            "do not delete user notes automatically.",
         ))
     if quota["files"]["database"]["status"] == "present":
         findings.append(_finding(
             "warning",
             "daily_usage_has_no_retention",
-            "The quota database stores daily_usage history without an implemented retention policy; table rows were not read by this metadata-only audit.",
-            "Choose a financial/accounting retention period before adding bounded aggregation or pruning.",
+            "The quota database stores daily_usage history without an implemented "
+            "retention policy; table rows were not read by this metadata-only audit.",
+            "Choose a financial/accounting retention period before adding bounded "
+            "aggregation or pruning.",
         ))
     quota_parent = quota["parent_directory"]
     if quota_parent["symlinks"]:
@@ -491,7 +507,8 @@ def run_storage_audit(now: float | None = None) -> dict[str, Any]:
             findings.append(_finding(
                 "critical", f"quota_{file_name}_symlink",
                 f"The quota {file_name} path is a symlink and was not followed.",
-                "Inspect the quota storage path and restore a private regular file through a reviewed recovery procedure.",
+                "Inspect the quota storage path and restore a private regular file "
+                "through a reviewed recovery procedure.",
             ))
         if file_info["unsafe_permissions"]:
             findings.append(_finding(
@@ -510,8 +527,10 @@ def run_storage_audit(now: float | None = None) -> dict[str, Any]:
         findings.append(_finding(
             "critical",
             "retention_or_audit_verification_failed",
-            "The existing approval retention planner could not verify the complete local audit history.",
-            "Stop approval-sensitive maintenance and investigate the integrity error before any archival or cleanup operation.",
+            "The existing approval retention planner could not verify the complete "
+            "local audit history.",
+            "Stop approval-sensitive maintenance and investigate the integrity error "
+            "before any archival or cleanup operation.",
         ))
 
     return {
@@ -524,10 +543,15 @@ def run_storage_audit(now: float | None = None) -> dict[str, Any]:
         "retention": retention,
         "findings": findings,
         "scope_notes": [
-            "Filesystem inventory uses metadata only and does not return file contents or approval identifiers.",
-            "The existing retention planner reads approval records and verifies the local audit chain; it does not archive or delete them.",
-            "SQLite files and sidecars are measured without opening the database; row counts and WAL contents are not inspected.",
-            "Only the default vector-store path is discoverable; custom RealVectorStore persist_path values must be supplied separately.",
-            "A local hash-chain verification is not a substitute for checking an independently retained external audit checkpoint.",
+            "Filesystem inventory uses metadata only and does not return file contents "
+            "or approval identifiers.",
+            "The existing retention planner reads approval records and verifies the "
+            "local audit chain; it does not archive or delete them.",
+            "SQLite files and sidecars are measured without opening the database; "
+            "row counts and WAL contents are not inspected.",
+            "Only the default vector-store path is discoverable; custom "
+            "RealVectorStore persist_path values must be supplied separately.",
+            "A local hash-chain verification is not a substitute for checking an "
+            "independently retained external audit checkpoint.",
         ],
     }
