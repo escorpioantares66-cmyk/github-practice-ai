@@ -130,9 +130,7 @@ def test_storage_audit_respects_scan_limits(monkeypatch, tmp_path):
     directory = _private_dir(tmp_path / "many")
     _private_file(directory / "one.json")
     _private_file(directory / "two.json")
-    monkeypatch.setattr("stage2_sdk_ai.storage_audit.MAX_SCAN_ENTRIES", 1)
-
-    result = inspect_storage_path(directory)
+    result = inspect_storage_path(directory, max_entries=1)
 
     assert result["entries_examined"] == 1
     assert result["truncated"] is True
