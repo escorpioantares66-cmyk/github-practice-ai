@@ -954,6 +954,9 @@ def _audit_chain_state(
         sequence = base_checkpoint["sequence"]
         previous_hash = base_checkpoint["head_hash"]
         legacy_count = base_checkpoint["legacy_entries"]
+    # Preserve the verified archive boundary separately from the count of
+    # legacy entries encountered in this active segment.
+    base_legacy_count = legacy_count
     total = 0
     chain_hashes: dict[int, str] = {sequence: previous_hash}
     if not contents:
@@ -975,7 +978,7 @@ def _audit_chain_state(
             ) from exc
 
         if isinstance(entry, dict) and set(entry) == {"action", "time", "record"}:
-            if chain_started or sequence != 0 or legacy_count != 0:
+            if chain_started or sequence != 0 or base_legacy_count != 0:
                 raise AuditLogIntegrityError(
                     f"legacy entry {line_number} appears outside the initial audit prefix"
                 )
