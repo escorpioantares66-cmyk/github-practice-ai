@@ -74,11 +74,11 @@ def _allowed_keys() -> list[str]:
 
 
 def check_auth(api_key: str | None) -> dict[str, object]:
-    if not isinstance(api_key, str) or not api_key or not api_key.isascii():
-        return {"is_ok": False, "reason": "missing or invalid api key"}
-    allowed = _allowed_keys()
-    if not api_key:
+    if not isinstance(api_key, str) or not api_key:
         return {"is_ok": False, "reason": "missing api key"}
+    if not api_key.isascii():
+        return {"is_ok": False, "reason": "invalid key"}
+    allowed = _allowed_keys()
     if not any(hmac.compare_digest(api_key, key) for key in allowed):
         return {"is_ok": False, "reason": "invalid key"}
     if any(
@@ -134,7 +134,11 @@ def _configured_approver_keys() -> list[tuple[str, str]]:
 
 def verify_approver_key(approver_key: str | None) -> bool:
     """Accept approver credentials only when both roles have named principals."""
-    if not isinstance(approver_key, str) or not approver_key or not approver_key.isascii():
+    if (
+        not isinstance(approver_key, str)
+        or not approver_key
+        or not approver_key.isascii()
+    ):
         return False
 
     requester_keys = _configured_approval_requester_keys()
@@ -156,7 +160,11 @@ def verify_approver_key(approver_key: str | None) -> bool:
 
 def approver_identity(approver_key: str) -> str:
     """Resolve a valid approver secret to its stable configured identity."""
-    if not isinstance(approver_key, str) or not approver_key or not approver_key.isascii():
+    if (
+        not isinstance(approver_key, str)
+        or not approver_key
+        or not approver_key.isascii()
+    ):
         raise ValueError("Approver identity is not configured")
     if not _configured_approval_requester_keys():
         raise ValueError("Requester identities must be explicitly configured")
