@@ -415,7 +415,7 @@ def _read_journal(path: Path) -> dict[str, Any] | None:
         or not re.fullmatch(r"[0-9a-f]{64}", journal["active_sha256"])
         or isinstance(journal.get("active_size"), bool)
         or not isinstance(journal.get("active_size"), int)
-        or journal["active_size"] <= 0
+        or not 0 < journal["active_size"] <= 64 * 1024 * 1024
     ):
         raise approval.AuditLogIntegrityError("rotation journal schema is invalid")
     _validate_checkpoint(journal["expected_checkpoint"])
@@ -590,6 +590,29 @@ def rotate_audit_log(
             fcntl.flock(audit_file.fileno(), fcntl.LOCK_UN)
 
 
+def _verify_journal_archive(
+    journal: dict[str, Any], archive_dir: Path
+) -> dict[str, Any]:
+    from . import approval
+
+    anchor = journal["new_anchor"]
+    segment_name = anchor.get("latest_segment")
+    if not isinstance(segment_name, str) or not _SEGMENT_NAME.fullmatch(segment_name):
+        raise approval.AuditLogIntegrityError("journal segment reference is invalid")
+    raw = _read_private(archive_dir / segment_name, MAX_SEGMENT_BYTES)
+    _, archived_content, _ = _decode_segment(
+        raw, anchor.get("latest_segment_sha256")
+    )
+    if (
+        len(archived_content) != journal["active_size"]
+        or hashlib.sha256(archived_content).hexdigest() != journal["active_sha256"]
+    ):
+        raise approval.AuditLogIntegrityError(
+            "verified archive bytes do not match the journaled active audit log"
+        )
+    return {"content": archived_content}
+
+
 def recover_audit_rotation(
     *,
     allow_truncate: bool = False,
@@ -611,6 +634,7 @@ def recover_audit_rotation(
             if journal is None:
                 return {"status": "no_pending_rotation", "recovered": False}
             new_state = _verify_anchor(journal["new_anchor"], target_dir)
+            _verify_journal_archive(journal, target_dir)
             new_checkpoint = new_state["checkpoint"]
             if not _matches(
                 new_checkpoint, _validate_checkpoint(journal["expected_checkpoint"])
