@@ -2,7 +2,6 @@ import json
 import os
 import sys
 
-import pytest
 
 from stage2_sdk_ai import approval, secure_storage, write_tools
 from stage2_sdk_ai.cli import main
