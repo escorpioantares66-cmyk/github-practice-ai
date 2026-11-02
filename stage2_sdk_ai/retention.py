@@ -28,6 +28,8 @@ from .secure_storage import (
 RETENTION_DAYS = 90
 RETENTION_SECONDS = RETENTION_DAYS * 24 * 60 * 60
 MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
+MAX_APPROVAL_RECORD_BYTES = 1 * 1024 * 1024
+MAX_RETENTION_SCAN_BYTES = 64 * 1024 * 1024
 ARCHIVE_FORMAT_VERSION = 2
 
 
@@ -89,6 +91,23 @@ def _validate_now(now: float | None) -> float:
     return float(current)
 
 
+def _read_approval_record_snapshot(path: Path, limit: int) -> tuple[dict[str, Any], bytes]:
+    """Read one record under its transition lock with descriptor-level checks."""
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_fd = open_private_file(lock_path, os.O_RDONLY)
+    with os.fdopen(lock_fd, "rb") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)
+        try:
+            record_fd = open_private_file(path, os.O_RDONLY)
+            with os.fdopen(record_fd, "rb") as record_file:
+                raw = record_file.read(limit + 1)
+            if len(raw) > limit:
+                return {}, raw
+            return approval._load_approval_record(path, path.stem, raw=raw), raw
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def plan_retention(
     now: float | None = None,
     *,
@@ -109,7 +128,9 @@ def plan_retention(
     eligible: list[str] = []
     excluded: dict[str, int] = {}
     approval_count = 0
+    approval_scan_bytes = 0
     approval_scan_truncated = False
+    eligible_records: dict[str, bytes] = {}
 
     if approval._approvals_dir.is_symlink():
         raise approval.ApprovalStoreIntegrityError(
@@ -128,20 +149,29 @@ def plan_retention(
 
     for path in approval._approvals_dir.glob("*.json"):
         if (
-            max_approval_records is not None
-            and approval_count >= max_approval_records
+            (max_approval_records is not None and approval_count >= max_approval_records)
+            or approval_scan_bytes >= MAX_RETENTION_SCAN_BYTES
         ):
             # Consume at most one additional path to establish truncation.
             approval_scan_truncated = True
             break
         approval_count += 1
         reason = None
+        raw = b""
         if path.is_symlink():
             reason = "symlink"
         else:
+            remaining = MAX_RETENTION_SCAN_BYTES - approval_scan_bytes
+            read_limit = min(MAX_APPROVAL_RECORD_BYTES, remaining)
             try:
-                _private_regular_file(path)
-                record = approval._load_approval_record(path, path.stem)
+                record, raw = _read_approval_record_snapshot(path, read_limit)
+                if len(raw) > read_limit:
+                    if remaining <= MAX_APPROVAL_RECORD_BYTES:
+                        approval_scan_truncated = True
+                        break
+                    reason = "approval_record_too_large"
+                else:
+                    approval_scan_bytes += len(raw)
             except (OSError, ValueError, approval.ApprovalStoreIntegrityError):
                 reason = "corrupt_or_unreadable"
         if reason is None:
@@ -172,6 +202,7 @@ def plan_retention(
 
         if reason is None:
             eligible.append(path.stem)
+            eligible_records[path.stem] = raw
         else:
             excluded[reason] = excluded.get(reason, 0) + 1
 
@@ -193,6 +224,20 @@ def plan_retention(
         )
     )
     total = archive_state["entries"] + active_total
+    # Record snapshots and audit history use independent locks; disclose that
+    # the report is not a transactionally consistent cross-store snapshot.
+    for approval_id, raw in list(eligible_records.items()):
+        try:
+            _validate_audit_coverage(
+                {approval_id: raw}, audit_contents,
+                archive_state.get("actions_by_id", {}),
+            )
+        except approval.AuditLogIntegrityError:
+            eligible_records.pop(approval_id, None)
+            eligible.remove(approval_id)
+            excluded["audit_lifecycle_incomplete"] = (
+                excluded.get("audit_lifecycle_incomplete", 0) + 1
+            )
     old_audit_events = 0
     for raw_line in audit_contents.splitlines():
         if raw_line:
@@ -207,6 +252,8 @@ def plan_retention(
         "archive_destination": "private_local",
         "source_modified": False,
         "approval_records_scanned": approval_count,
+        "approval_records_scan_bytes": approval_scan_bytes,
+        "approval_records_scan_bytes_limit": MAX_RETENTION_SCAN_BYTES,
         "approval_records_scan_limit": max_approval_records,
         "approval_records_scan_truncated": approval_scan_truncated,
         "approval_records_eligible": len(eligible),
@@ -219,6 +266,7 @@ def plan_retention(
         "audit_head_sequence": sequence,
         "audit_head_hash": head_hash,
         "audit_archive_mode": "verified_segment_chain_plus_active_tail",
+        "snapshot_consistency": "best_effort_non_atomic",
     }
 
 

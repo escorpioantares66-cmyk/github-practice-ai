@@ -1,4 +1,8 @@
+import fcntl
 import json
+import os
+import threading
+import time
 
 import pytest
 
@@ -175,3 +179,61 @@ def test_archive_rejects_symlink_destination(monkeypatch, tmp_path):
         archive_retention(now=now, archive_dir=archive_dir)
 
     assert list(outside.iterdir()) == []
+
+
+def test_retention_requires_lifecycle_event_coverage(monkeypatch, tmp_path):
+    now = 1_800_000_000.0
+    record = _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    audit_path.write_bytes(b"")
+    result = plan_retention(now=now)
+    assert result["approval_records_eligible"] == 0
+    assert result["approval_records_excluded"]["audit_lifecycle_incomplete"] == 1
+
+
+def test_retention_rejects_oversized_approval_record(monkeypatch, tmp_path):
+    now = 1_800_000_000.0
+    record = _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    path = tmp_path / "approvals" / f"{record['id']}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["padding"] = "x" * 1_100_000
+    path.write_text(json.dumps(data), encoding="utf-8")
+    path.chmod(0o600)
+    result = plan_retention(now=now)
+    assert result["approval_records_eligible"] == 0
+    assert result["approval_records_excluded"]["approval_record_too_large"] == 1
+
+
+def test_retention_waits_for_concurrent_approval_transition_lock(monkeypatch, tmp_path):
+    now = 1_800_000_000.0
+    record = _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    path = tmp_path / "approvals" / f"{record['id']}.json"
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_file = os.fdopen(os.open(lock_path, os.O_RDONLY), "rb")
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    started = threading.Event()
+    finished = threading.Event()
+
+    def run_plan():
+        started.set()
+        plan_retention(now=now)
+        finished.set()
+
+    worker = threading.Thread(target=run_plan, daemon=True)
+    try:
+        worker.start()
+        assert started.wait(timeout=2)
+        time.sleep(0.05)
+        assert not finished.is_set()
+    finally:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+    worker.join(timeout=5)
+    assert finished.is_set()
+
+
+def test_retention_reports_non_atomic_snapshot_boundary(monkeypatch, tmp_path):
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    result = plan_retention(now=now)
+    assert result["snapshot_consistency"] == "best_effort_non_atomic"

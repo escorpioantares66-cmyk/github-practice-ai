@@ -234,12 +234,17 @@ def request_approval(
     return record
 
 
-def _load_approval_record(path: Path, approval_id: str) -> dict[str, Any]:
-    """Load and validate a record before any state transition."""
+def _load_approval_record(
+    path: Path, approval_id: str, *, raw: bytes | None = None
+) -> dict[str, Any]:
+    """Load and validate a record before any state transition.
+
+    Callers holding the record lock may pass a bounded descriptor snapshot.
+    """
     if _approval_path(approval_id) is None:
         raise CorruptApprovalRecordError("approval filename has an invalid ID")
     try:
-        data = json.loads(read_private_text(path))
+        data = json.loads(read_private_text(path) if raw is None else raw)
     except FileNotFoundError:
         raise
     except ValueError as exc:

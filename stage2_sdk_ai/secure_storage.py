@@ -127,9 +127,15 @@ def open_private_file(path: Path, flags: int, mode: int = 0o600) -> int:
         raise UnsafeStoragePathError(
             "Private storage file must not have additional hard links"
         )
-    # Read-only inspection must not mutate mode bits or file metadata.
-    # Newly created files and writable opens still receive the requested mode.
-    if (flags & os.O_ACCMODE) != os.O_RDONLY or flags & os.O_CREAT:
+    # Validate permissions on the opened inode, not only on a prior lstat.
+    # A read-only inspection must never repair permissions as a side effect.
+    if (flags & os.O_ACCMODE) == os.O_RDONLY:
+        if stat.S_IMODE(info.st_mode) != mode:
+            os.close(fd)
+            raise UnsafeStoragePathError(
+                "Private storage file has unexpected permissions"
+            )
+    else:
         os.fchmod(fd, mode)
     return fd
 
