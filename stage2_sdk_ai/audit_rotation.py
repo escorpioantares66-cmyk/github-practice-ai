@@ -263,6 +263,14 @@ def _verify_anchor(anchor: dict[str, Any] | None, archive_dir: Path
         seen.add(expected_name)
         raw = _read_private(archive_dir / expected_name, MAX_SEGMENT_BYTES)
         manifest, content, _ = _decode_segment(raw, expected_hash)
+        canonical_name = (
+            f"audit-segment-{manifest['end_sequence']:020d}-"
+            f"{manifest['segment_id'][:16]}.json"
+        )
+        if canonical_name != expected_name:
+            raise approval.AuditLogIntegrityError(
+                "audit segment filename does not match its manifest"
+            )
         reverse_segments.append((manifest, content))
         expected_name = manifest["previous_segment"]
         expected_hash = manifest["previous_segment_sha256"]
