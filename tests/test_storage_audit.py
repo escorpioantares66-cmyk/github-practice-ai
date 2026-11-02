@@ -2,7 +2,6 @@ import json
 import os
 import sys
 
-
 from stage2_sdk_ai import approval, secure_storage, write_tools
 from stage2_sdk_ai.cli import main
 from stage2_sdk_ai.storage_audit import inspect_storage_path, run_storage_audit
