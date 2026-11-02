@@ -12,7 +12,8 @@ def isolated_storage(monkeypatch, tmp_path):
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
     monkeypatch.setattr(write_tools, "_notes_dir", tmp_path / "notes")
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", APPROVER_KEY)
+    monkeypatch.setenv("AGENT_API_KEYS", "agent=requester-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", f"operator={APPROVER_KEY}")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-mocked")
 
 
