@@ -183,7 +183,7 @@ def test_archive_rejects_symlink_destination(monkeypatch, tmp_path):
 
 def test_retention_requires_lifecycle_event_coverage(monkeypatch, tmp_path):
     now = 1_800_000_000.0
-    record = _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
     audit_path = tmp_path / "logs" / "audit.jsonl"
     audit_path.write_bytes(b"")
     result = plan_retention(now=now)
