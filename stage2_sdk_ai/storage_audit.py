@@ -228,6 +228,35 @@ def _inspect_leaf(path: Path) -> dict[str, Any]:
     return result
 
 
+def _inspect_directory_metadata(path: Path) -> dict[str, Any]:
+    """Check a storage parent directory without enumerating or changing it."""
+    result: dict[str, Any] = {
+        "path": str(path),
+        "status": "unknown",
+        "symlinks": 0,
+        "unsafe_permissions": 0,
+    }
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        result["status"] = "missing"
+        return result
+    except OSError:
+        result["status"] = "unreadable"
+        return result
+    if stat.S_ISLNK(info.st_mode):
+        result["status"] = "symlink"
+        result["symlinks"] = 1
+    elif stat.S_ISDIR(info.st_mode):
+        result["status"] = "present"
+        if not _private_metadata(info, directory=True):
+            result["unsafe_permissions"] = 1
+    else:
+        result["status"] = "not_directory"
+        result["unsafe_permissions"] = 1
+    return result
+
+
 def _quota_database_path() -> Path:
     configured = os.getenv("AGENT_QUOTA_DB_PATH", "").strip()
     target = Path(configured).expanduser() if configured else quota_store.DEFAULT_DB_PATH
@@ -243,6 +272,7 @@ def _quota_inventory() -> dict[str, Any]:
         )
     return {
         "path": str(database),
+        "parent_directory": _inspect_directory_metadata(database.parent),
         "files": files,
         "total_bytes": sum(item["total_bytes"] for item in files.values()),
         "database_contents_inspected": False,
@@ -427,6 +457,39 @@ def run_storage_audit(now: float | None = None) -> dict[str, Any]:
             "The quota database stores daily_usage history without an implemented retention policy; table rows were not read by this metadata-only audit.",
             "Choose a financial/accounting retention period before adding bounded aggregation or pruning.",
         ))
+    quota_parent = quota["parent_directory"]
+    if quota_parent["symlinks"]:
+        findings.append(_finding(
+            "critical", "quota_parent_symlink",
+            "The quota database parent is a symlink and was not followed.",
+            "Restore a private, real application-owned directory before using quota storage.",
+        ))
+    if quota_parent["unsafe_permissions"]:
+        findings.append(_finding(
+            "warning", "quota_parent_permissions",
+            "The quota database parent is not an owner-only directory.",
+            "Restrict the quota database parent to the application owner with mode 0700.",
+        ))
+    for file_name, file_info in quota["files"].items():
+        if file_info["symlinks"]:
+            findings.append(_finding(
+                "critical", f"quota_{file_name}_symlink",
+                f"The quota {file_name} path is a symlink and was not followed.",
+                "Inspect the quota storage path and restore a private regular file through a reviewed recovery procedure.",
+            ))
+        if file_info["unsafe_permissions"]:
+            findings.append(_finding(
+                "warning", f"quota_{file_name}_permissions",
+                f"The quota {file_name} file has unexpected ownership, permissions, or link count.",
+                "Review the file owner, mode 0600, and single-link requirement.",
+            ))
+        if file_info["unreadable_entries"]:
+            findings.append(_finding(
+                "warning", f"quota_{file_name}_unreadable",
+                f"The quota {file_name} path could not be inspected.",
+                "Check filesystem access and rerun the audit before making storage decisions.",
+            ))
+
     if retention["status"] != "verified":
         findings.append(_finding(
             "critical",
