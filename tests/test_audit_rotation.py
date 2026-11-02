@@ -218,3 +218,64 @@ def test_checkpoint_history_survives_segmented_verification(
     tampered_checkpoint["head_hash"] = "f" * 64
     with pytest.raises(approval.AuditLogIntegrityError, match="checkpoint"):
         approval.verify_audit_log(tampered_checkpoint)
+
+
+def test_rotation_does_not_recreate_missing_active_log(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    checkpoint = approval.create_audit_checkpoint()
+    audit_rotation.rotate_audit_log(
+        truncate=True, expected_checkpoint=checkpoint
+    )
+    approval._audit_file.unlink()
+
+    with pytest.raises(approval.AuditLogIntegrityError, match="active audit log is missing"):
+        audit_rotation.rotate_audit_log()
+    assert not approval._audit_file.exists()
+
+
+def test_recovery_does_not_recreate_missing_active_log(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    checkpoint = approval.create_audit_checkpoint()
+    original_ftruncate = audit_rotation.os.ftruncate
+
+    def fail_truncate(fd, size):
+        raise OSError("simulated interruption")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(audit_rotation.os, "ftruncate", fail_truncate)
+        with pytest.raises(OSError):
+            audit_rotation.rotate_audit_log(
+                truncate=True, expected_checkpoint=checkpoint
+            )
+
+    approval._audit_file.unlink()
+    with pytest.raises(approval.AuditLogIntegrityError, match="active audit log is missing"):
+        audit_rotation.recover_audit_rotation(allow_truncate=True)
+    assert not approval._audit_file.exists()
+    assert audit_rotation.os.ftruncate is original_ftruncate
+
+
+def test_archive_segment_chain_verification_includes_predecessors(
+    monkeypatch, tmp_path
+):
+    _setup(monkeypatch, tmp_path)
+    first_checkpoint = approval.create_audit_checkpoint()
+    first = audit_rotation.rotate_audit_log(
+        truncate=True, expected_checkpoint=first_checkpoint
+    )
+
+    approval.request_approval("write_note", {"path": "second.md"})
+    second_checkpoint = approval.create_audit_checkpoint()
+    second = audit_rotation.rotate_audit_log(
+        truncate=True, expected_checkpoint=second_checkpoint
+    )
+
+    verified = audit_rotation.verify_archive_segment(
+        audit_rotation.Path(second["archive_path"])
+    )
+    assert verified["valid"] is True
+    assert verified["segments"] == 2
+    assert verified["sequence"] == second_checkpoint["sequence"]
+    assert audit_rotation.verify_archive_segment(
+        audit_rotation.Path(first["archive_path"])
+    )["segments"] == 1
