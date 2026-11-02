@@ -307,6 +307,21 @@ def _verify_anchor(anchor: dict[str, Any] | None, archive_dir: Path
     }
 
 
+def _reject_missing_active_with_rotation_metadata(
+    audit_path: Path, anchor_path: Path, journal_path: Path
+) -> None:
+    from . import approval
+
+    if audit_path.is_symlink():
+        raise approval.AuditLogIntegrityError("active audit log cannot be a symlink")
+    if anchor_path.is_symlink() or journal_path.is_symlink():
+        raise approval.AuditLogIntegrityError("rotation metadata cannot be a symlink")
+    if (anchor_path.exists() or journal_path.exists()) and not audit_path.exists():
+        raise approval.AuditLogIntegrityError(
+            "active audit log is missing while rotation metadata exists"
+        )
+
+
 def load_verified_anchor(archive_dir: Path | None = None) -> dict[str, Any]:
     """Return the verified archive head; block reads during interrupted rotation."""
     from . import approval
@@ -467,7 +482,6 @@ def verify_archive_segment(path: Path) -> dict[str, Any]:
 
 
 def rotate_audit_log(
-    archive_dir: Path | None = None,
     *,
     truncate: bool = False,
     expected_checkpoint: dict[str, Any] | None = None,
@@ -481,7 +495,10 @@ def rotate_audit_log(
         raise ValueError(
             "destructive rotation requires an independently retained checkpoint"
         )
-    anchor_path, journal_path, target_dir = _paths(archive_dir)
+    anchor_path, journal_path, target_dir = _paths()
+    _reject_missing_active_with_rotation_metadata(
+        approval._audit_file, anchor_path, journal_path
+    )
     fd = open_private_file(approval._audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
         fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
@@ -490,7 +507,7 @@ def rotate_audit_log(
                 raise approval.AuditLogIntegrityError(
                     "an earlier rotation must be recovered before a new rotation"
                 )
-            anchor_state = load_verified_anchor(target_dir)
+            anchor_state = load_verified_anchor()
             base_checkpoint = anchor_state["checkpoint"]
             audit_file.seek(0)
             content = audit_file.read(approval.MAX_AUDIT_LOG_BYTES + 1)
@@ -574,7 +591,6 @@ def rotate_audit_log(
 
 
 def recover_audit_rotation(
-    archive_dir: Path | None = None,
     *,
     allow_truncate: bool = False,
 ) -> dict[str, Any]:
@@ -583,7 +599,10 @@ def recover_audit_rotation(
 
     if not isinstance(allow_truncate, bool):
         raise ValueError("allow_truncate must be a boolean")
-    anchor_path, journal_path, target_dir = _paths(archive_dir)
+    anchor_path, journal_path, target_dir = _paths()
+    _reject_missing_active_with_rotation_metadata(
+        approval._audit_file, anchor_path, journal_path
+    )
     fd = open_private_file(approval._audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
         fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
