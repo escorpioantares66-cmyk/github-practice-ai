@@ -249,3 +249,42 @@ def test_retention_stops_at_aggregate_record_byte_budget(monkeypatch, tmp_path):
     result = plan_retention(now=now)
     assert result["approval_records_scan_bytes"] <= 1
     assert result["approval_records_scan_truncated"] is True
+
+
+def test_retention_indexes_audit_history_once_for_many_records(
+    monkeypatch, tmp_path
+):
+    import stage2_sdk_ai.retention as retention
+
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    approval.request_approval("write_note", {"path": "notes/second.md"})
+    calls = 0
+    original = retention._audit_action_index
+
+    def counted_index(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(retention, "_audit_action_index", counted_index)
+    result = plan_retention(now=now)
+
+    assert result["approval_records_scanned"] == 2
+    assert calls == 1
+
+
+def test_archive_refuses_incomplete_bounded_retention_scan(
+    monkeypatch, tmp_path
+):
+    import stage2_sdk_ai.retention as retention
+
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    archive_dir = tmp_path / "archive"
+    monkeypatch.setattr(retention, "MAX_RETENTION_SCAN_BYTES", 1)
+
+    with pytest.raises(approval.ApprovalStoreIntegrityError, match="incomplete"):
+        archive_retention(now=now, archive_dir=archive_dir)
+
+    assert not archive_dir.exists()
