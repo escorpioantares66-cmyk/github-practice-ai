@@ -10,8 +10,8 @@
 ## Current constraints found during review
 
 - Approval records are individual JSON files under the configured approval directory.
-- The append-only audit history is a single JSONL file with a SHA-256 hash chain and a 64 MiB validation limit.
-- Audit verification currently assumes the full history is present in one file. Moving old lines out would invalidate the existing sequence and previous-hash assumptions.
+- The active append-only audit history is a JSONL segment with a SHA-256 hash chain and a 64 MiB validation limit. After verified rotation, earlier segments are retained in a linked private archive and an anchor records the archived head.
+- Audit verification must validate the entire segment chain before validating the active suffix. Sequence numbers, previous-hash links, legacy-prefix integrity, and external checkpoint compatibility must remain continuous.
 - Approval quota enforcement scans the active approval JSON files. Moving records changes quota semantics unless archival is explicitly integrated into the scan.
 - Recovery inspection scans approval JSON files. Unresolved consumed executions must never disappear from operator recovery merely because they are old.
 - SQLite daily usage retention is separate from approval/audit retention and is not changed by this work.
@@ -42,7 +42,7 @@ The implementation uses immutable, individually verified audit segments. Each se
 
 ### Storage and operational limits
 
-The 64 MiB limit now applies to each active segment. This bounds the size of the live append file, but it does not impose a finite cap on total archived history: preserving all evidence means the archive continues to grow. The archive remains local to the host and is not an off-device backup. Approval JSON records remain in the active approval store so quota enforcement and operator recovery are unchanged. SQLite daily usage retention is not changed by this audit-rotation implementation.
+The 64 MiB limit applies to each active segment. This bounds the size of the live append file, but it does not impose a finite cap on total archived history: preserving all evidence means the archive continues to grow. Re-validating the complete archive chain is proportional to archived history, so this local single-host design is appropriate only while that verification cost remains operationally acceptable. The archive remains local to the host and is not an off-device backup. Approval JSON records remain in the active approval store so quota enforcement and operator recovery are unchanged. SQLite daily usage retention is not changed by this audit-rotation implementation.
 
 Example operator sequence:
 
