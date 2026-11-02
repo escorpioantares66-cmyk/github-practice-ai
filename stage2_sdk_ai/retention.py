@@ -166,13 +166,15 @@ def plan_retention(
             read_limit = min(MAX_APPROVAL_RECORD_BYTES, remaining)
             try:
                 record, raw = _read_approval_record_snapshot(path, read_limit)
+                # Account for every byte read, including oversized records.
+                # Otherwise a store full of oversized files bypasses the
+                # aggregate I/O budget while still consuming CPU and memory.
+                approval_scan_bytes += min(len(raw), read_limit)
                 if len(raw) > read_limit:
                     if remaining <= MAX_APPROVAL_RECORD_BYTES:
                         approval_scan_truncated = True
                         break
                     reason = "approval_record_too_large"
-                else:
-                    approval_scan_bytes += len(raw)
             except (OSError, ValueError, approval.ApprovalStoreIntegrityError):
                 reason = "corrupt_or_unreadable"
         if reason is None:

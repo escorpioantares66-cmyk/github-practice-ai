@@ -305,3 +305,27 @@ def test_retention_planner_has_a_bounded_default_record_count(
     assert result["approval_records_scanned"] == 1
     assert result["approval_records_scan_limit"] == 1
     assert result["approval_records_scan_truncated"] is True
+
+
+def test_retention_counts_bytes_read_from_oversized_records(
+    monkeypatch, tmp_path
+):
+    import stage2_sdk_ai.retention as retention
+
+    now = 1_800_000_000.0
+    for offset in (10, 20):
+        record = _create_old_request(
+            monkeypatch, tmp_path, now - RETENTION_SECONDS - offset
+        )
+        path = tmp_path / "approvals" / f"{record['id']}.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["padding"] = "x" * 1_100_000
+        path.write_text(json.dumps(data), encoding="utf-8")
+        path.chmod(0o600)
+
+    monkeypatch.setattr(retention, "MAX_RETENTION_SCAN_BYTES", 1_500_000)
+    result = plan_retention(now=now)
+
+    assert result["approval_records_scan_bytes"] == 1_500_000
+    assert result["approval_records_scan_bytes"] <= 1_500_000
+    assert result["approval_records_scan_truncated"] is True
