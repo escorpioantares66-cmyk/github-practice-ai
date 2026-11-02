@@ -279,3 +279,36 @@ def test_archive_segment_chain_verification_includes_predecessors(
     assert audit_rotation.verify_archive_segment(
         audit_rotation.Path(first["archive_path"])
     )["segments"] == 1
+
+
+def test_missing_rotation_anchor_is_detected_after_destructive_rotation(
+    monkeypatch, tmp_path
+):
+    _setup(monkeypatch, tmp_path)
+    checkpoint = approval.create_audit_checkpoint()
+    audit_rotation.rotate_audit_log(
+        truncate=True, expected_checkpoint=checkpoint
+    )
+    anchor_path = approval._audit_file.with_name("audit.anchor.json")
+    state_path = approval._audit_file.with_name("audit.rotation-state.json")
+    assert anchor_path.exists()
+    assert state_path.exists()
+    anchor_path.unlink()
+
+    with pytest.raises(approval.AuditLogIntegrityError, match="anchor is missing"):
+        approval.verify_audit_log()
+
+
+def test_rotation_state_marker_tampering_fails_closed(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path)
+    checkpoint = approval.create_audit_checkpoint()
+    audit_rotation.rotate_audit_log(
+        truncate=True, expected_checkpoint=checkpoint
+    )
+    state_path = approval._audit_file.with_name("audit.rotation-state.json")
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["head_hash"] = "f" * 64
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(approval.AuditLogIntegrityError, match="does not match"):
+        approval.verify_audit_log()
