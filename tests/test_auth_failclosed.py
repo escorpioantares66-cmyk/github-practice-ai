@@ -96,6 +96,7 @@ def test_different_requester_identities_have_independent_rate_limits(monkeypatch
 def test_approver_rate_limit_uses_stable_identity_across_secret_rotation(monkeypatch):
 
     auth.reset_rate()
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=requester-secret")
     monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=old-approver-secret")
     assert auth.verify_approver_key("old-approver-secret")
     identity = auth.approver_identity("old-approver-secret")
@@ -110,6 +111,28 @@ def test_approver_rate_limit_uses_stable_identity_across_secret_rotation(monkeyp
     # Requester and approver identities occupy separate durable rate buckets.
     assert auth.check_rate_limit(identity, role="api")
     auth.reset_rate()
+
+
+def test_approval_auth_rejects_legacy_bare_requester_keys(monkeypatch):
+    monkeypatch.setenv("AGENT_API_KEYS", "legacy-requester-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=approver-secret")
+
+    assert auth.verify_approver_key("approver-secret") is False
+
+
+def test_approval_auth_rejects_legacy_bare_approver_keys(monkeypatch):
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=requester-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "approver-secret")
+
+    assert auth.verify_approver_key("approver-secret") is False
+
+
+def test_auth_rejects_non_ascii_credentials_without_raising(monkeypatch):
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=requester-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=approver-secret")
+
+    assert auth.verify_api_key("\u00e9vil-key") is False
+    assert auth.verify_approver_key("\u00e9vil-key") is False
 
 
 def test_rate_limit_is_atomic_under_concurrent_requests(monkeypatch):

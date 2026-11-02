@@ -16,7 +16,8 @@ def configure_paths(monkeypatch, tmp_path):
         approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
     )
     monkeypatch.setattr(write_tools, "_notes_dir", tmp_path / "notes")
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setenv("AGENT_API_KEYS", "test-requester=requester-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=test-approver-secret")
 
 
 def test_real_mode_no_approval_id_requests_bound_approval(

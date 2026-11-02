@@ -7,7 +7,8 @@ APPROVER_KEY = "test-approver-secret"
 
 
 def setup_approval_dirs(monkeypatch, tmp_path):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", APPROVER_KEY)
+    monkeypatch.setenv("AGENT_API_KEYS", "agent=requester-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", f"operator={APPROVER_KEY}")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(
         approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
@@ -90,6 +91,30 @@ def test_direct_approval_calls_reject_unconfigured_keys(monkeypatch, tmp_path):
     assert result["status"] == "unauthorized"
     assert approval.check_approval(request["id"])["status"] == "pending"
 
+
+
+def test_same_principal_cannot_approve_or_deny_with_separate_secrets(
+    monkeypatch, tmp_path
+):
+    setup_approval_dirs(monkeypatch, tmp_path)
+    monkeypatch.setenv("AGENT_API_KEYS", "operator=requester-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator=approver-secret")
+
+    approve_request = approval.request_approval(
+        "write_note", {"path": "self-approve.md"}, requester="operator"
+    )
+    denied_request = approval.request_approval(
+        "write_note", {"path": "self-deny.md"}, requester="operator"
+    )
+
+    assert approval.approve(
+        approve_request["id"], "approver-secret"
+    )["status"] == "self_approval_denied"
+    assert approval.deny(
+        denied_request["id"], "approver-secret", reason="self denial"
+    )["status"] == "self_approval_denied"
+    assert approval.check_approval(approve_request["id"])["status"] == "pending"
+    assert approval.check_approval(denied_request["id"])["status"] == "pending"
 
 
 def test_concurrent_approve_and_deny_have_one_winner(monkeypatch, tmp_path):
@@ -596,7 +621,7 @@ def test_pending_approval_limit_is_released_after_decision(monkeypatch, tmp_path
     setup_approval_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(approval, "MAX_PENDING_APPROVALS_PER_REQUESTER", 2)
     monkeypatch.setattr(approval, "MAX_APPROVAL_REQUESTS_PER_UTC_DAY", 20)
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", APPROVER_KEY)
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", f"operator={APPROVER_KEY}")
     first = approval.request_approval("write_note", {"path": "one.md"}, "same")
     approval.request_approval("write_note", {"path": "two.md"}, "same")
     try:

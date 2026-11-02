@@ -2,14 +2,23 @@
 import hashlib
 import json
 
+import pytest
+
 from stage2_sdk_ai import approval, write_tools
+
+
+@pytest.fixture(autouse=True)
+def _approval_auth_config(monkeypatch):
+    monkeypatch.setenv(
+        "AGENT_API_KEYS", "agent=requester-secret,worker=worker-requester-secret"
+    )
 
 
 def test_failed_write_records_operator_recovery_context_without_replay(
     monkeypatch, tmp_path, caplog
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator=test-approver-secret")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(
         approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
@@ -58,7 +67,7 @@ def test_failed_write_records_operator_recovery_context_without_replay(
 
 def _approved_request(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator=test-approver-secret")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
     monkeypatch.setattr(write_tools, "_notes_dir", tmp_path / "notes")
@@ -203,7 +212,7 @@ def test_approval_audit_failure_blocks_execution_and_preserves_consumed_safety(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator=test-approver-secret")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(
         approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
@@ -245,7 +254,7 @@ def test_approval_audit_record_update_failure_leaves_approval_unexecutable(
     monkeypatch, tmp_path
 ):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-real-not-mocked")
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator=test-approver-secret")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(
         approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
@@ -289,7 +298,7 @@ def test_approval_audit_record_update_failure_leaves_approval_unexecutable(
 def test_denial_audit_failure_keeps_denial_terminal_and_reports_incomplete_audit(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator=test-approver-secret")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(
         approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
@@ -324,7 +333,7 @@ def test_denial_audit_failure_keeps_denial_terminal_and_reports_incomplete_audit
 def test_request_audit_append_failure_leaves_request_unapprovable(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator=test-approver-secret")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
 
@@ -356,7 +365,7 @@ def test_request_audit_append_failure_leaves_request_unapprovable(
 def test_request_audit_status_persistence_failure_leaves_request_unapprovable(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "test-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator=test-approver-secret")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
     real_write = approval._write_record_atomically

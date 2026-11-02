@@ -1,9 +1,19 @@
 import asyncio
 import hashlib
 
+import pytest
+
 from stage2_sdk_ai import approval, input_guard, tools
 from stage2_sdk_ai.agent_loop import run_agent
 from stage2_sdk_ai.api import RequestBodyLimitMiddleware
+
+
+@pytest.fixture(autouse=True)
+def _approval_auth_config(monkeypatch):
+    monkeypatch.setenv(
+        "AGENT_API_KEYS", "agent=requester-secret,owner=owner-requester-secret"
+    )
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=approver-secret")
 
 
 def test_authenticated_agent_reads_only_requester_scoped_notes(monkeypatch, tmp_path):
@@ -60,7 +70,7 @@ def test_approval_rejects_same_configured_requester_and_approver_identity(
 
 
 def test_pending_approval_expires_and_is_not_listed(monkeypatch, tmp_path):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=operator-secret")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
     clock = [1_000.0]
@@ -77,7 +87,7 @@ def test_pending_approval_expires_and_is_not_listed(monkeypatch, tmp_path):
 
 
 def test_approved_operation_expires_before_consumption(monkeypatch, tmp_path):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=operator-secret")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
     clock = [2_000.0]
@@ -177,7 +187,7 @@ def test_body_buffering_concurrency_limit_returns_429():
 def test_pending_approval_fails_closed_after_significant_clock_rollback(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=operator-secret")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
     clock = [5_000.0]
@@ -195,7 +205,7 @@ def test_pending_approval_fails_closed_after_significant_clock_rollback(
 def test_approved_operation_fails_closed_after_clock_rollback(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "operator-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=operator-secret")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(approval, "_audit_file", tmp_path / "logs" / "audit.jsonl")
     clock = [8_000.0]

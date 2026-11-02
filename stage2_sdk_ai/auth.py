@@ -13,7 +13,9 @@ _MAX_PER_MIN = 10
 _rate_lock = threading.Lock()
 
 
-def _parse_key_config(env_name: str, legacy_prefix: str) -> list[tuple[str, str]]:
+def _parse_key_config(
+    env_name: str, legacy_prefix: str, *, require_identity: bool = False
+) -> list[tuple[str, str]]:
     """Parse identity=secret pairs, rejecting the entire config if ambiguous.
 
     Legacy bare secrets remain supported with deterministic fingerprint
@@ -37,11 +39,16 @@ def _parse_key_config(env_name: str, legacy_prefix: str) -> list[tuple[str, str]
             if not identity or not secret:
                 return []
         else:
+            if require_identity:
+                return []
             secret = item
             identity = legacy_prefix + hashlib.sha256(
                 secret.encode("utf-8")
             ).hexdigest()[:12]
 
+        # HTTP authentication headers and compare_digest require ASCII secrets.
+        if not secret.isascii():
+            return []
         if identity in identities or secret in secrets:
             return []
         identities.add(identity)
@@ -54,15 +61,24 @@ def _configured_requester_keys() -> list[tuple[str, str]]:
     """Return validated requester identity/secret pairs."""
     return _parse_key_config("AGENT_API_KEYS", "requester-")
 
+
+def _configured_approval_requester_keys() -> list[tuple[str, str]]:
+    """Return requester credentials with explicit principal identities only."""
+    return _parse_key_config(
+        "AGENT_API_KEYS", "requester-", require_identity=True
+    )
+
 def _allowed_keys() -> list[str]:
     """Return explicitly configured API secrets; missing configuration fails closed."""
     return [secret for _, secret in _configured_requester_keys()]
 
 
 def check_auth(api_key: str | None) -> dict[str, object]:
-    allowed = _allowed_keys()
-    if not api_key:
+    if not isinstance(api_key, str) or not api_key:
         return {"is_ok": False, "reason": "missing api key"}
+    if not api_key.isascii():
+        return {"is_ok": False, "reason": "invalid key"}
+    allowed = _allowed_keys()
     if not any(hmac.compare_digest(api_key, key) for key in allowed):
         return {"is_ok": False, "reason": "invalid key"}
     if any(
@@ -75,7 +91,7 @@ def check_auth(api_key: str | None) -> dict[str, object]:
 
 def requester_identity(api_key: str | None) -> str | None:
     """Resolve a valid API secret to its stable, non-secret requester identity."""
-    if not api_key:
+    if not isinstance(api_key, str) or not api_key or not api_key.isascii():
         return None
     for identity, secret in _configured_requester_keys():
         if hmac.compare_digest(api_key, secret):
@@ -110,27 +126,48 @@ def check_rate_limit(api_key: str, role: str = "api") -> bool:
     return check_rate(api_key, role=role).get("is_ok", False)
 
 def _configured_approver_keys() -> list[tuple[str, str]]:
-    """Return validated approver identity/secret pairs."""
-    return _parse_key_config("AGENT_APPROVER_KEYS", "approver-")
+    """Return approver credentials with explicit principal identities only."""
+    return _parse_key_config(
+        "AGENT_APPROVER_KEYS", "approver-", require_identity=True
+    )
 
 
 def verify_approver_key(approver_key: str | None) -> bool:
-    """Accept only approver credentials not shared with requester access."""
-    if not approver_key:
+    """Accept approver credentials only when both roles have named principals."""
+    if (
+        not isinstance(approver_key, str)
+        or not approver_key
+        or not approver_key.isascii()
+    ):
+        return False
+
+    requester_keys = _configured_approval_requester_keys()
+    approver_keys = _configured_approver_keys()
+    # Without explicit identities on both sides, self-approval cannot be
+    # reliably detected. Keep approval decisions disabled until configured.
+    if not requester_keys or not approver_keys:
         return False
     if any(
         hmac.compare_digest(approver_key, secret)
-        for secret in _allowed_keys()
+        for _, secret in requester_keys
     ):
         return False
     return any(
         hmac.compare_digest(approver_key, secret)
-        for _, secret in _configured_approver_keys()
+        for _, secret in approver_keys
     )
 
 
 def approver_identity(approver_key: str) -> str:
     """Resolve a valid approver secret to its stable configured identity."""
+    if (
+        not isinstance(approver_key, str)
+        or not approver_key
+        or not approver_key.isascii()
+    ):
+        raise ValueError("Approver identity is not configured")
+    if not _configured_approval_requester_keys():
+        raise ValueError("Requester identities must be explicitly configured")
     for identity, secret in _configured_approver_keys():
         if hmac.compare_digest(approver_key, secret):
             return identity
