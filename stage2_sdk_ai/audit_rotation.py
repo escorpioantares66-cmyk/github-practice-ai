@@ -346,15 +346,21 @@ def _read_rotation_state() -> dict[str, Any] | None:
 
 
 def _reject_missing_active_with_rotation_metadata(
-    audit_path: Path, anchor_path: Path, journal_path: Path
+    audit_path: Path, anchor_path: Path, journal_path: Path,
+    state_path: Path,
 ) -> None:
     from . import approval
 
     if audit_path.is_symlink():
         raise approval.AuditLogIntegrityError("active audit log cannot be a symlink")
-    if anchor_path.is_symlink() or journal_path.is_symlink():
+    if (
+        anchor_path.is_symlink() or journal_path.is_symlink()
+        or state_path.is_symlink()
+    ):
         raise approval.AuditLogIntegrityError("rotation metadata cannot be a symlink")
-    if (anchor_path.exists() or journal_path.exists()) and not audit_path.exists():
+    if (
+        anchor_path.exists() or journal_path.exists() or state_path.exists()
+    ) and not audit_path.exists():
         raise approval.AuditLogIntegrityError(
             "active audit log is missing while rotation metadata exists"
         )
@@ -549,7 +555,7 @@ def rotate_audit_log(
         )
     anchor_path, journal_path, target_dir = _paths()
     _reject_missing_active_with_rotation_metadata(
-        approval._audit_file, anchor_path, journal_path
+        approval._audit_file, anchor_path, journal_path, _state_path()
     )
     fd = open_private_file(approval._audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
@@ -627,6 +633,7 @@ def rotate_audit_log(
             }
             _write_json(journal_path, journal)
             _write_json(anchor_path, new_anchor)
+            _write_json(_state_path(), new_anchor)
             audit_file.seek(0)
             os.ftruncate(audit_file.fileno(), 0)
             os.fsync(audit_file.fileno())
@@ -715,6 +722,7 @@ def recover_audit_rotation(
             if not active:
                 if current_raw != new_raw:
                     _write_json(anchor_path, journal["new_anchor"])
+                _write_json(_state_path(), journal["new_anchor"])
                 _clear_journal(journal_path)
                 return {
                     "status": "recovered_complete",
@@ -753,6 +761,7 @@ def recover_audit_rotation(
                 }
             if current_raw != new_raw:
                 _write_json(anchor_path, journal["new_anchor"])
+            _write_json(_state_path(), journal["new_anchor"])
             audit_file.seek(0)
             os.ftruncate(audit_file.fileno(), 0)
             os.fsync(audit_file.fileno())
