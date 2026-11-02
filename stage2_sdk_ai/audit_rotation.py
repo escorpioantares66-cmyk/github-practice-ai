@@ -438,6 +438,33 @@ def _matches(left: dict[str, Any], right: dict[str, Any]) -> bool:
     ))
 
 
+def verify_archive_segment(path: Path) -> dict[str, Any]:
+    """Verify a segment file and every prior segment it links to."""
+    from . import approval
+
+    segment_path = Path(path)
+    raw = _read_private(segment_path, MAX_SEGMENT_BYTES)
+    manifest, _, file_hash = _decode_segment(raw)
+    expected_name = (
+        f"audit-segment-{manifest['end_sequence']:020d}-"
+        f"{manifest['segment_id'][:16]}.json"
+    )
+    if segment_path.name != expected_name:
+        raise approval.AuditLogIntegrityError(
+            "audit segment filename does not match its manifest"
+        )
+    anchor = _anchor_for(manifest, segment_path.name, file_hash)
+    verified = _verify_anchor(anchor, segment_path.parent)
+    return {
+        "valid": True,
+        "segments": verified["segments"],
+        "sequence": verified["checkpoint"]["sequence"],
+        "head_hash": verified["checkpoint"]["head_hash"],
+        "entries": verified["entries"],
+        "segment_sha256": file_hash,
+    }
+
+
 def rotate_audit_log(
     archive_dir: Path | None = None,
     *,
