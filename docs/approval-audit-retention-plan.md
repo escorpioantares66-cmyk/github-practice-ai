@@ -4,14 +4,14 @@
 
 - Retention threshold: 90 days (7,776,000 seconds), evaluated in UTC using persisted event timestamps.
 - Archive destination: private local storage, owner-only directory permissions (0700) and files (0600).
-- Archival is not deletion. The first implementation is copy-only and must leave active approval records and the active audit log byte-for-byte unchanged.
-- No automatic deletion or active-log truncation is in scope.
+- Archived evidence is never automatically deleted. Copy-only audit archival is the default; destructive active-log truncation is a separate explicit opt-in guarded by verification and recovery checks.
+- Approval JSON records are not moved or deleted by audit rotation. SQLite usage retention remains a separate policy.
 
 ## Current constraints found during review
 
 - Approval records are individual JSON files under the configured approval directory.
-- The append-only audit history is a single JSONL file with a SHA-256 hash chain and a 64 MiB validation limit.
-- Audit verification currently assumes the full history is present in one file. Moving old lines out would invalidate the existing sequence and previous-hash assumptions.
+- The active append-only audit history is a JSONL segment with a SHA-256 hash chain and a 64 MiB validation limit. After verified rotation, earlier segments are retained in a linked private archive and an anchor records the archived head.
+- Audit verification must validate the entire segment chain before validating the active suffix. Sequence numbers, previous-hash links, legacy-prefix integrity, and external checkpoint compatibility must remain continuous.
 - Approval quota enforcement scans the active approval JSON files. Moving records changes quota semantics unless archival is explicitly integrated into the scan.
 - Recovery inspection scans approval JSON files. Unresolved consumed executions must never disappear from operator recovery merely because they are old.
 - SQLite daily usage retention is separate from approval/audit retention and is not changed by this work.
@@ -27,9 +27,31 @@
 7. Re-running the same archive operation must be idempotent. A conflicting archive artifact must fail closed; never overwrite it silently.
 8. Keep originals untouched. Return a report of archived, skipped, and failed items without exposing note content or credentials.
 
-## Stage 2: verified rotation (separate change)
+## Stage 2: verified segmented rotation
 
-Only after Stage 1 and its tests are stable, design a segmented audit format that verifies archived segments and the active segment as one continuous chain. Preserve sequence numbers, previous-hash links, legacy-prefix integrity, and independent checkpoint compatibility. Rotation must be crash-safe and recoverable. No truncation or deletion until the full-chain verifier confirms the archived segment and the new active segment.
+The implementation uses immutable, individually verified audit segments. Each segment records its base sequence/hash, ending sequence/hash, legacy-prefix count, content digest, and digest link to the preceding segment. A private anchor identifies the latest verified segment and is paired with a persistent rotation-state marker. The marker makes a missing or altered anchor detectable after the crash journal has been cleared. The active JSONL file continues from that checkpoint without resetting sequence numbers or breaking previous-hash links.
+
+### Default and destructive modes
+
+- The default rotate_audit_log() operation is copy-only. It writes and verifies a segment but leaves the active audit log byte-for-byte unchanged.
+- Destructive rotation requires truncate=True and a fresh expected_checkpoint from approval.create_audit_checkpoint(). The operator must store that checkpoint independently before authorizing truncation.
+- Before truncation, the implementation verifies the complete existing segment chain, the active log, the new segment, the continuity links, and the exact external checkpoint.
+- It then writes a durable private rotation journal, advances the anchor and persistent state marker, truncates and fsyncs the active log, and only then clears the journal. Archived segments are never automatically deleted.
+- A pending journal blocks normal audit appends and verification. recover_audit_rotation() verifies the archive and journal first. It does not truncate by default; allow_truncate=True is required to finish an interrupted truncation. Unexpected active bytes, missing segments, or invalid links fail closed.
+- The archive directory and evidence files must be owner-private, regular files, single-link, and non-symlink paths. A missing active log after a rotation anchor exists is an integrity error, not an empty history.
+
+### Storage and operational limits
+
+The 64 MiB limit applies to each active segment. This bounds the size of the live append file, but it does not impose a finite cap on total archived history: preserving all evidence means the archive continues to grow. Re-validating the complete archive chain is proportional to archived history, so this local single-host design is appropriate only while that verification cost remains operationally acceptable. The archive remains local to the host and is not an off-device backup. Approval JSON records remain in the active approval store so quota enforcement and operator recovery are unchanged. SQLite daily usage retention is not changed by this audit-rotation implementation.
+
+Example operator sequence:
+
+1. Call approval.create_audit_checkpoint() and save the returned checkpoint outside the application storage.
+2. Call rotate_audit_log() first to create and verify a non-destructive copy.
+3. After reviewing the independently retained checkpoint and verified segment, call rotate_audit_log(truncate=True, expected_checkpoint=checkpoint) to authorize truncation.
+4. After an interruption, inspect with recover_audit_rotation(); explicitly pass allow_truncate=True only when recovery confirms the journaled segment and active bytes match.
+
+No scheduler or automatic cleanup is introduced.
 
 ## Security and regression test matrix
 

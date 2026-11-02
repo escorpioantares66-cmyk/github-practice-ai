@@ -28,7 +28,7 @@ from .secure_storage import (
 RETENTION_DAYS = 90
 RETENTION_SECONDS = RETENTION_DAYS * 24 * 60 * 60
 MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
-ARCHIVE_FORMAT_VERSION = 1
+ARCHIVE_FORMAT_VERSION = 2
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -163,9 +163,15 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
         )
     else:
         audit_contents = b""
-    sequence, head_hash, total, legacy_count, _ = approval._audit_chain_state(
-        audit_contents
+    from .audit_rotation import load_verified_anchor
+
+    archive_state = load_verified_anchor()
+    sequence, head_hash, active_total, legacy_count, _ = (
+        approval._audit_chain_state(
+            audit_contents, base_checkpoint=archive_state["checkpoint"]
+        )
     )
+    total = archive_state["entries"] + active_total
     old_audit_events = 0
     for raw_line in audit_contents.splitlines():
         if raw_line:
@@ -186,10 +192,10 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
         "audit_log_verified": True,
         "audit_entries_scanned": total,
         "audit_legacy_entries": legacy_count,
-        "audit_entries_older_than_cutoff": old_audit_events,
+        "active_audit_entries_older_than_cutoff": old_audit_events,
         "audit_head_sequence": sequence,
         "audit_head_hash": head_hash,
-        "audit_archive_mode": "full_verified_snapshot",
+        "audit_archive_mode": "verified_segment_chain_plus_active_tail",
     }
 
 
@@ -239,10 +245,14 @@ def _read_approval_snapshot(approval_id: str, cutoff: float, now: float) -> byte
 
 
 def _validate_audit_coverage(
-    records: dict[str, bytes], audit_contents: bytes
+    records: dict[str, bytes], audit_contents: bytes,
+    prior_actions: dict[str, set[str]] | None = None,
 ) -> None:
     """Require each archived record's completed lifecycle events in the chain."""
-    actions_by_id: dict[str, set[str]] = {}
+    actions_by_id: dict[str, set[str]] = {
+        approval_id: set(actions)
+        for approval_id, actions in (prior_actions or {}).items()
+    }
     for raw_line in audit_contents.splitlines():
         if not raw_line:
             continue
@@ -276,19 +286,23 @@ def _decode_archive(archive_bytes: bytes) -> dict[str, Any]:
     if not isinstance(envelope, dict) or set(envelope) != {"manifest", "data"}:
         raise ValueError("archive envelope is malformed")
     manifest, data = envelope["manifest"], envelope["data"]
+    format_version = manifest.get("format_version") if isinstance(manifest, dict) else None
     if (
         not isinstance(manifest, dict)
-        or manifest.get("format_version") != ARCHIVE_FORMAT_VERSION
+        or format_version not in {1, ARCHIVE_FORMAT_VERSION}
         or not isinstance(manifest.get("archive_id"), str)
         or not isinstance(data, dict)
         or hashlib.sha256(_canonical_json(data)).hexdigest()
         != manifest.get("data_sha256")
     ):
         raise ValueError("archive manifest or data digest is invalid")
-    if set(data) != {
+    expected_data_fields = {
         "cutoff_timestamp", "approval_records", "audit_log_base64",
         "audit_log_sha256", "audit_head_sequence", "audit_head_hash",
-    }:
+    }
+    if format_version >= 2:
+        expected_data_fields.add("audit_base_checkpoint")
+    if set(data) != expected_data_fields:
         raise ValueError("archive data schema is invalid")
     try:
         audit_bytes = base64.b64decode(data["audit_log_base64"], validate=True)
@@ -306,7 +320,13 @@ def _decode_archive(archive_bytes: bytes) -> dict[str, Any]:
                 raise ValueError
         if hashlib.sha256(audit_bytes).hexdigest() != data["audit_log_sha256"]:
             raise ValueError
-        sequence, head_hash, _, _, _ = approval._audit_chain_state(audit_bytes)
+        base_checkpoint = data.get(
+            "audit_base_checkpoint",
+            {"sequence": 0, "head_hash": "0" * 64, "legacy_entries": 0},
+        )
+        sequence, head_hash, _, _, _ = approval._audit_chain_state(
+            audit_bytes, base_checkpoint=base_checkpoint
+        )
         if (
             sequence != data["audit_head_sequence"]
             or head_hash != data["audit_head_hash"]
@@ -384,8 +404,15 @@ def archive_retention(
                 )
             else:
                 audit_bytes = b""
-            sequence, head_hash, _, _, _ = approval._audit_chain_state(audit_bytes)
-            _validate_audit_coverage(record_payloads, audit_bytes)
+            from .audit_rotation import load_verified_anchor
+
+            anchor_state = load_verified_anchor()
+            sequence, head_hash, _, legacy_count, _ = approval._audit_chain_state(
+                audit_bytes, base_checkpoint=anchor_state["checkpoint"]
+            )
+            _validate_audit_coverage(
+                record_payloads, audit_bytes, anchor_state["actions_by_id"]
+            )
 
             records = {
                 approval_id: {
@@ -401,6 +428,11 @@ def archive_retention(
                 "audit_log_sha256": hashlib.sha256(audit_bytes).hexdigest(),
                 "audit_head_sequence": sequence,
                 "audit_head_hash": head_hash,
+                "audit_base_checkpoint": {
+                    "sequence": anchor_state["checkpoint"]["sequence"],
+                    "head_hash": anchor_state["checkpoint"]["head_hash"],
+                    "legacy_entries": anchor_state["checkpoint"]["legacy_entries"],
+                },
             }
             data_bytes = _canonical_json(data)
             manifest_core = {
