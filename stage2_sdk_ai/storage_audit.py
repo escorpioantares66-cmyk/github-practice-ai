@@ -15,6 +15,7 @@ from typing import Any
 
 from . import approval, quota_store, write_tools
 from .retention import RETENTION_DAYS, plan_retention
+from .secure_storage import UnsafeStoragePathError, _open_directory_chain
 
 MAX_SCAN_ENTRIES = 100_000
 MAX_SCAN_DEPTH = 8
@@ -138,7 +139,7 @@ def inspect_storage_path(
     max_depth: int = MAX_SCAN_DEPTH,
 ) -> dict[str, Any]:
     """Inventory one path without following symlinks or reading file contents."""
-    target = Path(path).expanduser()
+    target = Path(os.path.abspath(Path(path).expanduser()))
     result = _empty_inventory(target)
     if (
         isinstance(max_entries, bool)
@@ -150,112 +151,127 @@ def inspect_storage_path(
     ):
         raise ValueError("scan limits must be non-negative integers")
 
+    parent_fd = -1
+    root_fd = -1
     try:
-        info = target.lstat()
+        parent_fd = _open_directory_chain(target.parent, create=False)
+        info = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
     except FileNotFoundError:
         result["status"] = "missing"
         return result
-    except OSError:
-        result["status"] = "unreadable"
-        result["unreadable_entries"] += 1
-        return result
-
-    if stat.S_ISLNK(info.st_mode):
+    except UnsafeStoragePathError:
         result["status"] = "symlink"
         result["symlinks"] = 1
         return result
-    if stat.S_ISREG(info.st_mode):
-        result["status"] = "present"
-        _record_file(result, target.name, info)
-        return result
-    if not stat.S_ISDIR(info.st_mode):
-        result["status"] = "special_file"
-        result["special_files"] = 1
-        return result
-
-    result["status"] = "present"
-    result["directories"] = 1
-    if not _private_metadata(info, directory=True):
-        result["unsafe_permissions"] += 1
-
-    root_fd = -1
-    try:
-        root_fd = os.open(target, _DIRECTORY_FLAGS)
-        opened_info = os.fstat(root_fd)
-        if (opened_info.st_dev, opened_info.st_ino) != (info.st_dev, info.st_ino):
-            result["status"] = "changed_during_scan"
-            result["unreadable_entries"] += 1
-            return result
-        _scan_directory_fd(
-            root_fd,
-            result,
-            depth=0,
-            budget=[0],
-            max_entries=max_entries,
-            max_depth=max_depth,
-        )
     except OSError:
         result["status"] = "unreadable"
         result["unreadable_entries"] += 1
+        return result
     finally:
-        if root_fd >= 0:
-            os.close(root_fd)
-    return result
-
-
-def _inspect_leaf(path: Path) -> dict[str, Any]:
-    """Inspect a single file or missing path without opening it."""
-    result = _empty_inventory(path)
-    try:
-        info = path.lstat()
-    except FileNotFoundError:
-        result["status"] = "missing"
-        return result
-    except OSError:
-        result["status"] = "unreadable"
-        result["unreadable_entries"] = 1
-        return result
+        if parent_fd >= 0 and result["status"] in {
+            "missing", "symlink", "unreadable"
+        }:
+            os.close(parent_fd)
+            parent_fd = -1
 
     if stat.S_ISLNK(info.st_mode):
         result["status"] = "symlink"
         result["symlinks"] = 1
     elif stat.S_ISREG(info.st_mode):
         result["status"] = "present"
-        _record_file(result, path.name, info)
-    else:
+        _record_file(result, target.name, info)
+    elif not stat.S_ISDIR(info.st_mode):
         result["status"] = "special_file"
         result["special_files"] = 1
+    else:
+        result["status"] = "present"
+        result["directories"] = 1
+        if not _private_metadata(info, directory=True):
+            result["unsafe_permissions"] += 1
+        try:
+            root_fd = os.open(target.name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+            opened_info = os.fstat(root_fd)
+            if (opened_info.st_dev, opened_info.st_ino) != (info.st_dev, info.st_ino):
+                result["status"] = "changed_during_scan"
+                result["unreadable_entries"] += 1
+            else:
+                _scan_directory_fd(
+                    root_fd,
+                    result,
+                    depth=0,
+                    budget=[0],
+                    max_entries=max_entries,
+                    max_depth=max_depth,
+                )
+        except OSError:
+            result["status"] = "unreadable"
+            result["unreadable_entries"] += 1
+    if root_fd >= 0:
+        os.close(root_fd)
+    if parent_fd >= 0:
+        os.close(parent_fd)
+    return result
+
+def _inspect_leaf(path: Path) -> dict[str, Any]:
+    """Inspect a single file or missing path without opening its contents."""
+    target = Path(os.path.abspath(path.expanduser()))
+    result = _empty_inventory(target)
+    parent_fd = -1
+    try:
+        parent_fd = _open_directory_chain(target.parent, create=False)
+        info = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        result["status"] = "missing"
+    except UnsafeStoragePathError:
+        result["status"] = "symlink"
+        result["symlinks"] = 1
+    except OSError:
+        result["status"] = "unreadable"
+        result["unreadable_entries"] = 1
+    else:
+        if stat.S_ISLNK(info.st_mode):
+            result["status"] = "symlink"
+            result["symlinks"] = 1
+        elif stat.S_ISREG(info.st_mode):
+            result["status"] = "present"
+            _record_file(result, target.name, info)
+        else:
+            result["status"] = "special_file"
+            result["special_files"] = 1
+    finally:
+        if parent_fd >= 0:
+            os.close(parent_fd)
     return result
 
 
 def _inspect_directory_metadata(path: Path) -> dict[str, Any]:
     """Check a storage parent directory without enumerating or changing it."""
+    target = Path(os.path.abspath(path.expanduser()))
     result: dict[str, Any] = {
-        "path": str(path),
+        "path": str(target),
         "status": "unknown",
         "symlinks": 0,
         "unsafe_permissions": 0,
     }
+    fd = -1
     try:
-        info = path.lstat()
+        fd = _open_directory_chain(target, create=False)
+        info = os.fstat(fd)
     except FileNotFoundError:
         result["status"] = "missing"
-        return result
-    except OSError:
-        result["status"] = "unreadable"
-        return result
-    if stat.S_ISLNK(info.st_mode):
+    except UnsafeStoragePathError:
         result["status"] = "symlink"
         result["symlinks"] = 1
-    elif stat.S_ISDIR(info.st_mode):
+    except OSError:
+        result["status"] = "unreadable"
+    else:
         result["status"] = "present"
         if not _private_metadata(info, directory=True):
             result["unsafe_permissions"] = 1
-    else:
-        result["status"] = "not_directory"
-        result["unsafe_permissions"] = 1
+    finally:
+        if fd >= 0:
+            os.close(fd)
     return result
-
 
 def _quota_database_path() -> Path:
     configured = os.getenv("AGENT_QUOTA_DB_PATH", "").strip()
