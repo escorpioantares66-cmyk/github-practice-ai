@@ -646,3 +646,52 @@ def test_recovery_listing_surfaces_corrupt_approval_records(monkeypatch, tmp_pat
             "execution_audit_status": None,
         }
     ]
+
+
+def test_concurrent_approved_write_execution_is_at_most_once(
+    monkeypatch, tmp_path
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    approval_id = _approved_request(monkeypatch, tmp_path)
+
+    real_atomic_write = write_tools._atomic_write_note
+    write_count = 0
+
+    def counted_atomic_write(*args, **kwargs):
+        nonlocal write_count
+        write_count += 1
+        return real_atomic_write(*args, **kwargs)
+
+    monkeypatch.setattr(
+        write_tools, "_atomic_write_note", counted_atomic_write
+    )
+
+    barrier = Barrier(2)
+
+    def execute():
+        barrier.wait()
+        return write_tools.execute_approved_write(
+            approval_id, requester="agent"
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(execute) for _ in range(2)]
+        results = [future.result() for future in futures]
+
+    statuses = [result["status"] for result in results]
+
+    assert statuses.count("written") == 1
+    assert statuses.count("invalid_transition") == 1
+    assert write_count == 1
+
+    record = approval.check_approval(approval_id)
+    assert record["status"] == "consumed"
+
+    notes_dir = (
+        tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest()
+    )
+    destination = notes_dir / "fault-case.md"
+
+    assert destination.read_text(encoding="utf-8") == "approved payload"
