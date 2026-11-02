@@ -171,6 +171,10 @@ def test_fifo_is_rejected_without_blocking(tmp_path):
         open_private_file(fifo, os.O_RDONLY)
 
 
+@pytest.mark.skipif(
+    not hasattr(os, "link"),
+    reason="Hard-link creation is unavailable on this platform",
+)
 def test_hard_linked_private_file_is_rejected(tmp_path):
     from stage2_sdk_ai.secure_storage import open_private_file
 
