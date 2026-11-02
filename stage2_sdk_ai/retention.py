@@ -89,13 +89,27 @@ def _validate_now(now: float | None) -> float:
     return float(current)
 
 
-def plan_retention(now: float | None = None) -> dict[str, Any]:
-    """Report old, safe-to-archive evidence without changing source storage."""
+def plan_retention(
+    now: float | None = None,
+    *,
+    max_approval_records: int | None = None,
+) -> dict[str, Any]:
+    """Report old evidence, optionally bounding approval-record inspection."""
+    if (
+        max_approval_records is not None
+        and (
+            isinstance(max_approval_records, bool)
+            or not isinstance(max_approval_records, int)
+            or max_approval_records < 1
+        )
+    ):
+        raise ValueError("max_approval_records must be a positive integer or None")
     current = _validate_now(now)
     cutoff = current - RETENTION_SECONDS
     eligible: list[str] = []
     excluded: dict[str, int] = {}
     approval_count = 0
+    approval_scan_truncated = False
 
     if approval._approvals_dir.is_symlink():
         raise approval.ApprovalStoreIntegrityError(
@@ -112,7 +126,14 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
                 "approval directory must be private and owned by the application user"
             )
 
-    for path in sorted(approval._approvals_dir.glob("*.json")):
+    for path in approval._approvals_dir.glob("*.json"):
+        if (
+            max_approval_records is not None
+            and approval_count >= max_approval_records
+        ):
+            # Consume at most one additional path to establish truncation.
+            approval_scan_truncated = True
+            break
         approval_count += 1
         reason = None
         if path.is_symlink():
@@ -186,6 +207,8 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
         "archive_destination": "private_local",
         "source_modified": False,
         "approval_records_scanned": approval_count,
+        "approval_records_scan_limit": max_approval_records,
+        "approval_records_scan_truncated": approval_scan_truncated,
         "approval_records_eligible": len(eligible),
         "eligible_approval_ids": eligible,
         "approval_records_excluded": excluded,

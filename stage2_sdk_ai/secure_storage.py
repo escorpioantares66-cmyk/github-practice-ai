@@ -127,7 +127,10 @@ def open_private_file(path: Path, flags: int, mode: int = 0o600) -> int:
         raise UnsafeStoragePathError(
             "Private storage file must not have additional hard links"
         )
-    os.fchmod(fd, mode)
+    # Read-only inspection must not mutate mode bits or file metadata.
+    # Newly created files and writable opens still receive the requested mode.
+    if (flags & os.O_ACCMODE) != os.O_RDONLY or flags & os.O_CREAT:
+        os.fchmod(fd, mode)
     return fd
 
 

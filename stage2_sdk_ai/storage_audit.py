@@ -78,58 +78,61 @@ def _scan_directory_fd(
     max_depth: int,
 ) -> None:
     try:
-        names = os.listdir(fd)
+        # scandir yields entries incrementally; listdir would allocate the full
+        # directory before the scan budget could take effect.
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                if budget[0] >= max_entries:
+                    result["truncated"] = True
+                    return
+                name = entry.name
+                budget[0] += 1
+                result["entries_examined"] += 1
+                try:
+                    info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                except OSError:
+                    result["unreadable_entries"] += 1
+                    continue
+
+                if stat.S_ISLNK(info.st_mode):
+                    result["symlinks"] += 1
+                elif stat.S_ISREG(info.st_mode):
+                    _record_file(result, name, info)
+                elif stat.S_ISDIR(info.st_mode):
+                    result["directories"] += 1
+                    if not _private_metadata(info, directory=True):
+                        result["unsafe_permissions"] += 1
+                    if depth >= max_depth:
+                        result["truncated"] = True
+                        continue
+                    child_fd = -1
+                    try:
+                        child_fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=fd)
+                        opened_info = os.fstat(child_fd)
+                        if (opened_info.st_dev, opened_info.st_ino) != (
+                            info.st_dev, info.st_ino
+                        ):
+                            result["unreadable_entries"] += 1
+                            os.close(child_fd)
+                            child_fd = -1
+                            continue
+                        _scan_directory_fd(
+                            child_fd,
+                            result,
+                            depth=depth + 1,
+                            budget=budget,
+                            max_entries=max_entries,
+                            max_depth=max_depth,
+                        )
+                    except OSError:
+                        result["unreadable_entries"] += 1
+                    finally:
+                        if child_fd >= 0:
+                            os.close(child_fd)
+                else:
+                    result["special_files"] += 1
     except OSError:
         result["unreadable_entries"] += 1
-        return
-
-    for name in names:
-        if budget[0] >= max_entries:
-            result["truncated"] = True
-            return
-        budget[0] += 1
-        result["entries_examined"] += 1
-        try:
-            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
-        except OSError:
-            result["unreadable_entries"] += 1
-            continue
-
-        if stat.S_ISLNK(info.st_mode):
-            result["symlinks"] += 1
-        elif stat.S_ISREG(info.st_mode):
-            _record_file(result, name, info)
-        elif stat.S_ISDIR(info.st_mode):
-            result["directories"] += 1
-            if not _private_metadata(info, directory=True):
-                result["unsafe_permissions"] += 1
-            if depth >= max_depth:
-                result["truncated"] = True
-                continue
-            child_fd = -1
-            try:
-                child_fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=fd)
-                opened_info = os.fstat(child_fd)
-                if (opened_info.st_dev, opened_info.st_ino) != (info.st_dev, info.st_ino):
-                    result["unreadable_entries"] += 1
-                    os.close(child_fd)
-                    child_fd = -1
-                    continue
-                _scan_directory_fd(
-                    child_fd,
-                    result,
-                    depth=depth + 1,
-                    budget=budget,
-                    max_entries=max_entries,
-                    max_depth=max_depth,
-                )
-            except OSError:
-                result["unreadable_entries"] += 1
-            finally:
-                if child_fd >= 0:
-                    os.close(child_fd)
-        else:
-            result["special_files"] += 1
 
 
 def inspect_storage_path(
@@ -298,7 +301,10 @@ def _quota_inventory() -> dict[str, Any]:
 
 def _retention_inventory(now: float) -> dict[str, Any]:
     try:
-        plan = plan_retention(now=now)
+        plan = plan_retention(
+            now=now,
+            max_approval_records=MAX_SCAN_ENTRIES,
+        )
     except Exception as exc:
         return {
             "status": "unavailable",
@@ -309,10 +315,17 @@ def _retention_inventory(now: float) -> dict[str, Any]:
             "approval_records_excluded": {},
         }
 
+    scan_truncated = plan.get("approval_records_scan_truncated") is True
     return {
-        "status": "verified" if plan.get("audit_log_verified") is True else "failed",
+        "status": (
+            "incomplete"
+            if scan_truncated
+            else "verified" if plan.get("audit_log_verified") is True else "failed"
+        ),
         "retention_days": plan.get("retention_days", RETENTION_DAYS),
         "approval_records_scanned": plan.get("approval_records_scanned", 0),
+        "approval_records_scan_limit": plan.get("approval_records_scan_limit"),
+        "approval_records_scan_truncated": scan_truncated,
         "eligible_approval_records": plan.get("approval_records_eligible", 0),
         "approval_records_excluded": plan.get("approval_records_excluded", {}),
         "audit_log_verified": plan.get("audit_log_verified") is True,
@@ -523,7 +536,16 @@ def run_storage_audit(now: float | None = None) -> dict[str, Any]:
                 "Check filesystem access and rerun the audit before making storage decisions.",
             ))
 
-    if retention["status"] != "verified":
+    if retention["status"] == "incomplete":
+        findings.append(_finding(
+            "warning",
+            "retention_approval_scan_limited",
+            "The approval-record scan reached its configured limit; retention "
+            "eligibility is incomplete and must not be treated as a full inventory.",
+            "Review the reported scan limit and rerun with an explicitly approved "
+            "higher bound if a complete inventory is required.",
+        ))
+    elif retention["status"] != "verified":
         findings.append(_finding(
             "critical",
             "retention_or_audit_verification_failed",

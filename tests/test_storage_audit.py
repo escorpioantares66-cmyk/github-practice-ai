@@ -1,7 +1,10 @@
 import json
+import os
 import sys
 
-from stage2_sdk_ai import approval, write_tools
+import pytest
+
+from stage2_sdk_ai import approval, secure_storage, write_tools
 from stage2_sdk_ai.cli import main
 from stage2_sdk_ai.storage_audit import inspect_storage_path, run_storage_audit
 
@@ -130,16 +133,60 @@ def test_storage_audit_respects_scan_limits(monkeypatch, tmp_path):
     directory = _private_dir(tmp_path / "many")
     _private_file(directory / "one.json")
     _private_file(directory / "two.json")
+
+    def listdir_must_not_be_used(*args, **kwargs):
+        raise AssertionError("unbounded listdir must not be used")
+
+    monkeypatch.setattr("stage2_sdk_ai.storage_audit.os.listdir", listdir_must_not_be_used)
     result = inspect_storage_path(directory, max_entries=1)
 
     assert result["entries_examined"] == 1
     assert result["truncated"] is True
 
 
+def test_read_only_private_file_open_does_not_change_permissions(tmp_path, monkeypatch):
+    path = _private_file(tmp_path / "private" / "record.json")
+    before_mode = path.stat().st_mode
+
+    def chmod_must_not_be_used(*args, **kwargs):
+        raise AssertionError("read-only open must not chmod the file")
+
+    monkeypatch.setattr(secure_storage.os, "fchmod", chmod_must_not_be_used)
+    fd = secure_storage.open_private_file(path, os.O_RDONLY)
+    os.close(fd)
+
+    assert path.stat().st_mode == before_mode
+
+
+def test_retention_approval_scan_limit_is_explicitly_incomplete(
+    monkeypatch, tmp_path
+):
+    _configure_paths(monkeypatch, tmp_path)
+    old_created = 1_700_000_000.0
+    now = old_created + (90 * 24 * 60 * 60) + 10
+    monkeypatch.setattr(approval.time, "time", lambda: old_created)
+    approval.request_approval("write_note", {"path": "first.md"})
+    approval.request_approval("write_note", {"path": "second.md"})
+    monkeypatch.setattr(approval.time, "time", lambda: now)
+    monkeypatch.setattr("stage2_sdk_ai.storage_audit.MAX_SCAN_ENTRIES", 1)
+
+    result = run_storage_audit(now=now)
+
+    assert result["retention"]["status"] == "incomplete"
+    assert result["retention"]["approval_records_scanned"] == 1
+    assert result["retention"]["approval_records_scan_limit"] == 1
+    assert result["retention"]["approval_records_scan_truncated"] is True
+    assert result["retention"]["audit_log_verified"] is True
+    assert any(
+        item["code"] == "retention_approval_scan_limited"
+        for item in result["findings"]
+    )
+
+
 def test_storage_audit_reports_retention_verification_failure(monkeypatch, tmp_path):
     _configure_paths(monkeypatch, tmp_path)
 
-    def fail_retention(now=None):
+    def fail_retention(now=None, max_approval_records=None):
         raise approval.AuditLogIntegrityError("test")
 
     monkeypatch.setattr("stage2_sdk_ai.storage_audit.plan_retention", fail_retention)

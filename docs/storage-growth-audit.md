@@ -30,9 +30,12 @@ directories, change modes, or write database files. It measures the quota
 database and its SQLite sidecars by file metadata only; it does not open SQLite,
 execute SQL, or report row counts.
 
-The retention section reuses retention.plan_retention(). That planner reads
-approval records and the audit history to determine which records could be
-copied into a retention snapshot and to verify the local segmented audit chain.
+The retention section reuses retention.plan_retention() with the same 100,000
+record ceiling as the filesystem inventory. The planner reads approval records
+and the audit history to determine which records could be copied into a
+retention snapshot and to verify the local segmented audit chain. If more
+approval records exist than the configured ceiling, the report marks retention
+as incomplete and does not present the partial eligible count as a full result.
 It remains a dry-run: eligible IDs are removed from the public report, no
 snapshot is created, and source records are not changed or deleted.
 
@@ -54,9 +57,12 @@ metadata according to its mount policy (for example, relatime or noatime).
 | Quota database | Database and SQLite sidecar file sizes; no row-level inspection |
 | Vector store | Default .test_rag persistence path; custom instance paths are not discoverable |
 
-The filesystem scan is bounded by 100,000 entries and depth 8 by default. A
-truncated or unreadable inventory is explicitly marked; missing data must not
-be interpreted as an empty store.
+Each directory scan is streamed and bounded by 100,000 entries and depth 8 by
+default; it does not first materialize every directory name. The retention
+approval-record scan is independently bounded by the same 100,000-record
+ceiling. A truncated or unreadable inventory is explicitly marked; missing data
+must not be interpreted as an empty store. A retention scan marked incomplete
+must not be treated as a complete eligibility assessment.
 
 ## Retention findings and current limits
 
