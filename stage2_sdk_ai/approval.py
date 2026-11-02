@@ -1014,7 +1014,7 @@ def _audit_chain_state(
         if not chain_started:
             expected_previous = (
                 hashlib.sha256(
-                    b"legacy-audit-prefix-v1\\0" + b"".join(legacy_lines)
+                    b"legacy-audit-prefix-v1\0" + b"".join(legacy_lines)
                 ).hexdigest()
                 if legacy_lines else previous_hash
             )
@@ -1039,7 +1039,7 @@ def _audit_chain_state(
 
     if not chain_started and legacy_lines:
         previous_hash = hashlib.sha256(
-            b"legacy-audit-prefix-v1\\0" + b"".join(legacy_lines)
+            b"legacy-audit-prefix-v1\0" + b"".join(legacy_lines)
         ).hexdigest()
         chain_hashes[0] = previous_hash
     return sequence, previous_hash, total, legacy_count, chain_hashes
