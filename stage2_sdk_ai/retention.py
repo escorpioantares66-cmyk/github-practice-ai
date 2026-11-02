@@ -195,7 +195,7 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
         "audit_entries_older_than_cutoff": old_audit_events,
         "audit_head_sequence": sequence,
         "audit_head_hash": head_hash,
-        "audit_archive_mode": "full_verified_snapshot",
+        "audit_archive_mode": "verified_segment_chain_plus_active_tail",
     }
 
 
@@ -406,7 +406,7 @@ def archive_retention(
                 audit_bytes = b""
             from .audit_rotation import load_verified_anchor
 
-            anchor_state = load_verified_anchor(target_dir)
+            anchor_state = load_verified_anchor()
             sequence, head_hash, _, legacy_count, _ = approval._audit_chain_state(
                 audit_bytes, base_checkpoint=anchor_state["checkpoint"]
             )
