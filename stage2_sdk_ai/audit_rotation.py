@@ -269,6 +269,7 @@ def _verify_anchor(anchor: dict[str, Any] | None, archive_dir: Path
     checkpoint = _base()
     hashes: dict[int, str] = {0: _ZERO_HASH}
     entries = 0
+    actions_by_id: dict[str, set[str]] = {}
     for manifest, content in reversed(reverse_segments):
         if (
             manifest["base_sequence"] != checkpoint["sequence"]
@@ -282,6 +283,12 @@ def _verify_anchor(anchor: dict[str, Any] | None, archive_dir: Path
         checkpoint = _base(sequence, head_hash, legacy_count)
         hashes.update(segment_hashes)
         entries += count
+        for raw_line in content.splitlines():
+            event = json.loads(raw_line)
+            record = event.get("record", {})
+            approval_id = record.get("id") if isinstance(record, dict) else None
+            if isinstance(approval_id, str):
+                actions_by_id.setdefault(approval_id, set()).add(event["action"])
     if (
         checkpoint["sequence"] != anchor["sequence"]
         or checkpoint["head_hash"] != anchor["head_hash"]
@@ -295,6 +302,7 @@ def _verify_anchor(anchor: dict[str, Any] | None, archive_dir: Path
         "hashes": hashes,
         "entries": entries,
         "segments": len(reverse_segments),
+        "actions_by_id": actions_by_id,
     }
 
 
@@ -317,6 +325,8 @@ def load_verified_anchor(archive_dir: Path | None = None) -> dict[str, Any]:
                 "audit segment directory cannot be a symlink"
             )
         return _empty_state()
+    if not approval._audit_file.exists():
+        raise approval.AuditLogIntegrityError("active audit segment is missing")
     try:
         anchor = json.loads(_read_private(anchor_path, 64 * 1024))
     except (UnicodeDecodeError, ValueError) as exc:
