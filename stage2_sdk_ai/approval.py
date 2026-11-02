@@ -195,14 +195,20 @@ def request_approval(
             except FileExistsError:
                 continue
             # Reserve the random identifier without exposing a partially written
-            # JSON record. The placeholder is fail-closed if the process crashes;
-            # the complete record becomes visible in one atomic replacement.
+            # JSON record. Create its transition lock at the same time so read-only
+            # retention snapshots can take a shared lock without creating files.
             os.close(fd)
+            lock_path = path.with_suffix(path.suffix + ".lock")
             try:
+                lock_fd = open_private_file(
+                    lock_path, os.O_RDWR | os.O_CREAT | os.O_EXCL
+                )
+                os.close(lock_fd)
                 _write_record_atomically(path, record)
             except Exception:
                 try:
                     path.unlink(missing_ok=True)
+                    lock_path.unlink(missing_ok=True)
                     fsync_directory(_approvals_dir)
                 except OSError:
                     logger.exception(
