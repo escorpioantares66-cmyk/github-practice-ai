@@ -1075,8 +1075,9 @@ def _audit_safe_record(record: dict[str, Any]) -> dict[str, Any]:
 def log_audit(action: str, record: dict[str, Any]) -> None:
     """Append one durable JSONL event without storing operation payloads."""
     _ensure_dirs()
-    if _audit_file.with_name("audit.anchor.json").exists() and not _audit_file.exists():
-        raise AuditLogIntegrityError("active audit segment is missing")
+    from .audit_rotation import load_verified_anchor
+
+    load_verified_anchor()
     entry = {"action": action, "time": time.time(), "record": record}
     fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
@@ -1162,8 +1163,9 @@ def verify_audit_log(
 ) -> dict[str, Any]:
     """Verify archived segments, active suffix, and an optional external checkpoint."""
     _ensure_dirs()
-    if _audit_file.with_name("audit.anchor.json").exists() and not _audit_file.exists():
-        raise AuditLogIntegrityError("active audit segment is missing")
+    from .audit_rotation import load_verified_anchor
+
+    load_verified_anchor()
     fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
         fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
