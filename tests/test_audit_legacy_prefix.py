@@ -35,7 +35,7 @@ def _first_chained_event(legacy_prefix):
         "seq": 1,
         "previous_hash": (
             hashlib.sha256(
-                b"legacy-audit-prefix-v1\\0" + legacy_prefix
+                b"legacy-audit-prefix-v1\0" + legacy_prefix
             ).hexdigest()
             if legacy_prefix else "0" * 64
         ),
@@ -55,7 +55,7 @@ def test_audit_chain_accepts_multiple_legacy_prefix_entries():
 
     assert sequence == 0
     assert head_hash == hashlib.sha256(
-        b"legacy-audit-prefix-v1\\0" + contents
+        b"legacy-audit-prefix-v1\0" + contents
     ).hexdigest()
     assert total == 2
     assert legacy_count == 2
