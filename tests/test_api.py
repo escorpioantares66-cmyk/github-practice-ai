@@ -23,7 +23,7 @@ VALID_KEY = "test-key-123"
 
 @pytest.fixture(autouse=True)
 def _reset_auth_state(monkeypatch):
-    monkeypatch.setenv("AGENT_API_KEYS", VALID_KEY)
+    monkeypatch.setenv("AGENT_API_KEYS", f"automation={VALID_KEY}")
     auth.reset_rate()
     yield
     auth.reset_rate()
@@ -147,7 +147,7 @@ def test_oversized_deny_body_is_rejected_before_json_validation(client, monkeypa
     from stage2_sdk_ai.api import MAX_REQUEST_BODY_BYTES
 
     # The early middleware auth gate requires this test key to be configured.
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "any")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=any")
     response = client.post(
         "/deny",
         content=(
@@ -206,7 +206,7 @@ def test_normal_api_key_cannot_approve(client):
 
 
 def test_wrong_approver_key_is_forbidden(client, monkeypatch):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
 
     resp = client.post(
         "/approve?approval_id=" + "d" * 32,
@@ -218,7 +218,7 @@ def test_wrong_approver_key_is_forbidden(client, monkeypatch):
 def test_valid_approver_key_can_approve(client, monkeypatch, tmp_path):
     from stage2_sdk_ai import approval
 
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(
         approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
@@ -235,7 +235,38 @@ def test_valid_approver_key_can_approve(client, monkeypatch, tmp_path):
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "approved"
-    assert resp.json()["approver"].startswith("approver-")
+    assert resp.json()["approver"] == "reviewer"
+
+
+def test_requester_cannot_approve_or_deny_own_request(client, monkeypatch):
+    from stage2_sdk_ai import approval
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "automation=approver-secret")
+    headers = {"X-API-Key": VALID_KEY}
+
+    for operation in ("approve", "deny"):
+        requested = client.post(
+            "/write",
+            json={"path": f"self-{operation}.md", "content": "must remain pending"},
+            headers=headers,
+        )
+        assert requested.status_code == 200
+        approval_id = requested.json()["approval_id"]
+
+        if operation == "approve":
+            response = client.post(
+                f"/approve?approval_id={approval_id}",
+                headers={"X-Approver-Key": "approver-secret"},
+            )
+        else:
+            response = client.post(
+                "/deny",
+                json={"approval_id": approval_id, "reason": "self denial test"},
+                headers={"X-Approver-Key": "approver-secret"},
+            )
+
+        assert response.status_code == 403
+        assert approval.check_approval(approval_id)["status"] == "pending"
 
 
 def test_write_rejects_empty_note_path(client):
@@ -251,7 +282,7 @@ def test_write_rejects_empty_note_path(client):
 def test_complete_approved_write_lifecycle(client, monkeypatch, tmp_path):
     from pathlib import Path
 
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
 
     requested = client.post(
         "/write",
@@ -302,7 +333,7 @@ def test_complete_approved_write_lifecycle(client, monkeypatch, tmp_path):
 
 
 def test_execute_requires_normal_api_authentication(client, monkeypatch):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
     request = client.post(
         "/write/execute",
         json={"approval_id": "d" * 32},
@@ -327,7 +358,7 @@ def test_execute_pending_approval_conflicts(client, monkeypatch):
 
 
 def test_approve_unknown_id_returns_not_found(client, monkeypatch):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
     response = client.post(
         "/approve?approval_id=" + "d" * 32,
         headers={"X-Approver-Key": "correct-approver-secret"},
@@ -345,7 +376,7 @@ def test_operator_recovery_returns_redacted_unresolved_execution(
 ):
     from stage2_sdk_ai import approval
 
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "recovery-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "recovery-operator=recovery-approver-secret")
     requester = auth.requester_identity(VALID_KEY)
     path = "notes/recovery-inspection.md"
     request = approval.request_approval(
@@ -377,7 +408,7 @@ def test_operator_recovery_returns_redacted_unresolved_execution(
 def test_concurrent_execute_has_exactly_one_winner(client, monkeypatch, tmp_path):
     from concurrent.futures import ThreadPoolExecutor
 
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
     requested = client.post(
         "/write",
         json={"path": "race.md", "content": "one authorized write"},
@@ -411,7 +442,7 @@ def test_concurrent_execute_has_exactly_one_winner(client, monkeypatch, tmp_path
 
 
 def test_approver_can_deny_and_denied_request_cannot_execute(client, monkeypatch):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
     requested = client.post(
         "/write",
         json={"path": "denied.md", "content": "must never be written"},
@@ -457,7 +488,7 @@ def test_deny_requires_separate_approver_credential(client):
 
 
 def test_approval_state_transitions_are_terminal_at_api_boundary(client, monkeypatch):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
     first = client.post(
         "/write", json={"path": "terminal-approved.md", "content": "approved"},
         headers={"X-API-Key": VALID_KEY},
@@ -495,7 +526,7 @@ def test_approval_state_transitions_are_terminal_at_api_boundary(client, monkeyp
 
 
 def test_deny_rejects_oversized_reason(client, monkeypatch):
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
     requested = client.post(
         "/write",
         json={"path": "reason.md", "content": "content"},
@@ -528,7 +559,7 @@ def test_approval_is_owned_by_requester_and_wrong_user_does_not_consume(
         "AGENT_API_KEYS",
         "requester-a=secret-a,requester-b=secret-b",
     )
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "separate-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=separate-approver-secret")
 
     requested = client.post(
         "/write",
@@ -596,7 +627,7 @@ def test_approval_audit_failure_is_http_500_and_execution_is_blocked(
 ):
     from stage2_sdk_ai import approval
 
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
     real_log_audit = approval.log_audit
 
     def fail_approval_audit(action, record):
@@ -635,7 +666,7 @@ def test_request_audit_failure_returns_http_500_and_cannot_be_approved(
 ):
     from stage2_sdk_ai import approval
 
-    monkeypatch.setenv("AGENT_APPROVER_KEYS", "correct-approver-secret")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
 
     def fail_request_audit(action, record):
         if action == "request":
