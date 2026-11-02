@@ -929,32 +929,44 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _audit_chain_state(contents: bytes) -> tuple[int, str, int, int, dict[int, str]]:
-    """Validate legacy and chained entries; return seq, head hash, total count.
-
-    Legacy JSONL entries are accepted as an immutable prefix. The first chained
-    entry commits to the exact bytes of that prefix, so later edits to legacy
-    history are detected. New entries use SHA-256 over canonical JSON.
-    """
+def _audit_chain_state(
+    contents: bytes, base_checkpoint: dict[str, Any] | None = None
+) -> tuple[int, str, int, int, dict[int, str]]:
+    """Validate a chained segment relative to a verified archived checkpoint."""
+    if base_checkpoint is None:
+        sequence = 0
+        previous_hash = "0" * 64
+        legacy_count = 0
+    else:
+        if (
+            not isinstance(base_checkpoint, dict)
+            or set(base_checkpoint) != {"sequence", "head_hash", "legacy_entries"}
+            or isinstance(base_checkpoint.get("sequence"), bool)
+            or not isinstance(base_checkpoint.get("sequence"), int)
+            or base_checkpoint["sequence"] < 0
+            or not isinstance(base_checkpoint.get("head_hash"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", base_checkpoint["head_hash"])
+            or isinstance(base_checkpoint.get("legacy_entries"), bool)
+            or not isinstance(base_checkpoint.get("legacy_entries"), int)
+            or base_checkpoint["legacy_entries"] < 0
+        ):
+            raise AuditLogIntegrityError("audit segment base checkpoint is invalid")
+        sequence = base_checkpoint["sequence"]
+        previous_hash = base_checkpoint["head_hash"]
+        legacy_count = base_checkpoint["legacy_entries"]
+    total = 0
+    chain_hashes: dict[int, str] = {sequence: previous_hash}
     if not contents:
-        return 0, "0" * 64, 0, 0, {0: "0" * 64}
-    if not contents.endswith(b"\n"):
+        return sequence, previous_hash, total, legacy_count, chain_hashes
+    if not contents.endswith(b"\\n"):
         raise AuditLogIntegrityError(
             "audit log has an incomplete trailing entry; operator review required"
         )
 
     legacy_lines: list[bytes] = []
-    sequence = 0
-    previous_hash = "0" * 64
-    total = 0
-    legacy_count = 0
-    chain_hashes: dict[int, str] = {0: "0" * 64}
     chain_started = False
-
-    for line_number, raw_line in enumerate(
-        contents.splitlines(keepends=True), start=1
-    ):
-        line = raw_line.rstrip(b"\r\n")
+    for line_number, raw_line in enumerate(contents.splitlines(keepends=True), start=1):
+        line = raw_line.rstrip(b"\\r\\n")
         try:
             entry = json.loads(line, object_pairs_hook=_reject_duplicate_json_keys)
         except ValueError as exc:
@@ -963,9 +975,9 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int, int, dict[int, s
             ) from exc
 
         if isinstance(entry, dict) and set(entry) == {"action", "time", "record"}:
-            if chain_started:
+            if chain_started or sequence != 0 or legacy_count != 0:
                 raise AuditLogIntegrityError(
-                    f"legacy entry {line_number} appears after the hash chain began"
+                    f"legacy entry {line_number} appears outside the initial audit prefix"
                 )
             _validate_legacy_audit_event(entry, line_number)
             legacy_lines.append(raw_line)
@@ -1002,11 +1014,12 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int, int, dict[int, s
         if not chain_started:
             expected_previous = (
                 hashlib.sha256(
-                    b"legacy-audit-prefix-v1\\0" + b"".join(legacy_lines)
+                    b"legacy-audit-prefix-v1\\\\0" + b"".join(legacy_lines)
                 ).hexdigest()
-                if legacy_lines else "0" * 64
+                if legacy_lines else previous_hash
             )
-            chain_hashes[0] = expected_previous
+            if sequence == 0:
+                chain_hashes[0] = expected_previous
         else:
             expected_previous = previous_hash
         if not hmac.compare_digest(entry["previous_hash"], expected_previous):
@@ -1026,9 +1039,8 @@ def _audit_chain_state(contents: bytes) -> tuple[int, str, int, int, dict[int, s
 
     if not chain_started and legacy_lines:
         previous_hash = hashlib.sha256(
-            b"legacy-audit-prefix-v1\\0" + b"".join(legacy_lines)
+            b"legacy-audit-prefix-v1\\\\0" + b"".join(legacy_lines)
         ).hexdigest()
-    if not chain_started and legacy_lines:
         chain_hashes[0] = previous_hash
     return sequence, previous_hash, total, legacy_count, chain_hashes
 
@@ -1075,7 +1087,14 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
                     "audit log exceeds the configured 64 MiB validation limit; "
                     "archive through operator procedure"
                 )
-            sequence, previous_hash, _, _, _ = _audit_chain_state(existing)
+            if _audit_file.with_name("audit.anchor.json").exists() and not _audit_file.exists():
+                raise AuditLogIntegrityError("active audit segment is missing")
+            from .audit_rotation import load_verified_anchor
+
+            archive_state = load_verified_anchor()
+            sequence, previous_hash, _, _, _ = _audit_chain_state(
+                existing, base_checkpoint=archive_state["checkpoint"]
+            )
             entry["record"] = _audit_safe_record(record)
             _validate_audit_event(entry, sequence + 1)
             entry["seq"] = sequence + 1
@@ -1141,30 +1160,36 @@ def create_audit_checkpoint() -> dict[str, Any]:
 def verify_audit_log(
     expected_checkpoint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Verify local history and, optionally, an independently retained head.
-
-    An older checkpoint remains valid as the log grows. The verifier confirms
-    the hash at the checkpoint sequence, detecting truncation past that point.
-    """
+    """Verify archived segments, active suffix, and an optional external checkpoint."""
     _ensure_dirs()
+    if _audit_file.with_name("audit.anchor.json").exists() and not _audit_file.exists():
+        raise AuditLogIntegrityError("active audit segment is missing")
     fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
         fcntl.flock(audit_file.fileno(), fcntl.LOCK_EX)
         try:
+            from .audit_rotation import load_verified_anchor
+
+            archive_state = load_verified_anchor()
             contents = audit_file.read(MAX_AUDIT_LOG_BYTES + 1)
             if len(contents) > MAX_AUDIT_LOG_BYTES:
                 raise AuditLogIntegrityError(
-                    "audit log exceeds the configured 64 MiB validation limit"
+                    "active audit log exceeds the configured 64 MiB validation limit"
                 )
-            sequence, head_hash, total, legacy_count, chain_hashes = (
-                _audit_chain_state(contents)
+            sequence, head_hash, active_total, legacy_count, active_hashes = (
+                _audit_chain_state(
+                    contents, base_checkpoint=archive_state["checkpoint"]
+                )
             )
+            chain_hashes = dict(archive_state["hashes"])
+            chain_hashes.update(active_hashes)
             result = {
                 "valid": True,
-                "entries": total,
+                "entries": archive_state["entries"] + active_total,
                 "legacy_entries": legacy_count,
                 "chained_entries": sequence,
                 "head_hash": head_hash,
+                "archived_segments": archive_state["segments"],
             }
             if expected_checkpoint is not None:
                 checkpoint = expected_checkpoint
