@@ -723,6 +723,7 @@ def recover_audit_rotation(
                 if current_raw != new_raw:
                     _write_json(anchor_path, journal["new_anchor"])
                 _write_json(_state_path(), journal["new_anchor"])
+                os.fsync(audit_file.fileno())
                 _clear_journal(journal_path)
                 return {
                     "status": "recovered_complete",
