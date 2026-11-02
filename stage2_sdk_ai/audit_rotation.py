@@ -315,6 +315,36 @@ def _verify_anchor(anchor: dict[str, Any] | None, archive_dir: Path
     }
 
 
+def _state_path() -> Path:
+    from . import approval
+
+    return approval._audit_file.with_name("audit.rotation-state.json")
+
+
+def _read_rotation_state() -> dict[str, Any] | None:
+    from . import approval
+
+    path = _state_path()
+    if path.is_symlink():
+        raise approval.AuditLogIntegrityError("rotation state marker cannot be a symlink")
+    if not path.exists():
+        return None
+    try:
+        state = json.loads(_read_private(path, 64 * 1024))
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise approval.AuditLogIntegrityError("rotation state marker is corrupt") from exc
+    if (
+        not isinstance(state, dict)
+        or set(state) != {
+            "version", "latest_segment", "latest_segment_sha256",
+            "sequence", "head_hash", "legacy_entries",
+        }
+        or state.get("version") != 1
+    ):
+        raise approval.AuditLogIntegrityError("rotation state marker schema is invalid")
+    return state
+
+
 def _reject_missing_active_with_rotation_metadata(
     audit_path: Path, anchor_path: Path, journal_path: Path
 ) -> None:
@@ -335,6 +365,9 @@ def load_verified_anchor(archive_dir: Path | None = None) -> dict[str, Any]:
     from . import approval
 
     anchor_path, journal_path, target_dir = _paths(archive_dir)
+    state_path = _state_path()
+    if state_path.is_symlink():
+        raise approval.AuditLogIntegrityError("rotation state marker cannot be a symlink")
     if journal_path.is_symlink():
         raise approval.AuditLogIntegrityError("rotation journal cannot be a symlink")
     if journal_path.exists():
@@ -344,6 +377,10 @@ def load_verified_anchor(archive_dir: Path | None = None) -> dict[str, Any]:
     if anchor_path.is_symlink():
         raise approval.AuditLogIntegrityError("audit anchor cannot be a symlink")
     if not anchor_path.exists():
+        if state_path.exists():
+            raise approval.AuditLogIntegrityError(
+                "audit rotation anchor is missing while its state marker remains"
+            )
         if target_dir.exists() and target_dir.is_symlink():
             raise approval.AuditLogIntegrityError(
                 "audit segment directory cannot be a symlink"
@@ -351,10 +388,17 @@ def load_verified_anchor(archive_dir: Path | None = None) -> dict[str, Any]:
         return _empty_state()
     if not approval._audit_file.exists():
         raise approval.AuditLogIntegrityError("active audit segment is missing")
+    if not state_path.exists():
+        raise approval.AuditLogIntegrityError("audit rotation state marker is missing")
     try:
         anchor = json.loads(_read_private(anchor_path, 64 * 1024))
+        state = _read_rotation_state()
     except (UnicodeDecodeError, ValueError) as exc:
-        raise approval.AuditLogIntegrityError("audit anchor is malformed") from exc
+        raise approval.AuditLogIntegrityError("audit rotation metadata is malformed") from exc
+    if state != anchor:
+        raise approval.AuditLogIntegrityError(
+            "audit rotation state marker does not match the anchor"
+        )
     return _verify_anchor(anchor, target_dir)
 
 
