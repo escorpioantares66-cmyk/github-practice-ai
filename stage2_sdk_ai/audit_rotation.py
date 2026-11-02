@@ -60,7 +60,7 @@ def _read_private(path: Path, limit: int) -> bytes:
         or stat.S_IMODE(info.st_mode) != 0o600
     ):
         raise ValueError("rotation evidence must be a private single-link file")
-    fd = open_private_file(path, os.O_RDONLY)
+    fd = open_private_file(path, os.O_RDONLY, expected_mode=0o600)
     with os.fdopen(fd, "rb") as handle:
         raw = handle.read(limit + 1)
     if len(raw) > limit:
