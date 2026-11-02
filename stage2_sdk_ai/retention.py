@@ -192,7 +192,7 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
         "audit_log_verified": True,
         "audit_entries_scanned": total,
         "audit_legacy_entries": legacy_count,
-        "audit_entries_older_than_cutoff": old_audit_events,
+        "active_audit_entries_older_than_cutoff": old_audit_events,
         "audit_head_sequence": sequence,
         "audit_head_hash": head_hash,
         "audit_archive_mode": "verified_segment_chain_plus_active_tail",
