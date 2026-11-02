@@ -125,8 +125,12 @@ def _requester_usage(requester: str, now: float) -> tuple[int, int]:
                 "approval store contains a symlink; operator review required"
             )
         try:
-            record = _load_approval_record(path, path.stem)
-        except (OSError, CorruptApprovalRecordError) as exc:
+            # A request may be completing its audit marker while another
+            # requester performs the quota scan. Use the same record lock as
+            # transitions so quota checks never inspect an in-flight update.
+            with _locked_record(path):
+                record = _load_approval_record(path, path.stem)
+        except (OSError, ValueError, CorruptApprovalRecordError) as exc:
             raise ApprovalStoreIntegrityError(
                 "approval store contains an unreadable record; operator review required"
             ) from exc
@@ -218,25 +222,27 @@ def request_approval(
                 raise
             break
     # The request is not approvable until its audit append and durable
-    # status marker both succeed. The initial pending marker fails closed.
-    try:
-        audit_record = dict(record)
-        audit_record["request_audit_status"] = "written"
-        log_audit("request", audit_record)
-    except Exception as exc:
-        record["request_audit_status"] = "failed"
-        record["request_audit_error_type"] = type(exc).__name__[:120]
+    # status marker both succeed. Hold the record lock across both writes so
+    # quota scans, retention snapshots, and transitions see a stable state.
+    with _locked_record(path):
+        try:
+            audit_record = dict(record)
+            audit_record["request_audit_status"] = "written"
+            log_audit("request", audit_record)
+        except Exception as exc:
+            record["request_audit_status"] = "failed"
+            record["request_audit_error_type"] = type(exc).__name__[:120]
+            try:
+                _write_record_atomically(path, record)
+            except Exception:
+                pass
+            raise ApprovalAuditError(approval_id) from exc
+
+        record["request_audit_status"] = "written"
         try:
             _write_record_atomically(path, record)
-        except Exception:
-            pass
-        raise ApprovalAuditError(approval_id) from exc
-
-    record["request_audit_status"] = "written"
-    try:
-        _write_record_atomically(path, record)
-    except Exception as exc:
-        raise ApprovalAuditError(approval_id) from exc
+        except Exception as exc:
+            raise ApprovalAuditError(approval_id) from exc
     return record
 
 
