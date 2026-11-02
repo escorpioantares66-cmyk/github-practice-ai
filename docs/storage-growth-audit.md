@@ -37,8 +37,11 @@ It remains a dry-run: eligible IDs are removed from the public report, no
 snapshot is created, and source records are not changed or deleted.
 
 The command performs no archive creation, audit rotation, truncation, cleanup,
-or AWS calls. source_modified remains false and
-storage_mutations_performed remains zero.
+or AWS calls. It performs no application-level writes, content changes,
+permission changes, or directory-entry changes. source_modified remains false
+and storage_mutations_performed remains zero. Because the retention planner
+reads approval and audit files, the host filesystem may update access-time
+metadata according to its mount policy (for example, relatime or noatime).
 
 ## What is inventoried
 
