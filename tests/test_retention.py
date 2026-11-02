@@ -207,7 +207,8 @@ def test_retention_rejects_oversized_approval_record(monkeypatch, tmp_path):
 def test_retention_waits_for_concurrent_approval_transition_lock(monkeypatch, tmp_path):
     now = 1_800_000_000.0
     _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
-    lock_path = tmp_path / "approvals" / ".request.lock"
+    record_id = next((tmp_path / "approvals").glob("*.json")).stem
+    lock_path = tmp_path / "approvals" / f"{record_id}.json.lock"
     lock_file = os.fdopen(os.open(lock_path, os.O_RDONLY), "rb")
     fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
     started = threading.Event()

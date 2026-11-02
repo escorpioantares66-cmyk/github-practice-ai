@@ -92,11 +92,11 @@ def _validate_now(now: float | None) -> float:
 
 
 def _read_approval_record_snapshot(path: Path, limit: int) -> tuple[dict[str, Any], bytes]:
-    """Read a bounded record under the store-wide transition lock."""
-    global_lock_path = approval._approvals_dir / ".request.lock"
-    global_fd = open_private_file(global_lock_path, os.O_RDONLY, expected_mode=0o600)
-    with os.fdopen(global_fd, "rb") as global_lock:
-        fcntl.flock(global_lock.fileno(), fcntl.LOCK_SH)
+    """Read a bounded record under its persistent transition lock."""
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_fd = open_private_file(lock_path, os.O_RDONLY, expected_mode=0o600)
+    with os.fdopen(lock_fd, "rb") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)
         try:
             record_fd = open_private_file(path, os.O_RDONLY, expected_mode=0o600)
             with os.fdopen(record_fd, "rb") as record_file:
@@ -105,7 +105,7 @@ def _read_approval_record_snapshot(path: Path, limit: int) -> tuple[dict[str, An
                 return {}, raw
             return approval._load_approval_record(path, path.stem, raw=raw), raw
         finally:
-            fcntl.flock(global_lock.fileno(), fcntl.LOCK_UN)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def plan_retention(
