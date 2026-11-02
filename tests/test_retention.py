@@ -208,7 +208,7 @@ def test_retention_waits_for_concurrent_approval_transition_lock(monkeypatch, tm
     now = 1_800_000_000.0
     record = _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
     path = tmp_path / "approvals" / f"{record['id']}.json"
-    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path = tmp_path / "approvals" / ".request.lock"
     lock_file = os.fdopen(os.open(lock_path, os.O_RDONLY), "rb")
     fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
     started = threading.Event()

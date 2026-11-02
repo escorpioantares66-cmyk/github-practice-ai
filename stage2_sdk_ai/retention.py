@@ -92,32 +92,18 @@ def _validate_now(now: float | None) -> float:
 
 
 def _read_approval_record_snapshot(path: Path, limit: int) -> tuple[dict[str, Any], bytes]:
-    """Read a bounded record while excluding concurrent approval transitions."""
+    """Read a bounded record under the store-wide transition lock."""
     global_lock_path = approval._approvals_dir / ".request.lock"
     global_fd = open_private_file(global_lock_path, os.O_RDONLY, expected_mode=0o600)
     with os.fdopen(global_fd, "rb") as global_lock:
         fcntl.flock(global_lock.fileno(), fcntl.LOCK_SH)
         try:
-            lock_path = path.with_suffix(path.suffix + ".lock")
-            try:
-                lock_fd = open_private_file(lock_path, os.O_RDONLY, expected_mode=0o600)
-            except FileNotFoundError:
-                lock_file = None
-            else:
-                lock_file = os.fdopen(lock_fd, "rb")
-            try:
-                if lock_file is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)
-                record_fd = open_private_file(path, os.O_RDONLY, expected_mode=0o600)
-                with os.fdopen(record_fd, "rb") as record_file:
-                    raw = record_file.read(limit + 1)
-                if len(raw) > limit:
-                    return {}, raw
-                return approval._load_approval_record(path, path.stem, raw=raw), raw
-            finally:
-                if lock_file is not None:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                    lock_file.close()
+            record_fd = open_private_file(path, os.O_RDONLY, expected_mode=0o600)
+            with os.fdopen(record_fd, "rb") as record_file:
+                raw = record_file.read(limit + 1)
+            if len(raw) > limit:
+                return {}, raw
+            return approval._load_approval_record(path, path.stem, raw=raw), raw
         finally:
             fcntl.flock(global_lock.fileno(), fcntl.LOCK_UN)
 
