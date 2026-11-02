@@ -167,3 +167,18 @@ def test_storage_audit_cli_prints_json(monkeypatch, capsys):
     main()
 
     assert json.loads(capsys.readouterr().out) == expected
+
+
+def test_storage_audit_detects_quota_database_symlink_without_following(
+    monkeypatch, tmp_path
+):
+    _, _, _, quota_path = _configure_paths(monkeypatch, tmp_path)
+    outside = _private_file(tmp_path / "outside.sqlite3", b"do not inspect")
+    _private_dir(quota_path.parent)
+    quota_path.symlink_to(outside)
+
+    result = run_storage_audit(now=1_800_000_000.0)
+
+    assert result["areas"]["quota_database"]["files"]["database"]["status"] == "symlink"
+    assert any(item["code"] == "quota_database_symlink" for item in result["findings"])
+    assert outside.read_bytes() == b"do not inspect"
