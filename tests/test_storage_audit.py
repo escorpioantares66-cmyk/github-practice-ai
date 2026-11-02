@@ -182,3 +182,16 @@ def test_storage_audit_detects_quota_database_symlink_without_following(
     assert result["areas"]["quota_database"]["files"]["database"]["status"] == "symlink"
     assert any(item["code"] == "quota_database_symlink" for item in result["findings"])
     assert outside.read_bytes() == b"do not inspect"
+
+
+def test_storage_audit_rejects_symlinked_parent_path(tmp_path):
+    outside = _private_dir(tmp_path / "outside")
+    _private_file(outside / "inside.json", b"outside")
+    link = tmp_path / "parent-link"
+    link.symlink_to(outside, target_is_directory=True)
+
+    result = inspect_storage_path(link / "inside.json")
+
+    assert result["status"] == "symlink"
+    assert result["symlinks"] == 1
+    assert result["regular_files"] == 0
