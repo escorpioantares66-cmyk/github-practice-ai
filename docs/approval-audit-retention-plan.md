@@ -29,14 +29,14 @@
 
 ## Stage 2: verified segmented rotation
 
-The implementation uses immutable, individually verified audit segments. Each segment records its base sequence/hash, ending sequence/hash, legacy-prefix count, content digest, and digest link to the preceding segment. A private anchor identifies the latest verified segment. The active JSONL file continues from that checkpoint without resetting sequence numbers or breaking previous-hash links.
+The implementation uses immutable, individually verified audit segments. Each segment records its base sequence/hash, ending sequence/hash, legacy-prefix count, content digest, and digest link to the preceding segment. A private anchor identifies the latest verified segment and is paired with a persistent rotation-state marker. The marker makes a missing or altered anchor detectable after the crash journal has been cleared. The active JSONL file continues from that checkpoint without resetting sequence numbers or breaking previous-hash links.
 
 ### Default and destructive modes
 
 - The default rotate_audit_log() operation is copy-only. It writes and verifies a segment but leaves the active audit log byte-for-byte unchanged.
 - Destructive rotation requires truncate=True and a fresh expected_checkpoint from approval.create_audit_checkpoint(). The operator must store that checkpoint independently before authorizing truncation.
 - Before truncation, the implementation verifies the complete existing segment chain, the active log, the new segment, the continuity links, and the exact external checkpoint.
-- It then writes a durable private rotation journal, advances the anchor atomically, truncates and fsyncs the active log, and only then clears the journal. Archived segments are never automatically deleted.
+- It then writes a durable private rotation journal, advances the anchor and persistent state marker, truncates and fsyncs the active log, and only then clears the journal. Archived segments are never automatically deleted.
 - A pending journal blocks normal audit appends and verification. recover_audit_rotation() verifies the archive and journal first. It does not truncate by default; allow_truncate=True is required to finish an interrupted truncation. Unexpected active bytes, missing segments, or invalid links fail closed.
 - The archive directory and evidence files must be owner-private, regular files, single-link, and non-symlink paths. A missing active log after a rotation anchor exists is an integrity error, not an empty history.
 
