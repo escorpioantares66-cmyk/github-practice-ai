@@ -1014,7 +1014,7 @@ def _audit_chain_state(
         if not chain_started:
             expected_previous = (
                 hashlib.sha256(
-                    b"legacy-audit-prefix-v1\\\\0" + b"".join(legacy_lines)
+                    b"legacy-audit-prefix-v1\\0" + b"".join(legacy_lines)
                 ).hexdigest()
                 if legacy_lines else previous_hash
             )
@@ -1039,7 +1039,7 @@ def _audit_chain_state(
 
     if not chain_started and legacy_lines:
         previous_hash = hashlib.sha256(
-            b"legacy-audit-prefix-v1\\\\0" + b"".join(legacy_lines)
+            b"legacy-audit-prefix-v1\\0" + b"".join(legacy_lines)
         ).hexdigest()
         chain_hashes[0] = previous_hash
     return sequence, previous_hash, total, legacy_count, chain_hashes
@@ -1075,6 +1075,8 @@ def _audit_safe_record(record: dict[str, Any]) -> dict[str, Any]:
 def log_audit(action: str, record: dict[str, Any]) -> None:
     """Append one durable JSONL event without storing operation payloads."""
     _ensure_dirs()
+    if _audit_file.with_name("audit.anchor.json").exists() and not _audit_file.exists():
+        raise AuditLogIntegrityError("active audit segment is missing")
     entry = {"action": action, "time": time.time(), "record": record}
     fd = open_private_file(_audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
@@ -1087,8 +1089,6 @@ def log_audit(action: str, record: dict[str, Any]) -> None:
                     "audit log exceeds the configured 64 MiB validation limit; "
                     "archive through operator procedure"
                 )
-            if _audit_file.with_name("audit.anchor.json").exists() and not _audit_file.exists():
-                raise AuditLogIntegrityError("active audit segment is missing")
             from .audit_rotation import load_verified_anchor
 
             archive_state = load_verified_anchor()
