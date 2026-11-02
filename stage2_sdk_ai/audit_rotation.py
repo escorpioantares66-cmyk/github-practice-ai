@@ -683,7 +683,7 @@ def recover_audit_rotation(
         raise ValueError("allow_truncate must be a boolean")
     anchor_path, journal_path, target_dir = _paths()
     _reject_missing_active_with_rotation_metadata(
-        approval._audit_file, anchor_path, journal_path
+        approval._audit_file, anchor_path, journal_path, _state_path()
     )
     fd = open_private_file(approval._audit_file, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+b") as audit_file:
