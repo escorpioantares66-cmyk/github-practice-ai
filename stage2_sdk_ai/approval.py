@@ -89,15 +89,22 @@ def _approval_path(approval_id: str) -> Path | None:
 
 @contextmanager
 def _locked_record(path: Path) -> Iterator[None]:
-    """Serialize state transitions using an owner-only, no-follow lock file."""
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    fd = open_private_file(lock_path, os.O_RDWR | os.O_CREAT)
-    with os.fdopen(fd, "r+") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    """Serialize state transitions against retention snapshots and each other."""
+    global_lock_path = _approvals_dir / ".request.lock"
+    global_fd = open_private_file(global_lock_path, os.O_RDWR | os.O_CREAT)
+    with os.fdopen(global_fd, "r+") as global_lock:
+        fcntl.flock(global_lock.fileno(), fcntl.LOCK_EX)
         try:
-            yield
+            lock_path = path.with_suffix(path.suffix + ".lock")
+            fd = open_private_file(lock_path, os.O_RDWR | os.O_CREAT)
+            with os.fdopen(fd, "r+") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            fcntl.flock(global_lock.fileno(), fcntl.LOCK_UN)
 
 
 @contextmanager
