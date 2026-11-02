@@ -958,7 +958,7 @@ def _audit_chain_state(
     chain_hashes: dict[int, str] = {sequence: previous_hash}
     if not contents:
         return sequence, previous_hash, total, legacy_count, chain_hashes
-    if not contents.endswith(b"\\n"):
+    if not contents.endswith(b"\n"):
         raise AuditLogIntegrityError(
             "audit log has an incomplete trailing entry; operator review required"
         )
@@ -966,7 +966,7 @@ def _audit_chain_state(
     legacy_lines: list[bytes] = []
     chain_started = False
     for line_number, raw_line in enumerate(contents.splitlines(keepends=True), start=1):
-        line = raw_line.rstrip(b"\\r\\n")
+        line = raw_line.rstrip(b"\r\n")
         try:
             entry = json.loads(line, object_pairs_hook=_reject_duplicate_json_keys)
         except ValueError as exc:
