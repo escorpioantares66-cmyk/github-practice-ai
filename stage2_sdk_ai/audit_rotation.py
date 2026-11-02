@@ -88,6 +88,7 @@ def _empty_state() -> dict[str, Any]:
         "hashes": {0: _ZERO_HASH},
         "entries": 0,
         "segments": 0,
+        "actions_by_id": {},
     }
 
 
