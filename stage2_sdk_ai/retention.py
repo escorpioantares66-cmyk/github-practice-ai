@@ -114,16 +114,16 @@ def plan_retention(
     *,
     max_approval_records: int | None = None,
 ) -> dict[str, Any]:
-    """Report old evidence, optionally bounding approval-record inspection."""
+    """Report old evidence with a finite approval-record inspection ceiling."""
+    if max_approval_records is None:
+        # The default planner must remain bounded even when called directly.
+        max_approval_records = MAX_ARCHIVE_APPROVAL_RECORDS
     if (
-        max_approval_records is not None
-        and (
-            isinstance(max_approval_records, bool)
-            or not isinstance(max_approval_records, int)
-            or max_approval_records < 1
-        )
+        isinstance(max_approval_records, bool)
+        or not isinstance(max_approval_records, int)
+        or max_approval_records < 1
     ):
-        raise ValueError("max_approval_records must be a positive integer or None")
+        raise ValueError("max_approval_records must be a positive integer")
     current = _validate_now(now)
     cutoff = current - RETENTION_SECONDS
     eligible: list[str] = []

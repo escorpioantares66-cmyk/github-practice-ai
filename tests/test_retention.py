@@ -288,3 +288,20 @@ def test_archive_refuses_incomplete_bounded_retention_scan(
         archive_retention(now=now, archive_dir=archive_dir)
 
     assert not archive_dir.exists()
+
+
+def test_retention_planner_has_a_bounded_default_record_count(
+    monkeypatch, tmp_path
+):
+    import stage2_sdk_ai.retention as retention
+
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    approval.request_approval("write_note", {"path": "notes/second.md"})
+    monkeypatch.setattr(retention, "MAX_ARCHIVE_APPROVAL_RECORDS", 1)
+
+    result = plan_retention(now=now)
+
+    assert result["approval_records_scanned"] == 1
+    assert result["approval_records_scan_limit"] == 1
+    assert result["approval_records_scan_truncated"] is True
