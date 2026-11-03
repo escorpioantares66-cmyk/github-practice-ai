@@ -546,14 +546,25 @@ def record_execution_failure(
 
         if outcome_status not in {"failed", "uncertain", "blocked"}:
             raise ValueError("Invalid execution outcome status")
+
+        previous = data.get("execution_outcome")
+        if not isinstance(previous, dict) or previous.get("status") != "started":
+            return {
+                "status": "invalid_transition",
+                "id": approval_id,
+                "current_status": data.get("status"),
+                "current_outcome_status": (
+                    previous.get("status") if isinstance(previous, dict) else None
+                ),
+            }
+
         now = time.time()
         data["execution_failure"] = {
             "failed_at": now,
             "error_type": error_type[:120],
             "error_message": error_message[:1000],
         }
-        previous = data.get("execution_outcome", {})
-        started_at = previous.get("started_at", data.get("consumed_at", now))
+        started_at = previous["started_at"]
         data["execution_outcome"] = {
             "status": outcome_status, "started_at": started_at,
             "finished_at": now, "audit_status": "pending",
