@@ -1,4 +1,5 @@
 """Rollback-resistant approval and denial decision regression tests."""
+
 import pytest
 
 from stage2_sdk_ai import approval
