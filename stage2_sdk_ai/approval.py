@@ -648,6 +648,49 @@ def record_execution_success(approval_id: str) -> dict[str, Any]:
         return {"status": "completed", "id": approval_id}
 
 
+def _audit_actions_for_approval(approval_id: str) -> set[str]:
+    """Return validated lifecycle actions for an ID across active and archived audit.
+
+    The caller holds the approval record lock. The audit lock prevents observing
+    a partially appended event; archive verification includes rotated history.
+    """
+    from .audit_rotation import load_verified_anchor
+
+    fd = open_private_file(_audit_file, os.O_RDONLY)
+    with os.fdopen(fd, "rb") as audit_file:
+        fcntl.flock(audit_file.fileno(), fcntl.LOCK_SH)
+        try:
+            contents = audit_file.read(MAX_AUDIT_LOG_BYTES + 1)
+            if len(contents) > MAX_AUDIT_LOG_BYTES:
+                raise AuditLogIntegrityError(
+                    "active audit log exceeds its validation limit"
+                )
+            archive_state = load_verified_anchor()
+            _audit_chain_state(
+                contents, base_checkpoint=archive_state["checkpoint"]
+            )
+            actions = set(
+                archive_state["actions_by_id"].get(approval_id, set())
+            )
+            for line_number, raw_line in enumerate(
+                contents.splitlines(), start=1
+            ):
+                try:
+                    entry = json.loads(
+                        raw_line, object_pairs_hook=_reject_duplicate_json_keys
+                    )
+                except ValueError as exc:
+                    raise AuditLogIntegrityError(
+                        f"audit log entry {line_number} is invalid"
+                    ) from exc
+                record = entry.get("record", {}) if isinstance(entry, dict) else {}
+                if isinstance(record, dict) and record.get("id") == approval_id:
+                    actions.add(entry["action"])
+            return actions
+        finally:
+            fcntl.flock(audit_file.fileno(), fcntl.LOCK_UN)
+
+
 def consume_approval_request(
     approval_id: str,
     tool: str,
@@ -704,6 +747,28 @@ def consume_approval_request(
             args is not None and data.get("args") != args
         ):
             return {"status": "approval_mismatch", "id": approval_id}
+
+        # The JSON record is mutable operational state and may be restored from
+        # an old backup. The append-only lifecycle history is the independent
+        # source for detecting a prior consumption, including rotated segments.
+        try:
+            prior_actions = _audit_actions_for_approval(approval_id)
+        except (OSError, AuditLogIntegrityError, ValueError) as exc:
+            logger.exception(
+                "approval audit history could not be verified before consumption",
+                extra={"approval_id": approval_id},
+            )
+            return {
+                "status": "audit_history_unavailable",
+                "id": approval_id,
+                "error_type": type(exc).__name__[:120],
+            }
+        if "consumed" in prior_actions:
+            return {
+                "status": "consumption_already_recorded",
+                "id": approval_id,
+                "current_status": data.get("status"),
+            }
 
         data["status"] = "consumed"
         data["consumed_at"] = time.time()

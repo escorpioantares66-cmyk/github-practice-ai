@@ -467,8 +467,17 @@ def execute_write_endpoint(
         raise HTTPException(status_code=409, detail="Approval is still pending")
     if status == "expired":
         raise HTTPException(status_code=410, detail="Approval has expired")
-    if status == "invalid_transition":
+    if status in {"invalid_transition", "consumption_already_recorded"}:
         raise HTTPException(status_code=409, detail="Approval was already consumed or denied")
+    if status == "audit_history_unavailable":
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "audit_history_unavailable",
+                "approval_id": req.approval_id,
+                "recovery": "Operator review required; approval remains non-executable.",
+            },
+        )
     if status == "approval_mismatch":
         raise HTTPException(status_code=409, detail="Approval does not authorize this operation")
     if status == "requester_mismatch":
