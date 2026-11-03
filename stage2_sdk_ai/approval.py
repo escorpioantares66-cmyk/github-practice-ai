@@ -436,6 +436,38 @@ def _transition(
                 "current_status": data.get("status"),
             }
 
+        # Approval JSON is mutable operational state and may be restored from
+        # an old backup. Verified audit history is authoritative for whether a
+        # decision has already been made, even when the restored record says
+        # pending. Use the same record-lock -> audit-lock order as consumption.
+        try:
+            prior_actions = _audit_actions_for_approval(approval_id)
+        except (OSError, AuditLogIntegrityError, ValueError) as exc:
+            logger.exception(
+                "approval decision history could not be verified",
+                extra={"approval_id": approval_id},
+            )
+            return {
+                "status": "approval_audit_incomplete",
+                "id": approval_id,
+                "current_status": data.get("status"),
+                "audit_phase": "decision_history",
+                "audit_status": "unavailable",
+                "error_type": type(exc).__name__[:120],
+            }
+
+        prior_decisions = prior_actions.intersection({"approved", "denied"})
+        if prior_decisions:
+            prior_decision = (
+                "approved" if "approved" in prior_decisions else "denied"
+            )
+            return {
+                "status": "invalid_transition",
+                "id": approval_id,
+                "current_status": data.get("status"),
+                "prior_decision": prior_decision,
+            }
+
         if _approval_expired(data["created"]):
             return {"status": "expired", "id": approval_id}
 
