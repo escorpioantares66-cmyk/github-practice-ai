@@ -651,8 +651,6 @@ def test_recovery_listing_surfaces_corrupt_approval_records(monkeypatch, tmp_pat
 def test_restored_approved_snapshot_cannot_replay_consumed_approval(
     monkeypatch, tmp_path
 ):
-    from stage2_sdk_ai import audit_rotation
-
     approval_id = _approved_request(monkeypatch, tmp_path)
     record_path = approval._approval_path(approval_id)
     approved_snapshot = record_path.read_bytes()
@@ -665,6 +663,10 @@ def test_restored_approved_snapshot_cannot_replay_consumed_approval(
     record_path.write_bytes(approved_snapshot)
     assert approval.check_approval(approval_id)["status"] == "approved"
 
+    def reject_second_write(*args, **kwargs):
+        raise AssertionError("restored approval must not reach the write operation")
+
+    monkeypatch.setattr(write_tools, "_atomic_write_note", reject_second_write)
     replay = write_tools.execute_approved_write(approval_id, requester="agent")
 
     assert replay["status"] == "consumption_already_recorded"
@@ -702,13 +704,15 @@ def test_restored_approved_snapshot_cannot_replay_after_audit_rotation(
     assert rotated["status"] == "rotated"
 
     record_path.write_bytes(approved_snapshot)
+
+    def reject_second_write(*args, **kwargs):
+        raise AssertionError("restored approval must not reach the write operation")
+
+    monkeypatch.setattr(write_tools, "_atomic_write_note", reject_second_write)
     replay = write_tools.execute_approved_write(approval_id, requester="agent")
 
     assert replay["status"] == "consumption_already_recorded"
     assert record_path.read_bytes() == approved_snapshot
     assert approval.verify_audit_log(checkpoint)["valid"] is True
-    assert not list(
-        (tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest()).glob(
-            "fault-case*.md"
-        )
-    ) == []
+    note = tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "fault-case.md"
+    assert note.read_text(encoding="utf-8") == "approved payload"
