@@ -681,7 +681,9 @@ def test_restored_approved_snapshot_cannot_replay_consumed_approval(
         and entry["record"]["id"] == approval_id
         for entry in audit
     ) == 1
-    note = tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "fault-case.md"
+    note = (
+        tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "fault-case.md"
+    )
     assert note.read_text(encoding="utf-8") == "approved payload"
 
 
