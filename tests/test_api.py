@@ -882,13 +882,13 @@ def test_execute_api_rejects_restored_approved_snapshot(client, monkeypatch):
     assert requested.status_code == 200
     approval_id = requested.json()["approval_id"]
     record_path = approval._approval_path(approval_id)
-    approved_snapshot = record_path.read_bytes()
 
     approved = client.post(
         f"/approve?approval_id={approval_id}",
         headers={"X-Approver-Key": "correct-approver-secret"},
     )
     assert approved.status_code == 200
+    approved_snapshot = record_path.read_bytes()
 
     first = client.post(
         "/write/execute",
@@ -925,12 +925,12 @@ def test_execute_api_fails_closed_when_audit_history_is_invalid(
     )
     approval_id = requested.json()["approval_id"]
     record_path = approval._approval_path(approval_id)
-    approved_snapshot = record_path.read_bytes()
     approved = client.post(
         f"/approve?approval_id={approval_id}",
         headers={"X-Approver-Key": "correct-approver-secret"},
     )
     assert approved.status_code == 200
+    approved_snapshot = record_path.read_bytes()
     first = client.post(
         "/write/execute",
         json={"approval_id": approval_id},
