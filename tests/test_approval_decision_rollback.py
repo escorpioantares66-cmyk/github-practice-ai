@@ -1,7 +1,6 @@
 """Rollback-resistant approval and denial decision regression tests."""
 import pytest
 
-
 APPROVER_KEY = "test-approver-secret"
 
 
