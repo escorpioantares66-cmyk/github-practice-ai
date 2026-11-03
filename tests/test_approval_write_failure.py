@@ -718,3 +718,40 @@ def test_restored_approved_snapshot_cannot_replay_after_audit_rotation(
     assert approval.verify_audit_log(checkpoint)["valid"] is True
     note = tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "fault-case.md"
     assert note.read_text(encoding="utf-8") == "approved payload"
+
+
+
+@pytest.mark.parametrize("terminal_status", ["completed", "failed", "uncertain", "blocked"])
+def test_execution_failure_cannot_overwrite_terminal_outcome(
+    monkeypatch, tmp_path, terminal_status
+):
+    approval_id = _approved_request(monkeypatch, tmp_path)
+    consumed = approval.consume_approval_request(
+        approval_id, "write_note", requester="agent"
+    )
+    assert consumed["status"] == "consumed"
+    assert consumed["execution_outcome"]["status"] == "started"
+
+    if terminal_status == "completed":
+        terminal = approval.record_execution_success(approval_id)
+        assert terminal["status"] == "completed"
+    else:
+        terminal = approval.record_execution_failure(
+            approval_id, "InitialFailure", "first terminal report",
+            outcome_status=terminal_status,
+        )
+        assert terminal["execution_outcome"]["status"] == terminal_status
+
+    record_before = approval.check_approval(approval_id)
+    audit_before = (tmp_path / "logs" / "audit.jsonl").read_bytes()
+
+    replayed_failure = approval.record_execution_failure(
+        approval_id, "LateFailure", "must not replace terminal result",
+        outcome_status=("uncertain" if terminal_status == "failed" else "failed"),
+    )
+
+    assert replayed_failure["status"] == "invalid_transition"
+    assert replayed_failure["current_outcome_status"] == terminal_status
+    assert approval.check_approval(approval_id) == record_before
+    assert (tmp_path / "logs" / "audit.jsonl").read_bytes() == audit_before
+    assert approval.verify_audit_log()["valid"] is True
