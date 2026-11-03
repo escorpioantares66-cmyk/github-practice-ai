@@ -81,8 +81,10 @@ jobs:
           PACKAGE_VERSION: ${{ needs.build-and-publish.outputs.package-version }}
         run: |
           for attempt in 1 2 3 4 5 6; do
-            if python -m pip install --no-cache-dir --index-url https://pypi.org/simple "github-practice-ai==$PACKAGE_VERSION" -q               && python -c "import stage2_sdk_ai; print('Verified PyPI package', '$PACKAGE_VERSION', stage2_sdk_ai.__name__)"; then
-              exit 0
+            if python -m pip install --no-cache-dir --index-url https://pypi.org/simple "github-practice-ai==$PACKAGE_VERSION" -q; then
+              if python -c "import stage2_sdk_ai; print('Verified PyPI package', '$PACKAGE_VERSION', stage2_sdk_ai.__name__)"; then
+                exit 0
+              fi
             fi
             if [ "$attempt" -lt 6 ]; then
               echo "PyPI version $PACKAGE_VERSION not available yet (attempt $attempt/6); retrying in 15 seconds."
