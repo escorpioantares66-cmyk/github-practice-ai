@@ -646,3 +646,69 @@ def test_recovery_listing_surfaces_corrupt_approval_records(monkeypatch, tmp_pat
             "execution_audit_status": None,
         }
     ]
+
+
+def test_restored_approved_snapshot_cannot_replay_consumed_approval(
+    monkeypatch, tmp_path
+):
+    from stage2_sdk_ai import audit_rotation
+
+    approval_id = _approved_request(monkeypatch, tmp_path)
+    record_path = approval._approval_path(approval_id)
+    approved_snapshot = record_path.read_bytes()
+
+    first = write_tools.execute_approved_write(approval_id, requester="agent")
+    assert first["status"] == "written"
+    assert approval.check_approval(approval_id)["status"] == "consumed"
+
+    # Simulate restoring a pre-consumption backup while retaining the audit log.
+    record_path.write_bytes(approved_snapshot)
+    assert approval.check_approval(approval_id)["status"] == "approved"
+
+    replay = write_tools.execute_approved_write(approval_id, requester="agent")
+
+    assert replay["status"] == "consumption_already_recorded"
+    assert record_path.read_bytes() == approved_snapshot
+    assert approval.verify_audit_log()["valid"] is True
+    audit = [
+        json.loads(line)
+        for line in (tmp_path / "logs" / "audit.jsonl").read_text().splitlines()
+    ]
+    assert sum(
+        entry["action"] == "consumed"
+        and entry["record"]["id"] == approval_id
+        for entry in audit
+    ) == 1
+    note = tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest() / "fault-case.md"
+    assert note.read_text(encoding="utf-8") == "approved payload"
+
+
+def test_restored_approved_snapshot_cannot_replay_after_audit_rotation(
+    monkeypatch, tmp_path
+):
+    from stage2_sdk_ai import audit_rotation
+
+    approval_id = _approved_request(monkeypatch, tmp_path)
+    record_path = approval._approval_path(approval_id)
+    approved_snapshot = record_path.read_bytes()
+
+    first = write_tools.execute_approved_write(approval_id, requester="agent")
+    assert first["status"] == "written"
+
+    checkpoint = approval.create_audit_checkpoint()
+    rotated = audit_rotation.rotate_audit_log(
+        truncate=True, expected_checkpoint=checkpoint
+    )
+    assert rotated["status"] == "rotated"
+
+    record_path.write_bytes(approved_snapshot)
+    replay = write_tools.execute_approved_write(approval_id, requester="agent")
+
+    assert replay["status"] == "consumption_already_recorded"
+    assert record_path.read_bytes() == approved_snapshot
+    assert approval.verify_audit_log(checkpoint)["valid"] is True
+    assert not list(
+        (tmp_path / "notes" / hashlib.sha256(b"agent").hexdigest()).glob(
+            "fault-case*.md"
+        )
+    ) == []
