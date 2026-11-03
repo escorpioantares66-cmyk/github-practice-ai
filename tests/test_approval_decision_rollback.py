@@ -3,21 +3,21 @@ import json
 
 import pytest
 
-from stage2_sdk_ai import approval
-
 
 APPROVER_KEY = "test-approver-secret"
 
 
 @pytest.fixture
 def approval_environment(monkeypatch, tmp_path):
+    from stage2_sdk_ai import approval
+
     monkeypatch.setenv("AGENT_API_KEYS", "agent=requester-secret")
     monkeypatch.setenv("AGENT_APPROVER_KEYS", f"operator={APPROVER_KEY}")
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     monkeypatch.setattr(
         approval, "_audit_file", tmp_path / "logs" / "audit.jsonl"
     )
-    return tmp_path
+    return approval
 
 
 @pytest.mark.parametrize(
@@ -37,6 +37,7 @@ def test_restored_pending_snapshot_cannot_reverse_recorded_decision(
     expected_prior,
     rotate_audit,
 ):
+    approval = approval_environment
     from stage2_sdk_ai import audit_rotation
 
     request = approval.request_approval(
@@ -82,6 +83,7 @@ def test_restored_pending_snapshot_cannot_reverse_recorded_decision(
 def test_decision_transition_fails_closed_when_audit_history_is_unavailable(
     approval_environment,
 ):
+    approval = approval_environment
     request = approval.request_approval(
         "write_note", {"path": "audit-unavailable.md", "content": "payload"}
     )
