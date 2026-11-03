@@ -1,6 +1,5 @@
 """Rollback-resistant approval and denial decision regression tests."""
 
-import json
 
 import pytest
 
@@ -28,7 +27,9 @@ def approval_environment(monkeypatch, tmp_path):
         ("approved", "deny", "approved"),
     ],
 )
-@pytest.mark.parametrize("rotate_audit", [False, True], ids=["active-log", "rotated-log"])
+@pytest.mark.parametrize(
+    "rotate_audit", [False, True], ids=["active-log", "rotated-log"]
+)
 def test_restored_pending_snapshot_cannot_reverse_recorded_decision(
     approval_environment,
     original_decision,
@@ -90,7 +91,8 @@ def test_decision_transition_fails_closed_when_audit_history_is_unavailable(
     audit_path = approval._audit_file
 
     # Corrupt the existing request event so decision history cannot be trusted.
-    audit_path.write_text('{"action":"request","broken":true}\\n', encoding="utf-8")
+    corrupted_audit = '{"action":"request","broken":true}' + chr(10)
+    audit_path.write_text(corrupted_audit, encoding="utf-8")
 
     result = approval.approve(approval_id, APPROVER_KEY)
 
@@ -98,4 +100,4 @@ def test_decision_transition_fails_closed_when_audit_history_is_unavailable(
     assert result["audit_phase"] == "decision_history"
     assert result["audit_status"] == "unavailable"
     assert record_path.read_bytes() == before
-    assert audit_path.read_text(encoding="utf-8") == '{"action":"request","broken":true}\\n'
+    assert audit_path.read_text(encoding="utf-8") == corrupted_audit
