@@ -868,3 +868,83 @@ def test_corrupt_approval_records_return_operator_error_not_success(
 
     assert response.status_code == 500
     assert response.json()["detail"]["error"] == "corrupt_approval_record"
+
+
+def test_execute_api_rejects_restored_approved_snapshot(client, monkeypatch):
+    from stage2_sdk_ai import approval, write_tools
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
+    requested = client.post(
+        "/write",
+        json={"path": "rollback-api.md", "content": "one authorized write"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert requested.status_code == 200
+    approval_id = requested.json()["approval_id"]
+    record_path = approval._approval_path(approval_id)
+    approved_snapshot = record_path.read_bytes()
+
+    approved = client.post(
+        f"/approve?approval_id={approval_id}",
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    )
+    assert approved.status_code == 200
+
+    first = client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert first.status_code == 200
+    record_path.write_bytes(approved_snapshot)
+
+    def reject_second_write(*args, **kwargs):
+        raise AssertionError("restored approval must not reach the write operation")
+
+    monkeypatch.setattr(write_tools, "_atomic_write_note", reject_second_write)
+    replay = client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
+        headers={"X-API-Key": VALID_KEY},
+    )
+
+    assert replay.status_code == 409
+    assert replay.json()["detail"] == "Approval was already consumed or denied"
+
+
+def test_execute_api_fails_closed_when_audit_history_is_invalid(
+    client, monkeypatch
+):
+    from stage2_sdk_ai import approval
+
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=correct-approver-secret")
+    requested = client.post(
+        "/write",
+        json={"path": "rollback-audit-api.md", "content": "must not be repeated"},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    approval_id = requested.json()["approval_id"]
+    record_path = approval._approval_path(approval_id)
+    approved_snapshot = record_path.read_bytes()
+    approved = client.post(
+        f"/approve?approval_id={approval_id}",
+        headers={"X-Approver-Key": "correct-approver-secret"},
+    )
+    assert approved.status_code == 200
+    first = client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
+        headers={"X-API-Key": VALID_KEY},
+    )
+    assert first.status_code == 200
+
+    record_path.write_bytes(approved_snapshot)
+    approval._audit_file.write_text("{invalid-audit-entry}\\n", encoding="utf-8")
+    replay = client.post(
+        "/write/execute",
+        json={"approval_id": approval_id},
+        headers={"X-API-Key": VALID_KEY},
+    )
+
+    assert replay.status_code == 500
+    assert replay.json()["detail"]["error"] == "audit_history_unavailable"
