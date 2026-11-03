@@ -125,8 +125,12 @@ def _requester_usage(requester: str, now: float) -> tuple[int, int]:
                 "approval store contains a symlink; operator review required"
             )
         try:
-            record = _load_approval_record(path, path.stem)
-        except (OSError, CorruptApprovalRecordError) as exc:
+            # A request may be completing its audit marker while another
+            # requester performs the quota scan. Use the same record lock as
+            # transitions so quota checks never inspect an in-flight update.
+            with _locked_record(path):
+                record = _load_approval_record(path, path.stem)
+        except (OSError, ValueError, CorruptApprovalRecordError) as exc:
             raise ApprovalStoreIntegrityError(
                 "approval store contains an unreadable record; operator review required"
             ) from exc
@@ -195,14 +199,20 @@ def request_approval(
             except FileExistsError:
                 continue
             # Reserve the random identifier without exposing a partially written
-            # JSON record. The placeholder is fail-closed if the process crashes;
-            # the complete record becomes visible in one atomic replacement.
+            # JSON record. Create its transition lock at the same time so read-only
+            # retention snapshots can take a shared lock without creating files.
             os.close(fd)
+            lock_path = path.with_suffix(path.suffix + ".lock")
             try:
+                lock_fd = open_private_file(
+                    lock_path, os.O_RDWR | os.O_CREAT | os.O_EXCL
+                )
+                os.close(lock_fd)
                 _write_record_atomically(path, record)
             except Exception:
                 try:
                     path.unlink(missing_ok=True)
+                    lock_path.unlink(missing_ok=True)
                     fsync_directory(_approvals_dir)
                 except OSError:
                     logger.exception(
@@ -212,34 +222,41 @@ def request_approval(
                 raise
             break
     # The request is not approvable until its audit append and durable
-    # status marker both succeed. The initial pending marker fails closed.
-    try:
-        audit_record = dict(record)
-        audit_record["request_audit_status"] = "written"
-        log_audit("request", audit_record)
-    except Exception as exc:
-        record["request_audit_status"] = "failed"
-        record["request_audit_error_type"] = type(exc).__name__[:120]
+    # status marker both succeed. Hold the record lock across both writes so
+    # quota scans, retention snapshots, and transitions see a stable state.
+    with _locked_record(path):
+        try:
+            audit_record = dict(record)
+            audit_record["request_audit_status"] = "written"
+            log_audit("request", audit_record)
+        except Exception as exc:
+            record["request_audit_status"] = "failed"
+            record["request_audit_error_type"] = type(exc).__name__[:120]
+            try:
+                _write_record_atomically(path, record)
+            except Exception:
+                pass
+            raise ApprovalAuditError(approval_id) from exc
+
+        record["request_audit_status"] = "written"
         try:
             _write_record_atomically(path, record)
-        except Exception:
-            pass
-        raise ApprovalAuditError(approval_id) from exc
-
-    record["request_audit_status"] = "written"
-    try:
-        _write_record_atomically(path, record)
-    except Exception as exc:
-        raise ApprovalAuditError(approval_id) from exc
+        except Exception as exc:
+            raise ApprovalAuditError(approval_id) from exc
     return record
 
 
-def _load_approval_record(path: Path, approval_id: str) -> dict[str, Any]:
-    """Load and validate a record before any state transition."""
+def _load_approval_record(
+    path: Path, approval_id: str, *, raw: bytes | None = None
+) -> dict[str, Any]:
+    """Load and validate a record before any state transition.
+
+    Callers holding the record lock may pass a bounded descriptor snapshot.
+    """
     if _approval_path(approval_id) is None:
         raise CorruptApprovalRecordError("approval filename has an invalid ID")
     try:
-        data = json.loads(read_private_text(path))
+        data = json.loads(read_private_text(path) if raw is None else raw)
     except FileNotFoundError:
         raise
     except ValueError as exc:

@@ -98,7 +98,9 @@ def ensure_private_directory(path: Path) -> Path:
     return target
 
 
-def open_private_file(path: Path, flags: int, mode: int = 0o600) -> int:
+def open_private_file(
+    path: Path, flags: int, mode: int = 0o600, *, expected_mode: int | None = None
+) -> int:
     """Open a regular file relative to a verified, no-follow parent directory."""
     parent_fd = _open_directory_chain(Path(path).parent, create=False)
     try:
@@ -127,7 +129,15 @@ def open_private_file(path: Path, flags: int, mode: int = 0o600) -> int:
         raise UnsafeStoragePathError(
             "Private storage file must not have additional hard links"
         )
-    os.fchmod(fd, mode)
+    # Validate strict private-file permissions against the opened inode when
+    # the caller requires them. General-purpose private reads may use other modes.
+    if expected_mode is not None and stat.S_IMODE(info.st_mode) != expected_mode:
+        os.close(fd)
+        raise UnsafeStoragePathError(
+            "Private storage file has unexpected permissions"
+        )
+    if (flags & os.O_ACCMODE) != os.O_RDONLY:
+        os.fchmod(fd, mode)
     return fd
 
 

@@ -47,3 +47,6 @@ jobs:
         run: |
           pip install -e . -q
           gh-ai --check
+      - name: Read-only storage and retention audit
+        run: |
+          gh-ai --storage-audit

@@ -26,6 +26,7 @@ from .secure_storage import (
 SEGMENT_FORMAT_VERSION = 1
 MAX_SEGMENT_BYTES = 128 * 1024 * 1024
 MAX_SEGMENT_COUNT = 10_000
+MAX_SEGMENT_CHAIN_BYTES = 256 * 1024 * 1024
 _ZERO_HASH = "0" * 64
 _SEGMENT_NAME = re.compile(r"audit-segment-\d{20}-[0-9a-f]{16}\.json")
 
@@ -59,7 +60,7 @@ def _read_private(path: Path, limit: int) -> bytes:
         or stat.S_IMODE(info.st_mode) != 0o600
     ):
         raise ValueError("rotation evidence must be a private single-link file")
-    fd = open_private_file(path, os.O_RDONLY)
+    fd = open_private_file(path, os.O_RDONLY, expected_mode=0o600)
     with os.fdopen(fd, "rb") as handle:
         raw = handle.read(limit + 1)
     if len(raw) > limit:
@@ -255,6 +256,7 @@ def _verify_anchor(anchor: dict[str, Any] | None, archive_dir: Path
     expected_hash = anchor["latest_segment_sha256"]
     reverse_segments: list[tuple[dict[str, Any], bytes]] = []
     seen: set[str] = set()
+    total_segment_bytes = 0
     while expected_name is not None:
         if expected_name in seen or len(seen) >= MAX_SEGMENT_COUNT:
             raise approval.AuditLogIntegrityError(
@@ -262,6 +264,11 @@ def _verify_anchor(anchor: dict[str, Any] | None, archive_dir: Path
             )
         seen.add(expected_name)
         raw = _read_private(archive_dir / expected_name, MAX_SEGMENT_BYTES)
+        total_segment_bytes += len(raw)
+        if total_segment_bytes > MAX_SEGMENT_CHAIN_BYTES:
+            raise approval.AuditLogIntegrityError(
+                "audit segment chain exceeds its aggregate byte limit"
+            )
         manifest, content, _ = _decode_segment(raw, expected_hash)
         canonical_name = (
             f"audit-segment-{manifest['end_sequence']:020d}-"

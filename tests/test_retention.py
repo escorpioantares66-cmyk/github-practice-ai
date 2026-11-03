@@ -1,4 +1,8 @@
+import fcntl
 import json
+import os
+import threading
+import time
 
 import pytest
 
@@ -175,3 +179,153 @@ def test_archive_rejects_symlink_destination(monkeypatch, tmp_path):
         archive_retention(now=now, archive_dir=archive_dir)
 
     assert list(outside.iterdir()) == []
+
+
+def test_retention_requires_lifecycle_event_coverage(monkeypatch, tmp_path):
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    audit_path.write_bytes(b"")
+    result = plan_retention(now=now)
+    assert result["approval_records_eligible"] == 0
+    assert result["approval_records_excluded"]["audit_lifecycle_incomplete"] == 1
+
+
+def test_retention_rejects_oversized_approval_record(monkeypatch, tmp_path):
+    now = 1_800_000_000.0
+    record = _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    path = tmp_path / "approvals" / f"{record['id']}.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["padding"] = "x" * 1_100_000
+    path.write_text(json.dumps(data), encoding="utf-8")
+    path.chmod(0o600)
+    result = plan_retention(now=now)
+    assert result["approval_records_eligible"] == 0
+    assert result["approval_records_excluded"]["approval_record_too_large"] == 1
+
+
+def test_retention_waits_for_concurrent_approval_transition_lock(monkeypatch, tmp_path):
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    record_id = next((tmp_path / "approvals").glob("*.json")).stem
+    lock_path = tmp_path / "approvals" / f"{record_id}.json.lock"
+    lock_file = os.fdopen(os.open(lock_path, os.O_RDONLY), "rb")
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    started = threading.Event()
+    finished = threading.Event()
+
+    def run_plan():
+        started.set()
+        plan_retention(now=now)
+        finished.set()
+
+    worker = threading.Thread(target=run_plan, daemon=True)
+    try:
+        worker.start()
+        assert started.wait(timeout=2)
+        time.sleep(0.05)
+        assert not finished.is_set()
+    finally:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+    worker.join(timeout=5)
+    assert finished.is_set()
+
+
+def test_retention_reports_non_atomic_snapshot_boundary(monkeypatch, tmp_path):
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    result = plan_retention(now=now)
+    assert result["snapshot_consistency"] == "best_effort_non_atomic"
+
+
+def test_retention_stops_at_aggregate_record_byte_budget(monkeypatch, tmp_path):
+    import stage2_sdk_ai.retention as retention
+
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 20)
+    monkeypatch.setattr(retention, "MAX_RETENTION_SCAN_BYTES", 1)
+    result = plan_retention(now=now)
+    assert result["approval_records_scan_bytes"] <= 1
+    assert result["approval_records_scan_truncated"] is True
+
+
+def test_retention_indexes_audit_history_once_for_many_records(
+    monkeypatch, tmp_path
+):
+    import stage2_sdk_ai.retention as retention
+
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    approval.request_approval("write_note", {"path": "notes/second.md"})
+    calls = 0
+    original = retention._audit_action_index
+
+    def counted_index(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(retention, "_audit_action_index", counted_index)
+    result = plan_retention(now=now)
+
+    assert result["approval_records_scanned"] == 2
+    assert calls == 1
+
+
+def test_archive_refuses_incomplete_bounded_retention_scan(
+    monkeypatch, tmp_path
+):
+    import stage2_sdk_ai.retention as retention
+
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    archive_dir = tmp_path / "archive"
+    monkeypatch.setattr(retention, "MAX_RETENTION_SCAN_BYTES", 1)
+
+    with pytest.raises(approval.ApprovalStoreIntegrityError, match="incomplete"):
+        archive_retention(now=now, archive_dir=archive_dir)
+
+    assert not archive_dir.exists()
+
+
+def test_retention_planner_has_a_bounded_default_record_count(
+    monkeypatch, tmp_path
+):
+    import stage2_sdk_ai.retention as retention
+
+    now = 1_800_000_000.0
+    _create_old_request(monkeypatch, tmp_path, now - RETENTION_SECONDS - 10)
+    approval.request_approval("write_note", {"path": "notes/second.md"})
+    monkeypatch.setattr(retention, "MAX_ARCHIVE_APPROVAL_RECORDS", 1)
+
+    result = plan_retention(now=now)
+
+    assert result["approval_records_scanned"] == 1
+    assert result["approval_records_scan_limit"] == 1
+    assert result["approval_records_scan_truncated"] is True
+
+
+def test_retention_counts_bytes_read_from_oversized_records(
+    monkeypatch, tmp_path
+):
+    import stage2_sdk_ai.retention as retention
+
+    now = 1_800_000_000.0
+    for offset in (10, 20):
+        record = _create_old_request(
+            monkeypatch, tmp_path, now - RETENTION_SECONDS - offset
+        )
+        path = tmp_path / "approvals" / f"{record['id']}.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["padding"] = "x" * 1_100_000
+        path.write_text(json.dumps(data), encoding="utf-8")
+        path.chmod(0o600)
+
+    monkeypatch.setattr(retention, "MAX_RETENTION_SCAN_BYTES", 1_500_000)
+    result = plan_retention(now=now)
+
+    assert result["approval_records_scan_bytes"] == 1_500_000
+    assert result["approval_records_scan_bytes"] <= 1_500_000
+    assert result["approval_records_scan_truncated"] is True

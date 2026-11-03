@@ -28,6 +28,9 @@ from .secure_storage import (
 RETENTION_DAYS = 90
 RETENTION_SECONDS = RETENTION_DAYS * 24 * 60 * 60
 MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
+MAX_APPROVAL_RECORD_BYTES = 1 * 1024 * 1024
+MAX_RETENTION_SCAN_BYTES = 64 * 1024 * 1024
+MAX_ARCHIVE_APPROVAL_RECORDS = 10_000
 ARCHIVE_FORMAT_VERSION = 2
 
 
@@ -61,7 +64,7 @@ def _private_regular_file(path: Path, *, expected_mode: int = 0o600) -> os.stat_
 
 def _read_locked_file(path: Path, *, limit: int, exclusive: bool) -> bytes:
     _private_regular_file(path)
-    fd = open_private_file(path, os.O_RDONLY)
+    fd = open_private_file(path, os.O_RDONLY, expected_mode=0o600)
     with os.fdopen(fd, "rb") as handle:
         fcntl.flock(
             handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
@@ -89,13 +92,46 @@ def _validate_now(now: float | None) -> float:
     return float(current)
 
 
-def plan_retention(now: float | None = None) -> dict[str, Any]:
-    """Report old, safe-to-archive evidence without changing source storage."""
+def _read_approval_record_snapshot(path: Path, limit: int) -> tuple[dict[str, Any], bytes]:
+    """Read a bounded record under its persistent transition lock."""
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_fd = open_private_file(lock_path, os.O_RDONLY, expected_mode=0o600)
+    with os.fdopen(lock_fd, "rb") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)
+        try:
+            record_fd = open_private_file(path, os.O_RDONLY, expected_mode=0o600)
+            with os.fdopen(record_fd, "rb") as record_file:
+                raw = record_file.read(limit + 1)
+            if len(raw) > limit:
+                return {}, raw
+            return approval._load_approval_record(path, path.stem, raw=raw), raw
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def plan_retention(
+    now: float | None = None,
+    *,
+    max_approval_records: int | None = None,
+) -> dict[str, Any]:
+    """Report old evidence with a finite approval-record inspection ceiling."""
+    if max_approval_records is None:
+        # The default planner must remain bounded even when called directly.
+        max_approval_records = MAX_ARCHIVE_APPROVAL_RECORDS
+    if (
+        isinstance(max_approval_records, bool)
+        or not isinstance(max_approval_records, int)
+        or max_approval_records < 1
+    ):
+        raise ValueError("max_approval_records must be a positive integer")
     current = _validate_now(now)
     cutoff = current - RETENTION_SECONDS
     eligible: list[str] = []
     excluded: dict[str, int] = {}
     approval_count = 0
+    approval_scan_bytes = 0
+    approval_scan_truncated = False
+    eligible_records: dict[str, bytes] = {}
 
     if approval._approvals_dir.is_symlink():
         raise approval.ApprovalStoreIntegrityError(
@@ -112,15 +148,33 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
                 "approval directory must be private and owned by the application user"
             )
 
-    for path in sorted(approval._approvals_dir.glob("*.json")):
+    for path in approval._approvals_dir.glob("*.json"):
+        if (
+            (max_approval_records is not None and approval_count >= max_approval_records)
+            or approval_scan_bytes >= MAX_RETENTION_SCAN_BYTES
+        ):
+            # Consume at most one additional path to establish truncation.
+            approval_scan_truncated = True
+            break
         approval_count += 1
         reason = None
+        raw = b""
         if path.is_symlink():
             reason = "symlink"
         else:
+            remaining = MAX_RETENTION_SCAN_BYTES - approval_scan_bytes
+            read_limit = min(MAX_APPROVAL_RECORD_BYTES, remaining)
             try:
-                _private_regular_file(path)
-                record = approval._load_approval_record(path, path.stem)
+                record, raw = _read_approval_record_snapshot(path, read_limit)
+                # Account for every byte read, including oversized records.
+                # Otherwise a store full of oversized files bypasses the
+                # aggregate I/O budget while still consuming CPU and memory.
+                approval_scan_bytes += min(len(raw), read_limit)
+                if len(raw) > read_limit:
+                    if remaining <= MAX_APPROVAL_RECORD_BYTES:
+                        approval_scan_truncated = True
+                        break
+                    reason = "approval_record_too_large"
             except (OSError, ValueError, approval.ApprovalStoreIntegrityError):
                 reason = "corrupt_or_unreadable"
         if reason is None:
@@ -151,6 +205,7 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
 
         if reason is None:
             eligible.append(path.stem)
+            eligible_records[path.stem] = raw
         else:
             excluded[reason] = excluded.get(reason, 0) + 1
 
@@ -172,6 +227,20 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
         )
     )
     total = archive_state["entries"] + active_total
+    # Build the audit action index once. Re-parsing the complete audit history
+    # for each approval record would make this O(records * audit_events).
+    actions_by_id = _audit_action_index(
+        audit_contents, archive_state.get("actions_by_id", {})
+    )
+    for approval_id, raw in list(eligible_records.items()):
+        record = json.loads(raw)
+        required = _required_audit_actions(record)
+        if not required.issubset(actions_by_id.get(approval_id, set())):
+            eligible_records.pop(approval_id, None)
+            eligible.remove(approval_id)
+            excluded["audit_lifecycle_incomplete"] = (
+                excluded.get("audit_lifecycle_incomplete", 0) + 1
+            )
     old_audit_events = 0
     for raw_line in audit_contents.splitlines():
         if raw_line:
@@ -186,6 +255,10 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
         "archive_destination": "private_local",
         "source_modified": False,
         "approval_records_scanned": approval_count,
+        "approval_records_scan_bytes": approval_scan_bytes,
+        "approval_records_scan_bytes_limit": MAX_RETENTION_SCAN_BYTES,
+        "approval_records_scan_limit": max_approval_records,
+        "approval_records_scan_truncated": approval_scan_truncated,
         "approval_records_eligible": len(eligible),
         "eligible_approval_ids": eligible,
         "approval_records_excluded": excluded,
@@ -196,6 +269,7 @@ def plan_retention(now: float | None = None) -> dict[str, Any]:
         "audit_head_sequence": sequence,
         "audit_head_hash": head_hash,
         "audit_archive_mode": "verified_segment_chain_plus_active_tail",
+        "snapshot_consistency": "best_effort_non_atomic",
     }
 
 
@@ -244,12 +318,12 @@ def _read_approval_snapshot(approval_id: str, cutoff: float, now: float) -> byte
     return raw
 
 
-def _validate_audit_coverage(
-    records: dict[str, bytes], audit_contents: bytes,
+def _audit_action_index(
+    audit_contents: bytes,
     prior_actions: dict[str, set[str]] | None = None,
-) -> None:
-    """Require each archived record's completed lifecycle events in the chain."""
-    actions_by_id: dict[str, set[str]] = {
+) -> dict[str, set[str]]:
+    """Index lifecycle actions once for all approval records in a scan."""
+    actions_by_id = {
         approval_id: set(actions)
         for approval_id, actions in (prior_actions or {}).items()
     }
@@ -260,17 +334,31 @@ def _validate_audit_coverage(
         event_record = event.get("record")
         if isinstance(event_record, dict) and isinstance(event_record.get("id"), str):
             actions_by_id.setdefault(event_record["id"], set()).add(event["action"])
+    return actions_by_id
 
+
+def _required_audit_actions(record: dict[str, Any]) -> set[str]:
+    required = {"request"}
+    if record["status"] == "approved":
+        required.add("approved")
+    elif record["status"] == "denied":
+        required.add("denied")
+    elif record["status"] == "consumed":
+        required.update({"consumed", "execution_succeeded"})
+    return required
+
+
+def _validate_audit_coverage(
+    records: dict[str, bytes], audit_contents: bytes,
+    prior_actions: dict[str, set[str]] | None = None,
+) -> None:
+    """Require each archived record's completed lifecycle events in the chain."""
+    actions_by_id = _audit_action_index(audit_contents, prior_actions)
     for approval_id, raw in records.items():
         record = json.loads(raw)
-        required = {"request"}
-        if record["status"] == "approved":
-            required.add("approved")
-        elif record["status"] == "denied":
-            required.add("denied")
-        elif record["status"] == "consumed":
-            required.update({"consumed", "execution_succeeded"})
-        if not required.issubset(actions_by_id.get(approval_id, set())):
+        if not _required_audit_actions(record).issubset(
+            actions_by_id.get(approval_id, set())
+        ):
             raise approval.AuditLogIntegrityError(
                 "approval record is missing a required audit lifecycle event"
             )
@@ -371,7 +459,13 @@ def archive_retention(
 ) -> dict[str, Any]:
     """Create a verified private snapshot; never remove or rewrite source files."""
     current = _validate_now(now)
-    initial_plan = plan_retention(current)
+    initial_plan = plan_retention(
+        current, max_approval_records=MAX_ARCHIVE_APPROVAL_RECORDS
+    )
+    if initial_plan["approval_records_scan_truncated"]:
+        raise approval.ApprovalStoreIntegrityError(
+            "retention scan is incomplete; refusing a partial archive"
+        )
     approval_ids = initial_plan["eligible_approval_ids"]
     target_dir = archive_dir or (approval._approvals_dir.parent / "archive")
 
@@ -413,6 +507,22 @@ def archive_retention(
             _validate_audit_coverage(
                 record_payloads, audit_bytes, anchor_state["actions_by_id"]
             )
+
+            # Estimate the encoded envelope before allocating base64 strings and
+            # the duplicate JSON object graph. The final serialized-size check
+            # below remains authoritative.
+            estimated_archive_bytes = (
+                4 * ((len(audit_bytes) + 2) // 3)
+                + sum(
+                    4 * ((len(raw) + 2) // 3) + 256
+                    for raw in record_payloads.values()
+                )
+                + 4096
+            )
+            if estimated_archive_bytes > MAX_ARCHIVE_BYTES:
+                raise ValueError(
+                    "archive payload exceeds the configured 128 MiB limit"
+                )
 
             records = {
                 approval_id: {
