@@ -10,7 +10,6 @@
 [[Ruff GREEN](https://img.shields.io/badge/ruff-GREEN-brightgreen)](https://docs.astral.sh/ruff/)
 [[Coverage 92%](https://img.shields.io/badge/coverage-92%25-brightgreen)](https://github.com/escorpioantares66-cmyk/github-practice-ai)
 [[License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[[Senior 9.6/10](https://img.shields.io/badge/Senior-9.6%2F10%20PyPI%20LIVE-gold)](https://pypi.org/project/github-practice-ai/)
 
 > AI SDK with a security-focused approval workflow, requester-scoped storage, audit integrity controls, and mobile-friendly Termux support.
 
