@@ -1,4 +1,5 @@
 """Rollback-resistant approval and denial decision regression tests."""
+import json
 
 import pytest
 
@@ -90,7 +91,7 @@ def test_decision_transition_fails_closed_when_audit_history_is_unavailable(
     audit_path = approval._audit_file
 
     # Corrupt the existing request event so decision history cannot be trusted.
-    corrupted_audit = '{"action":"request","broken":true}' + chr(10)
+    corrupted_audit = json.dumps({"action": "request", "broken": True}) + "\n"
     audit_path.write_text(corrupted_audit, encoding="utf-8")
 
     result = approval.approve(approval_id, APPROVER_KEY)
