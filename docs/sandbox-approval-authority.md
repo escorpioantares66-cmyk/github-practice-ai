@@ -107,3 +107,18 @@ events are checked against mutable records so restoring an old record cannot
 re-authorize a completed approval while the audit history remains intact. It is
 not a substitute for independent protected backups or a remote immutable audit
 checkpoint.
+
+
+## Approver authorization boundary
+
+The sandbox approval authority accepts the approver credential at its decision
+boundary and resolves the principal identity itself. Callers must not pass an
+asserted approver identity: the authority validates the credential against the
+explicitly named `AGENT_APPROVER_KEYS` allow-list and requires the requester
+allow-list to contain explicit identities as well. The resolved identity is
+stored in the decision and signed receipt; the raw credential is never stored.
+
+The HTTP layer also authenticates and rate-limits approver requests before
+dispatch. The authority repeats credential validation so internal callers
+cannot bypass authorization by supplying a fabricated principal name. Invalid,
+missing, legacy unnamed, malformed, or role-conflicting credentials fail closed.
