@@ -15,10 +15,10 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: Install build deps binary-only (no Rust)
@@ -73,7 +73,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
       - name: Verify exact package version from PyPI
