@@ -986,4 +986,13 @@ def test_http_create_audit_failure_returns_operator_review_not_success(
 
     assert response.status_code == 503
     assert "approval_id" not in response.json()
+    record_path = next((authority / "sandbox-approvals").glob("*.json"))
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    assert record["status"] == "pending"
+    assert record["audit_status"] == "failed"
+    approval_attempt = client.post(
+        f"/v1/sandbox/approvals/{record['approval_id']}/approve",
+        headers={"X-Approver-Key": APPROVER_KEY},
+    )
+    assert approval_attempt.status_code == 503
 
