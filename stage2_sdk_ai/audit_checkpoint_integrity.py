@@ -256,6 +256,7 @@ def verify_checkpoint(
 
     checkpoint_sequence = envelope["sequence"]
     if authority == MAIN_AUTHORITY:
+        _require_existing_audit_file(approval._audit_file)
         result = approval.verify_audit_log(
             {
                 "version": 1,
@@ -267,6 +268,9 @@ def verify_checkpoint(
         )
         current_sequence = result["chained_entries"]
     else:
+        _require_existing_audit_file(
+            sandbox_approval._store_dir() / "audit.jsonl"
+        )
         result = sandbox_approval.verify_audit_log(
             {
                 "sequence": checkpoint_sequence,
