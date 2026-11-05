@@ -607,7 +607,7 @@ def test_audit_history_prevents_replay_after_approval_record_rollback(
 
 
 def test_audit_history_prevents_second_approval_after_record_rollback(
-    authority, scope
+    authority, scope, monkeypatch
 ):
     created = _create(authority, scope)
     _approve(created)
