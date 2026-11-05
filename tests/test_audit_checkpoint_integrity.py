@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 import pytest
 
 from stage2_sdk_ai import approval, audit_checkpoint_integrity, sandbox_approval
@@ -47,12 +50,37 @@ def test_main_checkpoint_verifies_exact_head_and_reports_later_suffix(main_audit
     assert later["unanchored_suffix"] == 1
 
 
-def test_main_checkpoint_detects_tampering_before_anchor(main_audit):
+def test_main_checkpoint_detects_rehashed_history_rewrite(main_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID
     )
     path = approval._audit_file
-    path.write_bytes(path.read_bytes().replace(b'"action":"request"', b'"action":"forged"', 1))
+    entry = json.loads(path.read_text(encoding="utf-8"))
+    entry["record"]["tool"] = "rewritten_tool"
+    entry["hash"] = hashlib.sha256(
+        approval._canonical_audit_entry(entry)
+    ).hexdigest()
+    path.write_text(
+        json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+
+    # The rewritten history is internally valid; only the independent anchor
+    # can detect that its checkpointed head has changed.
+    assert approval.verify_audit_log()["valid"] is True
+    with pytest.raises(approval.AuditLogIntegrityError):
+        audit_checkpoint_integrity.verify_checkpoint(
+            checkpoint,
+            authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+            store_id=MAIN_STORE_ID,
+        )
+
+
+def test_main_checkpoint_rejects_truncation_before_anchor(main_audit):
+    checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID
+    )
+    approval._audit_file.write_bytes(b"")
 
     with pytest.raises(approval.AuditLogIntegrityError):
         audit_checkpoint_integrity.verify_checkpoint(
@@ -89,17 +117,39 @@ def test_sandbox_checkpoint_verifies_exact_head_and_reports_later_suffix(sandbox
     assert later["unanchored_suffix"] == 1
 
 
-def test_sandbox_checkpoint_detects_tampering_before_anchor(sandbox_audit):
+def test_sandbox_checkpoint_detects_rehashed_history_rewrite(sandbox_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.SANDBOX_AUTHORITY, SANDBOX_STORE_ID
     )
     path = sandbox_approval._store_dir() / "audit.jsonl"
+    entry = json.loads(path.read_text(encoding="utf-8"))
+    entry["actor"] = "intruder"
+    entry_without_hash = {key: value for key, value in entry.items() if key != "hash"}
+    entry["hash"] = hashlib.sha256(
+        sandbox_approval._canonical(entry_without_hash)
+    ).hexdigest()
     path.write_text(
-        path.read_text(encoding="utf-8").replace(
-            '"actor":"automation"', '"actor":"intruder"', 1
-        ),
+        json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
+
+    # The local chain still verifies after re-hashing, but no longer matches
+    # the independently retained checkpoint.
+    assert sandbox_approval.verify_audit_log()["valid"] is True
+    with pytest.raises(sandbox_approval.SandboxApprovalError):
+        audit_checkpoint_integrity.verify_checkpoint(
+            checkpoint,
+            authority=audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+            store_id=SANDBOX_STORE_ID,
+        )
+
+
+def test_sandbox_checkpoint_rejects_truncation_before_anchor(sandbox_audit):
+    checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.SANDBOX_AUTHORITY, SANDBOX_STORE_ID
+    )
+    path = sandbox_approval._store_dir() / "audit.jsonl"
+    path.write_bytes(b"")
 
     with pytest.raises(sandbox_approval.SandboxApprovalError):
         audit_checkpoint_integrity.verify_checkpoint(
@@ -150,6 +200,25 @@ def test_envelope_rejects_invalid_fields(main_audit, change):
             checkpoint,
             authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
             store_id=MAIN_STORE_ID,
+        )
+
+
+def test_sandbox_envelope_rejects_main_legacy_prefix_count(sandbox_audit):
+    checkpoint = {
+        "format_version": 1,
+        "authority": "sandbox",
+        "store_id": SANDBOX_STORE_ID,
+        "sequence": 1,
+        "head_hash": "a" * 64,
+        "legacy_entries": 1,
+        "created_at": 123.0,
+        "checkpoint_id": "1" * 32,
+    }
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointIntegrityError):
+        audit_checkpoint_integrity.validate_checkpoint_envelope(
+            checkpoint,
+            authority=audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+            store_id=SANDBOX_STORE_ID,
         )
 
 
