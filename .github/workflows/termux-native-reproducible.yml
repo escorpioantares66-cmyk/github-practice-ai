@@ -12,6 +12,37 @@ permissions:
   contents: read
 
 jobs:
+  jiter-change-filter:
+    name: Decide whether this commit needs a jiter rebuild
+    runs-on: ubuntu-24.04
+    outputs:
+      should_build: ${{ steps.detect.outputs.should_build }}
+    steps:
+      - name: Inspect files changed by the current PR head commit
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          test -n "$PR_HEAD_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/commits/$PR_HEAD_SHA" \
+            --jq '.files[].filename' > changed-files.txt
+
+          if grep -Eq '^(packaging/termux/python-jiter/|\.github/workflows/termux-native-reproducible\.yml$)' changed-files.txt; then
+            echo "Current commit changes the jiter recipe/workflow; enabling independent builds."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Current commit does not change jiter build inputs; skipping native jiter rebuild."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   pydantic-core-source-identity:
     name: Verify official pydantic-core 2.50.4 source identity
     runs-on: ubuntu-26.04
@@ -84,6 +115,8 @@ jobs:
 
   build-jiter:
     name: Independent Termux build ${{ matrix.replica }}
+    needs: jiter-change-filter
+    if: needs.jiter-change-filter.outputs.should_build == 'true'
     runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
@@ -197,8 +230,10 @@ jobs:
   compare-and-attest:
     name: Compare independent artifacts and attest verified output
     needs:
+      - jiter-change-filter
       - pydantic-core-source-identity
       - build-jiter
+    if: needs.jiter-change-filter.outputs.should_build == 'true'
     runs-on: ubuntu-26.04
     permissions:
       actions: read
