@@ -13,11 +13,15 @@ import warnings
 
 import pytest
 
-httpx2 = pytest.importorskip("httpx2", reason="candidate HTTPX2 stack is installed in its dedicated CI job")
+httpx2 = pytest.importorskip(
+    "httpx2",
+    reason="candidate HTTPX2 stack is installed in its dedicated CI job",
+)
 
 from openai import AsyncOpenAI, OpenAI  # noqa: E402
 
-from stage2_sdk_ai import client as client_module, rag_chain, vector_store  # noqa: E402
+from stage2_sdk_ai import client as client_module  # noqa: E402
+from stage2_sdk_ai import rag_chain, vector_store  # noqa: E402
 from stage2_sdk_ai.client import AIClient  # noqa: E402
 from stage2_sdk_ai.config import AIConfig  # noqa: E402
 
@@ -186,6 +190,7 @@ def test_application_sync_wrappers_use_real_sdk_chat_and_embedding_paths(
     import openai
 
     monkeypatch.setenv("OPENAI_API_KEY", API_KEY)
+    monkeypatch.delenv("STAGE2_SDK_AI_MOCK_MODE", raising=False)
     seen: list[dict] = []
     created_clients: list[OpenAI] = []
     sdk_openai = openai.OpenAI
