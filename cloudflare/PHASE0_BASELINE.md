@@ -214,15 +214,64 @@ The combined commit-status endpoint returned no legacy status entries for the ba
 - [ ] Local baseline test/coverage and CI-equivalent results captured.
 - [ ] Phase 0 reviewed and explicitly closed before Phase 1 implementation begins.
 
-## Phase 0 exit criteria
+
+## Baseline CI execution results
+
+The exact base commit was checked against the repository's existing GitHub Actions workflow. This is the CI run attached to the commit itself (not a run on the prototype branch):
+
+- Commit: `cf006a4708fb26ee150dcaad1245f28bc3e3dcee`
+- Workflow: `ci-hardened-v1.1`
+- Run: [42020113957](https://github.com/escorpioantares66-cmyk/github-practice-ai/actions/runs/42020113957)
+- Completion report: [42020230456](https://github.com/escorpioantares66-cmyk/github-practice-ai/actions/runs/42020230456)
+- Event: push to `main`; completed 2026-11-05 11:35 UTC.
+- Both build jobs and the completion report concluded `success`.
+
+### Python 3.11
+
+Job: `build (3.11)` — success.
+
+- Dependency vulnerability audit: **passed**, “No known vulnerabilities found”.
+- Ruff strict: **passed**.
+- Focused approval/recovery suites: **86 passed**, 4 warnings.
+- Full pytest suite: **408 passed**, 4 warnings.
+- Coverage: **91%** (8,387 statements; 734 missed); configured 80% threshold passed.
+- Wheel and sdist build: **passed**.
+- Twine validation for wheel and sdist: **passed**.
+- `gh-ai --check`: **passed**.
+- Read-only storage/retention audit: **passed**.
+
+### Python 3.12
+
+Job: `build (3.12)` — success.
+
+- Dependency vulnerability audit: **passed**, “No known vulnerabilities found”.
+- Ruff strict: **passed**.
+- Focused approval/recovery suites: **86 passed**, 4 warnings.
+- Full pytest suite: **408 passed**, 4 warnings.
+- Coverage: **91%** (8,387 statements; 735 missed); configured 80% threshold passed.
+- Wheel and sdist build: **passed**.
+- Twine validation for wheel and sdist: **passed**.
+- `gh-ai --check`: **passed**.
+- Read-only storage/retention audit: **passed**.
+
+### Warnings and audit observations
+
+- The pytest jobs emit four warnings, including a `pytest-asyncio` deprecation warning because `asyncio_default_fixture_loop_scope` is not explicitly configured. They did not fail the test or coverage gates.
+- The read-only storage audit reports one warning: quota database `daily_usage` history has no implemented retention policy. It is metadata-only and does not inspect table rows. This is an existing finding, not introduced by the Cloudflare prototype.
+- The audit confirms the local audit chain for the empty CI workspace; it explicitly notes that local hash-chain verification is not a substitute for an independently retained external checkpoint.
+
+### Interpretation
+
+The baseline CI-equivalent checks are **green on the exact base commit** for both supported CI Python versions. This validates the Linux baseline before Cloudflare-specific changes. It does not validate the Cloudflare runtime, Durable Object behavior, or Ed25519 compatibility in Workers.
+
+The test run was executed by GitHub Actions on the exact base SHA. A local clone/test attempt from this execution environment was not possible because outbound DNS/network access to GitHub is unavailable here; no local test execution is claimed.
+
+## Updated Phase 0 exit criteria
 
 - [x] Feature branch created from the exact baseline commit.
 - [x] Baseline configuration and CI contract recorded.
 - [x] Existing acceptance-test inventory recorded (92 tests).
 - [x] Static source inventory of filesystem, locking, SQLite, API-import, and crypto assumptions recorded.
-- [ ] Local baseline test/coverage and CI-equivalent results captured.
+- [x] Existing CI-equivalent checks verified on the exact base commit (Python 3.11 and 3.12; 408 passed; 91% coverage; all required jobs green).
 - [ ] Phase 0 reviewed and explicitly closed before Phase 1 implementation begins.
 
-## Next step
-
-Run the baseline test and CI-equivalent checks on a local checkout of the exact base commit. No Worker entry point, Durable Object schema, runtime dependency file, account configuration, or deployment workflow should be added until those baseline results are captured and Phase 0 is reviewed.
