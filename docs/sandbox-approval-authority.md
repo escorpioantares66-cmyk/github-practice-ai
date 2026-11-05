@@ -102,5 +102,8 @@ with it have expired and any required recovery window has closed. Never copy the
 private key to the relying application.
 
 The hash-chained local audit log is integrity-checked before it is extended and
-before inspection or decision evidence is returned. It is not a substitute for
-independent protected backups or a remote immutable audit checkpoint.
+before inspection or decision evidence is returned. Terminal decision and consume
+events are checked against mutable records so restoring an old record cannot
+re-authorize a completed approval while the audit history remains intact. It is
+not a substitute for independent protected backups or a remote immutable audit
+checkpoint.
