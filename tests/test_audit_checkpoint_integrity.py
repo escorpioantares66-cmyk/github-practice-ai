@@ -554,3 +554,50 @@ def test_sandbox_checkpoint_rejects_rollback_to_older_checkpoint(sandbox_audit):
             max_age_seconds=100.0,
             max_unanchored_suffix=10,
         )
+
+
+
+def test_main_checkpoint_verification_refuses_missing_audit_log(monkeypatch, tmp_path):
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    monkeypatch.setattr(approval, "_audit_file", audit_path)
+    approval._ensure_dirs()
+    audit_path.write_bytes(b"")
+    checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY,
+        MAIN_STORE_ID,
+        created_at=100.0,
+    )
+    audit_path.unlink()
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointIntegrityError):
+        audit_checkpoint_integrity.verify_checkpoint(
+            checkpoint,
+            authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+            store_id=MAIN_STORE_ID,
+        )
+    assert not audit_path.exists()
+
+
+def test_sandbox_checkpoint_verification_refuses_missing_audit_log(
+    monkeypatch, tmp_path
+):
+    store = tmp_path / "sandbox-approvals"
+    monkeypatch.setenv("SANDBOX_APPROVALS_DIR", str(store))
+    sandbox_approval._ensure_store()
+    audit_path = store / "audit.jsonl"
+    audit_path.write_bytes(b"")
+    checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+        SANDBOX_STORE_ID,
+        created_at=100.0,
+    )
+    audit_path.unlink()
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointIntegrityError):
+        audit_checkpoint_integrity.verify_checkpoint(
+            checkpoint,
+            authority=audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+            store_id=SANDBOX_STORE_ID,
+        )
+    assert not audit_path.exists()
