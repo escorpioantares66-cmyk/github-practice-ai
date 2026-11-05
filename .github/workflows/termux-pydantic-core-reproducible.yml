@@ -250,3 +250,55 @@ jobs:
           path: verified/
           if-no-files-found: error
           retention-days: 90
+
+  verify-attestations:
+    name: Independently verify pydantic-core 2.50.4 attestations
+    needs: compare-and-attest
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_WORKFLOW: ${{ github.repository }}/.github/workflows/termux-pydantic-core-reproducible.yml
+      SOURCE_REF: ${{ github.ref }}
+    steps:
+      - name: Download the existing verified bundle
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name verified-pydantic-core-2.50.4-termux-aarch64 --dir verified
+
+      - name: Independently verify artifact hashes
+        working-directory: verified
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum --check SHA256SUMS
+          test -s python-pydantic-core_2.50.4_aarch64.deb
+          test -s pydantic-core-2.50.4-aarch64.so
+          test "$(dpkg-deb -f python-pydantic-core_2.50.4_aarch64.deb Version)" = "2.50.4"
+          test "$(dpkg-deb -f python-pydantic-core_2.50.4_aarch64.deb Architecture)" = "aarch64"
+
+      - name: Cryptographically verify package provenance
+        run: |
+          set -euo pipefail
+          gh attestation verify verified/python-pydantic-core_2.50.4_aarch64.deb \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$SOURCE_WORKFLOW" \
+            --source-ref "$SOURCE_REF" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --cert-oidc-issuer https://token.actions.githubusercontent.com \
+            --deny-self-hosted-runners
+
+      - name: Cryptographically verify native extension provenance
+        run: |
+          set -euo pipefail
+          gh attestation verify verified/pydantic-core-2.50.4-aarch64.so \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$SOURCE_WORKFLOW" \
+            --source-ref "$SOURCE_REF" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --cert-oidc-issuer https://token.actions.githubusercontent.com \
+            --deny-self-hosted-runners
