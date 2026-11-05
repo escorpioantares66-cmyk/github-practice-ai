@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -55,3 +55,39 @@ jobs:
       - name: Read-only storage and retention audit
         run: |
           gh-ai --storage-audit
+
+  sdk-transport-compat:
+    name: OpenAI SDK transport (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.13"
+            experimental: false
+          - python-version: "3.14"
+            experimental: false
+          - python-version: "3.15"
+            experimental: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install candidate SDK transport stack
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install "openai==3.46.0" "httpx2>=2.15.1,<3" "starlette[full]>=1.2,<2" "pytest>=8" "pytest-asyncio>=0.23" "cachetools>=5"
+      - name: Verify resolved dependencies
+        run: |
+          python -m pip check
+          python -c "import httpx2, openai, starlette; print('openai', openai.__version__); print('httpx2', httpx2.__version__); print('starlette', starlette.__version__)"
+      - name: Verify real SDK clients and request paths through mock transports
+        run: |
+          PYTHONPATH=. python -m pytest -q -o addopts="" tests/test_openai_sdk_transport_compat.py
+      - name: Validate Termux smoke-test script syntax
+        run: |
+          bash -n scripts/check_termux_sdk_compat.sh
