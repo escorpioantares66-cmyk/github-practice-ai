@@ -6,9 +6,9 @@ This milestone adds an explicit verification API for two independent audit
 authorities. It is **not** a runtime dependency and does not enable mandatory
 checkpoint enforcement.
 
-- Main approval history uses authority identifier \`main\`.
-- Sandbox approval history uses authority identifier \`sandbox\`.
-- Each requires a separate operator-provisioned \`store_id\` and independently
+- Main approval history uses authority identifier `main`.
+- Sandbox approval history uses authority identifier `sandbox`.
+- Each requires a separate operator-provisioned `store_id` and independently
   retained checkpoint.
 - A checkpoint for one authority or store is rejected when supplied for the
   other.
@@ -21,35 +21,35 @@ The strict version-1 JSON envelope contains exactly:
 
 | Field | Meaning |
 | --- | --- |
-| \`format_version\` | Integer format version, currently 1 |
-| \`authority\` | Exactly \`main\` or \`sandbox\` |
-| \`store_id\` | Stable identity supplied by trusted operator configuration |
-| \`sequence\` | Authority-specific chained-event sequence |
-| \`head_hash\` | SHA-256 hash at that sequence |
-| \`legacy_entries\` | Main legacy-prefix count; always zero for sandbox |
-| \`created_at\` | Positive finite UTC epoch timestamp |
-| \`checkpoint_id\` | 32-character lowercase hexadecimal publication ID |
+| `format_version` | Integer format version, currently 1 |
+| `authority` | Exactly `main` or `sandbox` |
+| `store_id` | Stable identity supplied by trusted operator configuration |
+| `sequence` | Authority-specific chained-event sequence |
+| `head_hash` | SHA-256 hash at that sequence |
+| `legacy_entries` | Main legacy-prefix count; always zero for sandbox |
+| `created_at` | Positive finite UTC epoch timestamp |
+| `checkpoint_id` | 32-character lowercase hexadecimal publication ID |
 
 Validation rejects missing or unknown fields, duplicate JSON keys, boolean
 values in integer fields, invalid hashes, non-finite timestamps, invalid
 identities, and payloads larger than 16 KiB. The expected authority and
-\`store_id\` must come from trusted configuration supplied by the caller; the
+`store_id` must come from trusted configuration supplied by the caller; the
 values inside the untrusted envelope are only compared against those inputs.
 
 ## How to use the verifier
 
-The module \`stage2_sdk_ai.audit_checkpoint_integrity\` exposes:
+The module `stage2_sdk_ai.audit_checkpoint_integrity` exposes:
 
-- \`create_checkpoint_envelope(authority, store_id)\`: creates an in-memory
+- `create_checkpoint_envelope(authority, store_id)`: creates an in-memory
   snapshot of the verified head. It does not write or publish it.
-- \`serialize_checkpoint(...)\` and \`parse_checkpoint(...)\`: canonical,
+- `serialize_checkpoint(...)` and `parse_checkpoint(...)`: canonical,
   bounded JSON serialization and strict parsing.
-- \`verify_checkpoint(checkpoint, authority, store_id)\`: verifies the matching
+- `verify_checkpoint(checkpoint, authority, store_id)`: verifies the matching
   main or sandbox audit chain against the supplied checkpoint.
 
 A successful verification anchors history only through
-\`checkpoint_sequence\`. The result reports \`current_sequence\` and
-\`unanchored_suffix\`. A nonzero suffix is valid append-only history after the
+`checkpoint_sequence`. The result reports `current_sequence` and
+`unanchored_suffix`. A nonzero suffix is valid append-only history after the
 anchor, but it is **not independently checkpointed**. This code intentionally
 does not decide freshness, maximum suffix size, or whether that suffix is
 acceptable for a sensitive operation.
@@ -76,9 +76,9 @@ Cloudflare prototype.
 
 Run the focused suite:
 
-\`\`\`sh
+```sh
 PYTHONPATH=. CI=true OPENAI_API_KEY=sk-test-mocked pytest -q -o addopts="" tests/test_audit_checkpoint_integrity.py tests/test_audit_checkpoint_store.py
-\`\`\`
+```
 
 The tests cover both authority chains, valid append-only suffix reporting,
 tampering before the anchor, cross-authority/store rejection, strict envelope
