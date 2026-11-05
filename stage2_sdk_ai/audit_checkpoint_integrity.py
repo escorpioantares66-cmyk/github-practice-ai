@@ -276,3 +276,151 @@ def verify_checkpoint(
         "current_sequence": current_sequence,
         "unanchored_suffix": current_sequence - checkpoint_sequence,
     }
+
+
+
+class AuditCheckpointPolicyError(AuditCheckpointIntegrityError):
+    """A valid checkpoint fails the explicitly supplied freshness policy."""
+
+
+class AuditCheckpointRollbackError(AuditCheckpointPolicyError):
+    """A candidate checkpoint regresses behind the trusted operator floor."""
+
+
+class AuditCheckpointRecoveryRequired(AuditCheckpointPolicyError):
+    """Trusted checkpoint state is missing; automatic re-baselining is unsafe."""
+
+
+_FLOOR_FIELDS = {
+    "authority",
+    "store_id",
+    "sequence",
+    "head_hash",
+    "created_at",
+    "checkpoint_id",
+}
+
+
+def validate_trusted_checkpoint_floor(
+    floor: Any,
+    *,
+    authority: str,
+    store_id: str,
+) -> dict[str, Any]:
+    """Validate the last operator-accepted checkpoint retained independently."""
+    _validate_identity(authority, store_id)
+    if not isinstance(floor, dict) or set(floor) != _FLOOR_FIELDS:
+        raise AuditCheckpointIntegrityError(
+            "trusted checkpoint floor has an invalid schema"
+        )
+    if (
+        floor.get("authority") != authority
+        or floor.get("store_id") != store_id
+        or isinstance(floor.get("sequence"), bool)
+        or not isinstance(floor.get("sequence"), int)
+        or floor["sequence"] < 0
+        or not isinstance(floor.get("head_hash"), str)
+        or not _HASH_RE.fullmatch(floor["head_hash"])
+        or not _positive_finite_timestamp(floor.get("created_at"))
+        or not isinstance(floor.get("checkpoint_id"), str)
+        or not _CHECKPOINT_ID_RE.fullmatch(floor["checkpoint_id"])
+    ):
+        raise AuditCheckpointIntegrityError(
+            "trusted checkpoint floor contains invalid fields"
+        )
+    if authority == SANDBOX_AUTHORITY and floor["sequence"] == 0:
+        if floor["head_hash"] != "0" * 64:
+            raise AuditCheckpointIntegrityError(
+                "empty sandbox checkpoint floor has an invalid head hash"
+            )
+    return dict(floor)
+
+
+def verify_checkpoint_with_policy(
+    checkpoint: dict[str, Any] | bytes | str | None,
+    *,
+    authority: str,
+    store_id: str,
+    trusted_floor: dict[str, Any] | None,
+    now: float,
+    max_age_seconds: float,
+    max_unanchored_suffix: int,
+) -> dict[str, Any]:
+    """Verify a checkpoint against audit history, freshness, and an operator floor.
+
+    The caller must load trusted_floor from storage independent of the
+    application-writable checkpoint. No floor or checkpoint is created,
+    advanced, repaired, or persisted here. All policy limits are explicit
+    inputs; this function deliberately chooses no production defaults.
+    """
+    _validate_identity(authority, store_id)
+    if checkpoint is None or trusted_floor is None:
+        raise AuditCheckpointRecoveryRequired(
+            "trusted checkpoint state is missing; operator recovery is required"
+        )
+    if not _positive_finite_timestamp(now):
+        raise AuditCheckpointPolicyError("policy evaluation time is invalid")
+    if not _positive_finite_timestamp(max_age_seconds):
+        raise AuditCheckpointPolicyError("maximum checkpoint age is invalid")
+    if (
+        isinstance(max_unanchored_suffix, bool)
+        or not isinstance(max_unanchored_suffix, int)
+        or max_unanchored_suffix < 0
+    ):
+        raise AuditCheckpointPolicyError(
+            "maximum unanchored suffix must be a non-negative integer"
+        )
+
+    floor = validate_trusted_checkpoint_floor(
+        trusted_floor, authority=authority, store_id=store_id
+    )
+    if isinstance(checkpoint, (bytes, str)):
+        envelope = parse_checkpoint(
+            checkpoint, authority=authority, store_id=store_id
+        )
+    else:
+        envelope = validate_checkpoint_envelope(
+            checkpoint, authority=authority, store_id=store_id
+        )
+
+    candidate_sequence = envelope["sequence"]
+    floor_sequence = floor["sequence"]
+    if candidate_sequence < floor_sequence:
+        raise AuditCheckpointRollbackError(
+            "checkpoint sequence regressed behind the trusted operator floor"
+        )
+    if (
+        candidate_sequence == floor_sequence
+        and envelope["head_hash"] != floor["head_hash"]
+    ):
+        raise AuditCheckpointRollbackError(
+            "checkpoint conflicts with the trusted head at the same sequence"
+        )
+    if envelope["created_at"] < floor["created_at"]:
+        raise AuditCheckpointRollbackError(
+            "checkpoint publication time regressed behind the trusted floor"
+        )
+    if envelope["created_at"] > now:
+        raise AuditCheckpointPolicyError(
+            "checkpoint publication time is in the future"
+        )
+
+    verification = verify_checkpoint(
+        envelope, authority=authority, store_id=store_id
+    )
+    age_seconds = now - envelope["created_at"]
+    if age_seconds > max_age_seconds:
+        raise AuditCheckpointPolicyError("checkpoint is older than the permitted age")
+    if verification["unanchored_suffix"] > max_unanchored_suffix:
+        raise AuditCheckpointPolicyError(
+            "unanchored audit suffix exceeds the permitted event limit"
+        )
+
+    return {
+        **verification,
+        "policy_accepted": True,
+        "freshness_age_seconds": age_seconds,
+        "max_age_seconds": max_age_seconds,
+        "max_unanchored_suffix": max_unanchored_suffix,
+        "trusted_floor_sequence": floor_sequence,
+    }
