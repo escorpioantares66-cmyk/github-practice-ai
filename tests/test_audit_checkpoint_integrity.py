@@ -527,6 +527,16 @@ def test_sandbox_checkpoint_freshness_and_suffix_policy(sandbox_audit):
             max_age_seconds=10.0,
             max_unanchored_suffix=0,
         )
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointPolicyError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            checkpoint,
+            authority=audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+            store_id=SANDBOX_STORE_ID,
+            trusted_floor=floor,
+            now=110.001,
+            max_age_seconds=10.0,
+            max_unanchored_suffix=1,
+        )
 
 
 def test_sandbox_checkpoint_rejects_rollback_to_older_checkpoint(sandbox_audit):
@@ -601,3 +611,22 @@ def test_sandbox_checkpoint_verification_refuses_missing_audit_log(
             store_id=SANDBOX_STORE_ID,
         )
     assert not audit_path.exists()
+
+
+
+def test_checkpoint_rejects_same_sequence_conflicting_trusted_head(main_audit):
+    trusted = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=101.0
+    )
+    conflict = dict(trusted, head_hash="f" * 64)
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointRollbackError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            conflict,
+            authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+            store_id=MAIN_STORE_ID,
+            trusted_floor=_trusted_floor(trusted),
+            now=102.0,
+            max_age_seconds=100.0,
+            max_unanchored_suffix=0,
+        )
