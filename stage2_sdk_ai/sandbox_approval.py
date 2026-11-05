@@ -283,6 +283,8 @@ def _events_for(approval_id: str) -> list[dict[str, Any]]:
 
 def verify_audit_log(
     expected_checkpoint: dict[str, Any] | None = None,
+    *,
+    expected_checkpoints: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Verify the complete local sandbox chain and an optional prefix anchor."""
     directory = _ensure_store()
@@ -295,18 +297,27 @@ def verify_audit_log(
             sequence = len(entries)
             last_hash = entries[-1]["hash"] if entries else "0" * 64
             result = {"valid": True, "events": sequence, "last_hash": last_hash}
+            checkpoints = []
             if expected_checkpoint is not None:
+                checkpoints.append(expected_checkpoint)
+            if expected_checkpoints is not None:
+                if not isinstance(expected_checkpoints, list):
+                    raise SandboxApprovalError(
+                        "Sandbox audit checkpoints must be supplied as a list"
+                    )
+                checkpoints.extend(expected_checkpoints)
+            for index, checkpoint in enumerate(checkpoints):
                 if (
-                    not isinstance(expected_checkpoint, dict)
-                    or set(expected_checkpoint) != {"sequence", "head_hash"}
-                    or isinstance(expected_checkpoint.get("sequence"), bool)
-                    or not isinstance(expected_checkpoint.get("sequence"), int)
-                    or expected_checkpoint["sequence"] < 0
-                    or not isinstance(expected_checkpoint.get("head_hash"), str)
-                    or not _DIGEST_RE.fullmatch(expected_checkpoint["head_hash"])
+                    not isinstance(checkpoint, dict)
+                    or set(checkpoint) != {"sequence", "head_hash"}
+                    or isinstance(checkpoint.get("sequence"), bool)
+                    or not isinstance(checkpoint.get("sequence"), int)
+                    or checkpoint["sequence"] < 0
+                    or not isinstance(checkpoint.get("head_hash"), str)
+                    or not _DIGEST_RE.fullmatch(checkpoint["head_hash"])
                 ):
                     raise SandboxApprovalError("Sandbox audit checkpoint is malformed")
-                checkpoint_sequence = expected_checkpoint["sequence"]
+                checkpoint_sequence = checkpoint["sequence"]
                 checkpoint_hash = (
                     "0" * 64
                     if checkpoint_sequence == 0
@@ -320,14 +331,17 @@ def verify_audit_log(
                     checkpoint_sequence > sequence
                     or checkpoint_hash is None
                     or not secrets.compare_digest(
-                        checkpoint_hash, expected_checkpoint["head_hash"]
+                        checkpoint_hash, checkpoint["head_hash"]
                     )
                 ):
                     raise SandboxApprovalError(
                         "Sandbox audit history is truncated or diverges from checkpoint"
                     )
-                result["checkpoint_verified"] = True
-                result["checkpoint_sequence"] = checkpoint_sequence
+                if index == 0:
+                    result["checkpoint_verified"] = True
+                    result["checkpoint_sequence"] = checkpoint_sequence
+            if checkpoints:
+                result["checkpoints_verified"] = len(checkpoints)
             return result
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

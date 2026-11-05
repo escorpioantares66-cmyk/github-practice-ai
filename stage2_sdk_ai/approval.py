@@ -1288,6 +1288,8 @@ def create_audit_checkpoint() -> dict[str, Any]:
 
 def verify_audit_log(
     expected_checkpoint: dict[str, Any] | None = None,
+    *,
+    expected_checkpoints: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Verify archived segments, active suffix, and an optional external checkpoint."""
     _ensure_dirs()
@@ -1321,8 +1323,16 @@ def verify_audit_log(
                 "head_hash": head_hash,
                 "archived_segments": archive_state["segments"],
             }
+            checkpoints = []
             if expected_checkpoint is not None:
-                checkpoint = expected_checkpoint
+                checkpoints.append(expected_checkpoint)
+            if expected_checkpoints is not None:
+                if not isinstance(expected_checkpoints, list):
+                    raise AuditLogIntegrityError(
+                        "audit checkpoints must be supplied as a list"
+                    )
+                checkpoints.extend(expected_checkpoints)
+            for index, checkpoint in enumerate(checkpoints):
                 if (
                     not isinstance(checkpoint, dict)
                     or set(checkpoint) != {
@@ -1357,8 +1367,11 @@ def verify_audit_log(
                     raise AuditLogIntegrityError(
                         "audit log is truncated or diverges from the external checkpoint"
                     )
-                result["checkpoint_verified"] = True
-                result["checkpoint_sequence"] = checkpoint_seq
+                if index == 0:
+                    result["checkpoint_verified"] = True
+                    result["checkpoint_sequence"] = checkpoint_seq
+            if checkpoints:
+                result["checkpoints_verified"] = len(checkpoints)
             return result
         finally:
             fcntl.flock(audit_file.fileno(), fcntl.LOCK_UN)
