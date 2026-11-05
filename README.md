@@ -22,3 +22,8 @@ pip install github-practice-ai==1.1.1
 pip install github-practice-ai==1.1.1 --no-deps
 pip install --only-binary=:all: openai==1.40.0 httpx==0.27.0 cachetools anyio -q || true
 <- Chunking, metadata filter, hybrid, CI verification trigger: 2026-10-27T03:17:49Z -->
+
+
+### External sandbox approval authority
+
+See [Sandbox approval authority API](docs/sandbox-approval-authority.md) for the separate Ed25519-signed, one-time approval interface. Existing note-write approval endpoints remain unchanged.

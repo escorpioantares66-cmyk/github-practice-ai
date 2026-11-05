@@ -94,3 +94,30 @@ anchor are traversed relative to directory descriptors without following
 symlinks. These controls do not isolate hostile processes running under the
 same operating-system UID; use a dedicated service account and private
 persistent volume for production.
+
+
+## External sandbox approval authority
+
+The versioned /v1/sandbox/approvals API is separate from the note-write approval
+workflow. It requires explicit named requester and approver credentials, a
+configured Ed25519 signing key and trusted public-key set, an issuer and
+audience, and an absolute private persistent SANDBOX_APPROVALS_DIR. Missing or
+inconsistent configuration fails closed. The private signing key and approval
+storage must be provisioned outside the repository and sandbox workspaces.
+
+Sandbox approval decisions are bound to repository, sandbox ID, base SHA,
+head SHA, complete diff digest and the prepare_pull_request action. The signed
+receipt includes issuer, audience, principal identities, nonce, issue/expiry
+times and terminal decision. The relying application must independently verify
+the receipt and compare the exact current sandbox state before consumption.
+
+Consumption is one-time. Only a retry with the same persisted UUID, nonce and
+identical scope returns the original result. Changed payloads or new request
+IDs are rejected. The new workflow uses a separate hash-chained audit.jsonl
+file and fails closed on corrupt or incomplete audit history.
+
+The new authority uses private local files and POSIX flock locking. It is
+single-host only; do not share the approval directory over NFS or across
+independent hosts. It is not a multi-host or highly available authorization
+service. See docs/sandbox-approval-authority.md for the full API, configuration
+and key-rotation contract.

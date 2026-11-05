@@ -174,6 +174,16 @@ def approver_identity(approver_key: str) -> str:
     raise ValueError("Approver identity is not configured")
 
 
+def approval_requester_identity(api_key: str | None) -> str | None:
+    """Resolve only an explicitly named requester for approval workflows."""
+    if not isinstance(api_key, str) or not api_key or not api_key.isascii():
+        return None
+    for identity, secret in _configured_approval_requester_keys():
+        if hmac.compare_digest(api_key, secret):
+            return identity
+    return None
+
+
 def requester_rate_limit_identity(api_key: str | None) -> str | None:
     """Use the configured requester identity, not its rotating secret, for limits."""
     return requester_identity(api_key)
