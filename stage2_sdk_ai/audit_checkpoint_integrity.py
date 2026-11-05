@@ -56,6 +56,15 @@ def _positive_finite_timestamp(value: Any) -> bool:
         return False
 
 
+def _nonnegative_finite_number(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value >= 0
+    except (OverflowError, TypeError):
+        return False
+
+
 def _require_existing_audit_file(path: Any) -> None:
     """Do not let snapshot creation initialize a missing audit history."""
     try:
@@ -360,7 +369,7 @@ def verify_checkpoint_with_policy(
         )
     if not _positive_finite_timestamp(now):
         raise AuditCheckpointPolicyError("policy evaluation time is invalid")
-    if not _positive_finite_timestamp(max_age_seconds):
+    if not _nonnegative_finite_number(max_age_seconds):
         raise AuditCheckpointPolicyError("maximum checkpoint age is invalid")
     if (
         isinstance(max_unanchored_suffix, bool)
