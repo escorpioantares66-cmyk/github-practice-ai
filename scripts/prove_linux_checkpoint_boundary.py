@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Root-run Linux proof of the operator-owned, app-read-only checkpoint boundary."""
 from __future__ import annotations
-import os, pwd, shutil, subprocess, sys, tempfile, uuid
+import grp, os, pwd, shutil, subprocess, sys, tempfile, uuid
 from pathlib import Path
 
 def require_root():
