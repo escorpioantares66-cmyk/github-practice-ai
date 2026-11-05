@@ -31,12 +31,22 @@ termux_step_make_install() {
 
 termux_step_post_make_install() {
     local _JITER_SO
-    _JITER_SO=$(find "${TERMUX_PREFIX}/lib/python${TERMUX_PYTHON_VERSION}/site-packages" \
-        -maxdepth 1 -type f -name "jiter*.so" -print -quit)
+    local -a _JITER_SOS=()
 
-    if [ -z "${_JITER_SO}" ]; then
-        termux_error_exit "Could not find the installed jiter native extension"
+    # Maturin may place a top-level extension or a package-local extension.
+    # Search the full target prefix rather than assuming one site-packages depth.
+    mapfile -t _JITER_SOS < <(
+        find "${TERMUX_PREFIX}/lib" -type f -iname "*jiter*.so" -print
+    )
+
+    if [ "${#_JITER_SOS[@]}" -ne 1 ]; then
+        echo "Expected exactly one installed jiter extension; found ${#_JITER_SOS[@]}." >&2
+        find "${TERMUX_PREFIX}/lib" -type f -iname "*jiter*" -print >&2 || true
+        termux_error_exit "Could not uniquely locate the installed jiter native extension"
     fi
+
+    _JITER_SO="${_JITER_SOS[0]}"
+    echo "Patching Android libpython dependency into ${_JITER_SO}"
 
     # Android's dynamic linker requires an explicit libpython dependency.
     patchelf --add-needed "libpython${TERMUX_PYTHON_VERSION}.so" "${_JITER_SO}"
