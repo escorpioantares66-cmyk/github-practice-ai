@@ -968,3 +968,22 @@ def test_http_state_changing_routes_reject_wrong_credential_role(authority, scop
         approval_id, requester="automation"
     )["status"] == "approved"
 
+
+def test_http_create_audit_failure_returns_operator_review_not_success(
+    authority, scope, monkeypatch
+):
+    client = TestClient(app)
+
+    def fail_audit(*_args, **_kwargs):
+        raise OSError("simulated request audit failure")
+
+    monkeypatch.setattr(sandbox_approval, "_append_audit", fail_audit)
+    response = client.post(
+        "/v1/sandbox/approvals",
+        json={"scope": scope},
+        headers={"X-API-Key": REQUESTER_KEY},
+    )
+
+    assert response.status_code == 503
+    assert "approval_id" not in response.json()
+
