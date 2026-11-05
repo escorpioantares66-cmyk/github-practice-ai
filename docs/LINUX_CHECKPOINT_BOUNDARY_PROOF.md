@@ -27,6 +27,7 @@ simulation is explicitly rejected.
 
 - Application and operator are distinct, non-root UIDs.
 - Operator owns the published directory and checkpoint; modes are 0750/0640.
+- Preflight rejects symlinks, hard links, wrong owner/group/mode, and writable ancestors.
 - Application can read the checkpoint.
 - Application cannot write, truncate, chmod, unlink, rename, create siblings,
   mutate the checkpoint directory, or read an operator-only staging file.
@@ -36,6 +37,8 @@ simulation is explicitly rejected.
 - Interruption after rename but before directory fsync exposes the new complete
   file but is treated as durability-uncertain; the harness does not claim
   publication was durably confirmed.
+- Interruption after directory fsync but before operator confirmation leaves a
+  durable candidate that still requires operator inspection/confirmation.
 - A complete publication remains operator-owned and app-readable.
 
 ## Still required before any enforcement decision
