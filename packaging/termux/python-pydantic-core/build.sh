@@ -17,6 +17,14 @@ termux_step_pre_configure() {
     maturin --version
 }
 
+# The upstream Makefile's default "all" target runs formatting, lint, and tests
+# through uv. Those are developer checks, not part of the Termux package build,
+# and uv is intentionally absent from the pinned package-builder. The native
+# extension is built below by maturin using the exact checked-out Cargo.lock.
+termux_step_make() {
+    :
+}
+
 termux_step_make_install() {
     export CARGO_BUILD_TARGET="${CARGO_TARGET_NAME}"
     export PYO3_CROSS_LIB_DIR="${TERMUX_PREFIX}/lib"
