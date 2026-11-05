@@ -102,7 +102,7 @@ def approve_sandbox_request(
     approver = _approver_identity(x_approver_key)
     try:
         return sandbox_approval.decide(
-            approval_id, approver=approver, decision="approved"
+            approval_id, approver_key=x_approver_key or "", decision="approved"
         )
     except sandbox_approval.SandboxApprovalError as exc:
         _raise_http(exc)
@@ -118,7 +118,7 @@ def deny_sandbox_request(
     approver = _approver_identity(x_approver_key)
     try:
         return sandbox_approval.decide(
-            approval_id, approver=approver, decision="denied"
+            approval_id, approver_key=x_approver_key or "", decision="denied"
         )
     except sandbox_approval.SandboxApprovalError as exc:
         _raise_http(exc)
