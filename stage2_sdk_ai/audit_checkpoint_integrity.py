@@ -293,6 +293,7 @@ _FLOOR_FIELDS = {
     "store_id",
     "sequence",
     "head_hash",
+    "legacy_entries",
     "created_at",
     "checkpoint_id",
 }
@@ -315,6 +316,9 @@ def validate_trusted_checkpoint_floor(
         or isinstance(floor.get("sequence"), bool)
         or not isinstance(floor.get("sequence"), int)
         or floor["sequence"] < 0
+        or isinstance(floor.get("legacy_entries"), bool)
+        or not isinstance(floor.get("legacy_entries"), int)
+        or floor["legacy_entries"] < 0
         or not isinstance(floor.get("head_hash"), str)
         or not _HASH_RE.fullmatch(floor["head_hash"])
         or not _positive_finite_timestamp(floor.get("created_at"))
@@ -324,8 +328,12 @@ def validate_trusted_checkpoint_floor(
         raise AuditCheckpointIntegrityError(
             "trusted checkpoint floor contains invalid fields"
         )
-    if authority == SANDBOX_AUTHORITY and floor["sequence"] == 0:
-        if floor["head_hash"] != "0" * 64:
+    if authority == SANDBOX_AUTHORITY:
+        if floor["legacy_entries"] != 0:
+            raise AuditCheckpointIntegrityError(
+                "sandbox checkpoint floor cannot contain legacy main-audit entries"
+            )
+        if floor["sequence"] == 0 and floor["head_hash"] != "0" * 64:
             raise AuditCheckpointIntegrityError(
                 "empty sandbox checkpoint floor has an invalid head hash"
             )
@@ -400,6 +408,23 @@ def verify_checkpoint_with_policy(
             "checkpoint publication time is in the future"
         )
 
+    # The floor is an actual historical anchor, not merely a well-formed
+    # sequence/hash pair. Verify it against the audit history before trusting
+    # a newer candidate; otherwise a validly rehashed fork after the floor
+    # could be accepted because only the candidate would be checked.
+    floor_envelope = {
+        "format_version": CHECKPOINT_FORMAT_VERSION,
+        "authority": floor["authority"],
+        "store_id": floor["store_id"],
+        "sequence": floor["sequence"],
+        "head_hash": floor["head_hash"],
+        "legacy_entries": floor["legacy_entries"],
+        "created_at": floor["created_at"],
+        "checkpoint_id": floor["checkpoint_id"],
+    }
+    floor_verification = verify_checkpoint(
+        floor_envelope, authority=authority, store_id=store_id
+    )
     verification = verify_checkpoint(
         envelope, authority=authority, store_id=store_id
     )
@@ -418,4 +443,6 @@ def verify_checkpoint_with_policy(
         "max_age_seconds": max_age_seconds,
         "max_unanchored_suffix": max_unanchored_suffix,
         "trusted_floor_sequence": floor_sequence,
+        "trusted_floor_verified": True,
+        "trusted_floor_unanchored_suffix": floor_verification["unanchored_suffix"],
     }
