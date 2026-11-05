@@ -212,11 +212,14 @@ try:
     os.fsync(dfd)
 finally:
     os.close(dfd)
+if stage == 'after_directory_fsync_before_confirmation':
+    os._exit(34)
 """
         stages = (
             ("before_file_fsync", old, 31),
             ("after_file_fsync_before_rename", old, 32),
             ("after_rename_before_directory_fsync", "NEW-CHECKPOINT\n", 33),
+            ("after_directory_fsync_before_confirmation", "NEW-CHECKPOINT\n", 34),
         )
         reset_code = (
             "from pathlib import Path; import sys; "
