@@ -246,7 +246,6 @@ def verify_checkpoint(
             }
         )
         current_sequence = result["events"]
-        suffix_name = "unanchored_suffix"
 
     return {
         "valid": True,
@@ -256,5 +255,5 @@ def verify_checkpoint(
         "checkpoint_id": envelope["checkpoint_id"],
         "checkpoint_sequence": checkpoint_sequence,
         "current_sequence": current_sequence,
-        suffix_name: current_sequence - checkpoint_sequence,
+        "unanchored_suffix": current_sequence - checkpoint_sequence,
     }
