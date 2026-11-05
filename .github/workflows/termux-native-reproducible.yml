@@ -144,7 +144,9 @@ jobs:
           extension="${extensions[0]}"
 
           readelf -h "$extension" | grep -F "AArch64"
-          readelf -d "$extension" | grep -F "libpython3.14.so"
+          needed_count="$(readelf -d "$extension" | grep -Fc 'Shared library: [libpython3.14.so]')"
+          test "$needed_count" -eq 1
+          readelf -d "$extension" | grep -F 'Library runpath: [/data/data/com.termux/files/usr/lib]'
           if readelf --version-info "$extension" | grep -q "GLIBC_"; then
             echo "Unexpected GLIBC symbol version requirement in Android ELF" >&2
             exit 1
@@ -226,7 +228,7 @@ jobs:
           cp replica-1/python-jiter_0.18.0_aarch64.deb verified/
           cp replica-1/jiter-0.18.0-aarch64.so verified/
           cp replica-1/build-manifest.txt verified/
-          sha256sum verified/* > verified/SHA256SUMS
+          (cd verified && sha256sum build-manifest.txt jiter-0.18.0-aarch64.so python-jiter_0.18.0_aarch64.deb > SHA256SUMS)
 
       - name: Attest Termux package build
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
