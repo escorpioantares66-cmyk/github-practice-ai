@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 from stage2_sdk_ai import approval, audit_checkpoint_integrity, sandbox_approval
@@ -112,9 +110,7 @@ def test_sandbox_checkpoint_detects_tampering_before_anchor(sandbox_audit):
 
 
 def test_main_checkpoint_cannot_be_used_for_sandbox(sandbox_audit):
-    checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
-        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID
-    ) if False else {
+    checkpoint = {
         "format_version": 1,
         "authority": "main",
         "store_id": MAIN_STORE_ID,

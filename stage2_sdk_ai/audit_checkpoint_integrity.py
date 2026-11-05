@@ -40,10 +40,19 @@ class AuditCheckpointIntegrityError(ValueError):
 
 
 def _validate_identity(authority: str, store_id: str) -> None:
-    if authority not in _AUTHORITIES:
+    if not isinstance(authority, str) or authority not in _AUTHORITIES:
         raise AuditCheckpointIntegrityError("unknown audit checkpoint authority")
     if not isinstance(store_id, str) or not _STORE_ID_RE.fullmatch(store_id):
         raise AuditCheckpointIntegrityError("trusted audit store identity is invalid")
+
+
+def _positive_finite_timestamp(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value > 0
+    except (OverflowError, TypeError):
+        return False
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -82,10 +91,7 @@ def validate_checkpoint_envelope(
         or isinstance(legacy_entries, bool)
         or not isinstance(legacy_entries, int)
         or legacy_entries < 0
-        or not isinstance(created_at, (int, float))
-        or isinstance(created_at, bool)
-        or not math.isfinite(created_at)
-        or created_at <= 0
+        or not _positive_finite_timestamp(created_at)
         or not isinstance(checkpoint.get("head_hash"), str)
         or not _HASH_RE.fullmatch(checkpoint["head_hash"])
         or not isinstance(checkpoint.get("checkpoint_id"), str)
@@ -110,7 +116,12 @@ def parse_checkpoint(
     if isinstance(payload, bytes):
         raw = payload
     elif isinstance(payload, str):
-        raw = payload.encode("utf-8")
+        try:
+            raw = payload.encode("utf-8")
+        except UnicodeError as exc:
+            raise AuditCheckpointIntegrityError(
+                "checkpoint is not valid UTF-8 text"
+            ) from exc
     else:
         raise AuditCheckpointIntegrityError("checkpoint payload must be bytes or text")
     if len(raw) > MAX_CHECKPOINT_BYTES:
@@ -165,12 +176,7 @@ def create_checkpoint_envelope(
     """
     _validate_identity(authority, store_id)
     timestamp = time.time() if created_at is None else created_at
-    if (
-        isinstance(timestamp, bool)
-        or not isinstance(timestamp, (int, float))
-        or not math.isfinite(timestamp)
-        or timestamp <= 0
-    ):
+    if not _positive_finite_timestamp(timestamp):
         raise AuditCheckpointIntegrityError("checkpoint timestamp is invalid")
 
     if authority == MAIN_AUTHORITY:
@@ -232,7 +238,6 @@ def verify_checkpoint(
             }
         )
         current_sequence = result["chained_entries"]
-        suffix_name = "unanchored_suffix"
     else:
         result = sandbox_approval.verify_audit_log(
             {
