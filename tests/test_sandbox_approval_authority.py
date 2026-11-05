@@ -859,7 +859,8 @@ def test_http_decision_audit_failure_never_returns_success(
 
     assert response.status_code == 503
     state = sandbox_approval.inspect(approval_id, requester="automation")
-    assert state["status"] == decision + "d" if decision == "approve" else "denied"
+    expected_status = "approved" if decision == "approve" else "denied"
+    assert state["status"] == expected_status
     assert state["audit_status"] == "failed"
     assert client.get(
         f"/v1/sandbox/approvals/{approval_id}/decision",
