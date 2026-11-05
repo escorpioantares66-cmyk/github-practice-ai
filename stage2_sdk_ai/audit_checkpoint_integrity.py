@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import stat
 import time
 import uuid
 from typing import Any
@@ -53,6 +54,20 @@ def _positive_finite_timestamp(value: Any) -> bool:
         return math.isfinite(value) and value > 0
     except (OverflowError, TypeError):
         return False
+
+
+def _require_existing_audit_file(path: Any) -> None:
+    """Do not let snapshot creation initialize a missing audit history."""
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise AuditCheckpointIntegrityError(
+            "cannot checkpoint a missing or inaccessible audit log"
+        ) from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise AuditCheckpointIntegrityError(
+            "cannot checkpoint a non-regular audit log path"
+        )
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -180,11 +195,15 @@ def create_checkpoint_envelope(
         raise AuditCheckpointIntegrityError("checkpoint timestamp is invalid")
 
     if authority == MAIN_AUTHORITY:
+        _require_existing_audit_file(approval._audit_file)
         snapshot = approval.create_audit_checkpoint()
         sequence = snapshot["sequence"]
         head_hash = snapshot["head_hash"]
         legacy_entries = snapshot["legacy_entries"]
     else:
+        _require_existing_audit_file(
+            sandbox_approval._store_dir() / "audit.jsonl"
+        )
         snapshot = sandbox_approval.verify_audit_log()
         sequence = snapshot["events"]
         head_hash = snapshot["last_hash"]
