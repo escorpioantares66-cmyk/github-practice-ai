@@ -35,17 +35,14 @@ _REQUIRED_FIELDS = {
     "checkpoint_id",
 }
 
-
 class AuditCheckpointIntegrityError(ValueError):
     """A checkpoint envelope is malformed or belongs to another audit store."""
-
 
 def _validate_identity(authority: str, store_id: str) -> None:
     if not isinstance(authority, str) or authority not in _AUTHORITIES:
         raise AuditCheckpointIntegrityError("unknown audit checkpoint authority")
     if not isinstance(store_id, str) or not _STORE_ID_RE.fullmatch(store_id):
         raise AuditCheckpointIntegrityError("trusted audit store identity is invalid")
-
 
 def _positive_finite_timestamp(value: Any) -> bool:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -55,7 +52,6 @@ def _positive_finite_timestamp(value: Any) -> bool:
     except (OverflowError, TypeError):
         return False
 
-
 def _nonnegative_finite_number(value: Any) -> bool:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
@@ -63,7 +59,6 @@ def _nonnegative_finite_number(value: Any) -> bool:
         return math.isfinite(value) and value >= 0
     except (OverflowError, TypeError):
         return False
-
 
 def _require_existing_audit_file(path: Any) -> None:
     """Do not let snapshot creation initialize a missing audit history."""
@@ -78,7 +73,6 @@ def _require_existing_audit_file(path: Any) -> None:
             "cannot checkpoint a non-regular audit log path"
         )
 
-
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -86,7 +80,6 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             raise AuditCheckpointIntegrityError("checkpoint contains duplicate JSON keys")
         result[key] = value
     return result
-
 
 def validate_checkpoint_envelope(
     checkpoint: Any,
@@ -128,7 +121,6 @@ def validate_checkpoint_envelope(
         )
     return dict(checkpoint)
 
-
 def parse_checkpoint(
     payload: bytes | str,
     *,
@@ -160,7 +152,6 @@ def parse_checkpoint(
         parsed, authority=authority, store_id=store_id
     )
 
-
 def serialize_checkpoint(
     checkpoint: dict[str, Any],
     *,
@@ -186,7 +177,6 @@ def serialize_checkpoint(
     if len(payload) > MAX_CHECKPOINT_BYTES:
         raise AuditCheckpointIntegrityError("checkpoint exceeds the size limit")
     return payload
-
 
 def create_checkpoint_envelope(
     authority: str,
@@ -231,7 +221,6 @@ def create_checkpoint_envelope(
     return validate_checkpoint_envelope(
         envelope, authority=authority, store_id=store_id
     )
-
 
 def verify_checkpoint(
     checkpoint: dict[str, Any] | bytes | str,
@@ -290,19 +279,14 @@ def verify_checkpoint(
         "unanchored_suffix": current_sequence - checkpoint_sequence,
     }
 
-
-
 class AuditCheckpointPolicyError(AuditCheckpointIntegrityError):
     """A valid checkpoint fails the explicitly supplied freshness policy."""
-
 
 class AuditCheckpointRollbackError(AuditCheckpointPolicyError):
     """A candidate checkpoint regresses behind the trusted operator floor."""
 
-
 class AuditCheckpointRecoveryRequired(AuditCheckpointPolicyError):
     """Trusted checkpoint state is missing; automatic re-baselining is unsafe."""
-
 
 _FLOOR_FIELDS = {
     "authority",
@@ -312,7 +296,6 @@ _FLOOR_FIELDS = {
     "created_at",
     "checkpoint_id",
 }
-
 
 def validate_trusted_checkpoint_floor(
     floor: Any,
@@ -347,7 +330,6 @@ def validate_trusted_checkpoint_floor(
                 "empty sandbox checkpoint floor has an invalid head hash"
             )
     return dict(floor)
-
 
 def verify_checkpoint_with_policy(
     checkpoint: dict[str, Any] | bytes | str | None,
