@@ -219,10 +219,10 @@ The combined commit-status endpoint returned no legacy status entries for the ba
 - [x] Feature branch created from the exact baseline commit.
 - [x] Baseline configuration and CI contract recorded.
 - [x] Existing acceptance-test inventory recorded (92 tests).
-- [ ] Local baseline test/coverage run captured before runtime changes.
-- [ ] Source dependency/import and POSIX primitive inventory cross-checked against the baseline source.
-- [ ] Phase 0 reviewed before Phase 1 implementation begins.
+- [x] Static source inventory of filesystem, locking, SQLite, API-import, and crypto assumptions recorded.
+- [ ] Local baseline test/coverage and CI-equivalent results captured.
+- [ ] Phase 0 reviewed and explicitly closed before Phase 1 implementation begins.
 
 ## Next step
 
-Complete the remaining local baseline verification and source dependency/import inventory. Do not add a Worker entry point, Durable Object schema, runtime dependency file, account configuration, or deployment workflow until Phase 0 is reviewed and closed.
+Run the baseline test and CI-equivalent checks on a local checkout of the exact base commit. No Worker entry point, Durable Object schema, runtime dependency file, account configuration, or deployment workflow should be added until those baseline results are captured and Phase 0 is reviewed.
