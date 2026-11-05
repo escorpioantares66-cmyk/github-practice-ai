@@ -621,7 +621,7 @@ def test_main_policy_rejects_rehashed_history_after_trusted_floor(main_audit):
         previous_hash = entry["hash"]
     approval._audit_file.write_text(
         "".join(
-            json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\\n"
+            json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n"
             for entry in entries
         ),
         encoding="utf-8",
@@ -673,7 +673,7 @@ def test_sandbox_policy_rejects_rehashed_history_after_trusted_floor(sandbox_aud
     audit_path = sandbox_approval._store_dir() / "audit.jsonl"
     audit_path.write_text(
         "".join(
-            json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\\n"
+            json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n"
             for entry in rewritten
         ),
         encoding="utf-8",
