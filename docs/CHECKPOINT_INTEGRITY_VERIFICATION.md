@@ -41,7 +41,8 @@ values inside the untrusted envelope are only compared against those inputs.
 The module `stage2_sdk_ai.audit_checkpoint_integrity` exposes:
 
 - `create_checkpoint_envelope(authority, store_id)`: creates an in-memory
-  snapshot of the verified head. It does not write or publish it.
+  snapshot of the verified head. It refuses missing/non-regular audit files
+  and does not initialize, write, or publish a missing checkpoint.
 - `serialize_checkpoint(...)` and `parse_checkpoint(...)`: canonical,
   bounded JSON serialization and strict parsing.
 - `verify_checkpoint(checkpoint, authority, store_id)`: verifies the matching
