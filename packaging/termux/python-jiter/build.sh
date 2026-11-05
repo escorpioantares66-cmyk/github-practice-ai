@@ -21,6 +21,7 @@ termux_step_make_install() {
     export CARGO_BUILD_TARGET="${CARGO_TARGET_NAME}"
     export PYO3_CROSS_LIB_DIR="${TERMUX_PREFIX}/lib"
     export ANDROID_API_LEVEL="${TERMUX_PKG_API_LEVEL}"
+    export MATURIN_PEP517_ARGS="--locked --skip-auditwheel"
 
     # Use Termux's cross-environment and the official maturin build backend.
     # The source archive includes Cargo.lock; --locked is enforced by Cargo
