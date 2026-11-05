@@ -911,3 +911,46 @@ def test_http_consume_audit_failure_is_operator_review_not_success(
         headers=headers,
     ).status_code == 503
 
+def test_http_state_changing_routes_reject_wrong_credential_role(authority, scope):
+    client = TestClient(app)
+    wrong_create = client.post(
+        "/v1/sandbox/approvals",
+        json={"scope": scope},
+        headers={"X-Approver-Key": APPROVER_KEY},
+    )
+    assert wrong_create.status_code == 401
+
+    created = client.post(
+        "/v1/sandbox/approvals",
+        json={"scope": scope},
+        headers={"X-API-Key": REQUESTER_KEY},
+    ).json()
+    approval_id = created["approval_id"]
+    requester_headers = {"X-API-Key": REQUESTER_KEY}
+
+    for decision in ("approve", "deny"):
+        response = client.post(
+            f"/v1/sandbox/approvals/{approval_id}/{decision}",
+            headers=requester_headers,
+        )
+        assert response.status_code == 403
+
+    approved = client.post(
+        f"/v1/sandbox/approvals/{approval_id}/approve",
+        headers={"X-Approver-Key": APPROVER_KEY},
+    )
+    assert approved.status_code == 200
+    wrong_consume = client.post(
+        f"/v1/sandbox/approvals/{approval_id}/consume",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "nonce": approved.json()["receipt"]["claims"]["nonce"],
+            "scope": scope,
+        },
+        headers={"X-Approver-Key": APPROVER_KEY},
+    )
+    assert wrong_consume.status_code == 401
+    assert sandbox_approval.inspect(
+        approval_id, requester="automation"
+    )["status"] == "approved"
+
