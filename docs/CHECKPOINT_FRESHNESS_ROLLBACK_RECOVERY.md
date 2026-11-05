@@ -63,14 +63,15 @@ requires:
 - explicit maximum checkpoint age in seconds;
 - explicit maximum unanchored suffix event count.
 
-The verifier first compares the candidate against the trusted floor, then
-verifies the trusted floor itself against the full local audit history, then
-checks the candidate against that history, and finally evaluates age and
-suffix limits. This prevents a locally valid, rehashed history from being
-accepted merely because a newer candidate was generated after the rewrite:
-the earlier operator-trusted prefix must still be present. The floor includes
-the main legacy-prefix count so the main verifier can validate its exact
-historical boundary. It rejects:
+The verifier first compares the candidate against the trusted floor,
+then verifies both anchors against one locked audit-history snapshot, and
+finally evaluates age and suffix limits. This prevents a locally valid,
+rehashed history from being accepted merely because a newer candidate was
+generated after the rewrite: the earlier operator-trusted prefix must still be
+present. Checking both anchors from one locked snapshot also prevents an
+intervening audit rewrite from making two separate reads validate different
+histories. The floor includes the main legacy-prefix count so the main
+verifier can validate its exact historical boundary. It rejects:
 
 - candidate sequence below the trusted floor;
 - a different head hash at the same sequence;
