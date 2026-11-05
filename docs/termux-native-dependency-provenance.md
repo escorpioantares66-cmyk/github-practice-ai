@@ -75,9 +75,13 @@ Both use:
 
 The recipe uses Termux's cross-Python environment, Cargo's locked dependency
 resolution through `MATURIN_PEP517_ARGS=--locked`, and the official Termux
-Android cross-build environment. The Termux Android linker requires an
-explicit `libpython3.14.so` dependency; the recipe adds it and the verification
-job checks the resulting ELF dynamic section.
+Android cross-build environment. The initial two-run build exposed a duplicate
+`libpython3.14.so` entry because the cross-link had already emitted the
+dependency before the recipe's post-install patch. That first artifact is
+superseded and is not approved. The recipe now adds the dependency only when
+absent and fails unless exactly one `libpython3.14.so` NEEDED entry remains.
+The verification job also checks the Termux RUNPATH and rejects GLIBC symbol
+version requirements.
 
 ## Acceptance gates
 
