@@ -25,6 +25,31 @@ def sandbox_audit(monkeypatch, tmp_path):
     )
 
 
+
+def test_main_checkpoint_creation_refuses_missing_audit_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
+    missing_log = tmp_path / "logs" / "audit.jsonl"
+    monkeypatch.setattr(approval, "_audit_file", missing_log)
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointIntegrityError):
+        audit_checkpoint_integrity.create_checkpoint_envelope(
+            audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID
+        )
+    assert not missing_log.exists()
+    assert not missing_log.parent.exists()
+
+
+def test_sandbox_checkpoint_creation_refuses_missing_audit_file(monkeypatch, tmp_path):
+    missing_store = tmp_path / "sandbox-approvals"
+    monkeypatch.setenv("SANDBOX_APPROVALS_DIR", str(missing_store))
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointIntegrityError):
+        audit_checkpoint_integrity.create_checkpoint_envelope(
+            audit_checkpoint_integrity.SANDBOX_AUTHORITY, SANDBOX_STORE_ID
+        )
+    assert not missing_store.exists()
+
+
 def test_main_checkpoint_verifies_exact_head_and_reports_later_suffix(main_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=123.0
