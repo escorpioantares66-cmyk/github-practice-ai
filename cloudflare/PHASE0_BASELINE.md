@@ -177,6 +177,43 @@ The 92 baseline tests are necessary but not sufficient. Add runtime-specific cov
 12. API schema/status/header compatibility with the existing FastAPI routes.
 13. Worker CPU/memory and free-tier request/storage budget measurements.
 
+
+## Source compatibility inventory
+
+A source-level scan was completed against the baseline files. This is a static inventory, not a runtime compatibility claim.
+
+| Component | Observed baseline dependencies / assumptions | Cloudflare implication |
+|---|---|---|
+| `sandbox_approval.py` | Imports `fcntl`; uses advisory file locks, file descriptors, append writes, `os.fsync`, local paths and private files. | Cannot be ported unchanged. Replace file locking and local records with Durable Object transactions; preserve state-machine and idempotency semantics. |
+| `secure_storage.py` | Uses POSIX directory descriptors, `O_DIRECTORY`, `O_NOFOLLOW`, `dir_fd`, effective UID checks, `fchmod`, `fsync`, `os.replace`, and unlink/cleanup. | Filesystem security boundary is not available in Workers. Replace with platform storage boundary; do not emulate filesystem guarantees with ephemeral files. |
+| `quota_store.py` | Uses local `sqlite3`, filesystem paths, chmod/ownership checks and transactions. | Authority rate limits need Durable Object SQLite; existing local SQLite implementation cannot be the persistent Worker store. General model-cost quota migration stays out of scope. |
+| `auth.py` | Imports `threading`, constructs a module-level `threading.Lock`, and imports the local quota store. | Avoid importing this module in the Worker path until its locking and storage dependencies are separated. |
+| `sandbox_approval_api.py` | FastAPI router and Pydantic models; imports both `auth` and `sandbox_approval`. | HTTP contract can be retained, but the route's broad imports must be decoupled from POSIX storage and process-local locking. |
+
+The baseline approval API imports `auth` and `sandbox_approval` at module load. Therefore, simply wrapping the existing router in a Worker ASGI adapter is not a safe compatibility strategy. Build a narrow Worker-facing application and adapter layer while retaining the existing API schema, status behavior, and signed receipt contract.
+
+Cryptography is declared as `cryptography>=44.0.0` in the main package. Ed25519 is used by the approval implementation through PEM serialization and the Ed25519 private/public key APIs. This scan does not establish that the exact package build, PEM handling, or signature operations work in the Cloudflare Python runtime; that remains a Phase 1 runtime-spike gate.
+
+## Phase 0 verification limits
+
+The GitHub repository connector permits remote source inspection and branch commits, but does not provide a local checkout or test runner in this workflow. Consequently, the baseline pytest/coverage suite has **not** been executed in this session. Do not treat the 92-test inventory as a passing test result. Before Phase 1 code changes, run the exact baseline on a local checkout of commit `cf006a4708fb26ee150dcaad1245f28bc3e3dcee` and capture:
+- Python interpreter and dependency versions;
+- focused approval/recovery test results;
+- full test result and coverage percentage;
+- Ruff and dependency-audit results;
+- package build and CLI/storage-audit results.
+
+The combined commit-status endpoint returned no legacy status entries for the baseline SHA; this is not evidence that required GitHub Actions checks are absent or failed. Verify Actions check runs in GitHub before treating the baseline CI state as current.
+
+## Updated Phase 0 exit criteria
+
+- [x] Feature branch created from the exact baseline commit.
+- [x] Baseline configuration and CI contract recorded.
+- [x] Existing acceptance-test inventory recorded (92 tests).
+- [x] Static source inventory of filesystem, locking, SQLite, API-import, and crypto assumptions recorded.
+- [ ] Local baseline test/coverage and CI-equivalent results captured.
+- [ ] Phase 0 reviewed and explicitly closed before Phase 1 implementation begins.
+
 ## Phase 0 exit criteria
 
 - [x] Feature branch created from the exact baseline commit.
