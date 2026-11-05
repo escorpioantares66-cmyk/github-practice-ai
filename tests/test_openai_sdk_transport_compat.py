@@ -8,7 +8,6 @@ candidate stack and runs the complete module.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import warnings
 
@@ -18,10 +17,9 @@ httpx2 = pytest.importorskip("httpx2", reason="candidate HTTPX2 stack is install
 
 from openai import AsyncOpenAI, OpenAI  # noqa: E402
 
-from stage2_sdk_ai import client as client_module  # noqa: E402
-from stage2_sdk_ai import rag_chain, vector_store  # noqa: E402
-from stage2_sdk_ai.config import AIConfig  # noqa: E402
+from stage2_sdk_ai import client as client_module, rag_chain, vector_store  # noqa: E402
 from stage2_sdk_ai.client import AIClient  # noqa: E402
+from stage2_sdk_ai.config import AIConfig  # noqa: E402
 
 BASE_URL = "https://api.openai-transport.test/v1"
 API_KEY = "sk-transport-compatibility"
