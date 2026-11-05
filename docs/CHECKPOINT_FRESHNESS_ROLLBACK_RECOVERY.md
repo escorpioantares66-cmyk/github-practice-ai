@@ -39,19 +39,19 @@ The floor schema is exactly:
 
 | Field | Meaning |
 | --- | --- |
-| \`authority\` | \`main\` or \`sandbox\` |
-| \`store_id\` | Trusted identity of that audit store |
-| \`sequence\` | Last operator-accepted sequence |
-| \`head_hash\` | Hash at that accepted sequence |
-| \`created_at\` | Last accepted checkpoint timestamp |
-| \`checkpoint_id\` | Last accepted checkpoint identifier |
+| `authority` | `main` or `sandbox` |
+| `store_id` | Trusted identity of that audit store |
+| `sequence` | Last operator-accepted sequence |
+| `head_hash` | Hash at that accepted sequence |
+| `created_at` | Last accepted checkpoint timestamp |
+| `checkpoint_id` | Last accepted checkpoint identifier |
 
 Main and sandbox floors must be retained independently. A floor from one
 authority or store cannot be used for another.
 
 ## Policy verifier
 
-\`stage2_sdk_ai.audit_checkpoint_integrity.verify_checkpoint_with_policy\`
+`stage2_sdk_ai.audit_checkpoint_integrity.verify_checkpoint_with_policy`
 requires:
 
 - candidate checkpoint;
@@ -67,7 +67,7 @@ evaluates age and suffix limits. It rejects:
 
 - candidate sequence below the trusted floor;
 - a different head hash at the same sequence;
-- a publication timestamp older than the trusted floor;
+- a checkpoint timestamp older than the trusted floor;
 - a timestamp in the future;
 - age greater than the configured maximum;
 - an unanchored suffix greater than the configured maximum;
@@ -80,16 +80,18 @@ explicit verification call. The operator must separately decide whether to
 retain it as the new floor. No code path automatically updates trusted state.
 
 A zero maximum age or zero unanchored suffix is permitted as an explicit
-strict policy. Time comparisons use the supplied wall-clock timestamp; the
-host must have an operator-managed, trustworthy clock. Clock rollback or
-future-dated publication is rejected rather than silently corrected.
+strict policy. The operator must set the checkpoint timestamp at the
+checkpointing event, not reuse a timestamp from an earlier snapshot. Time
+comparisons use the supplied wall-clock timestamp; the host must have an
+operator-managed, trustworthy clock. Clock rollback or future-dated
+checkpoint timestamps are rejected rather than silently corrected.
 
 ## Rollback and recovery behavior
 
 ### Restored older checkpoint
 
 If the candidate sequence is lower than the trusted floor, verification
-raises \`AuditCheckpointRollbackError\`, even when the candidate is a valid
+raises `AuditCheckpointRollbackError`, even when the candidate is a valid
 prefix of the current audit history. This is the key case a local hash-chain
 check alone cannot identify.
 
@@ -100,7 +102,7 @@ is also rejected, including when the sequence and head hash are unchanged.
 ### Missing candidate or lost trusted floor
 
 If either the candidate checkpoint or trusted floor is missing, verification
-raises \`AuditCheckpointRecoveryRequired\`. It does not export the current
+raises `AuditCheckpointRecoveryRequired`. It does not export the current
 audit head as a replacement, create a new floor, or infer that current local
 history is trusted.
 
@@ -148,9 +150,9 @@ The focused checkpoint integrity suite now covers:
 
 Run:
 
-\`\`\`sh
+```sh
 PYTHONPATH=. CI=true OPENAI_API_KEY=sk-test-mocked pytest -q -o addopts="" tests/test_audit_checkpoint_integrity.py
-\`\`\`
+```
 
 ## Gates before enforcement
 
