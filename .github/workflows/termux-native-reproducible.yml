@@ -27,6 +27,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Assert immutable upstream commit identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="ea492e04654ab7f7a1f9287ea912419452ead4dd"
+          checked_out="$(git -C pydantic-source rev-parse HEAD)"
+          tagged_commit="$(git -C pydantic-source rev-parse 'refs/tags/core-v2.50.4^{commit}')"
+          printf 'expected=%s\\nchecked_out=%s\\ntag_commit=%s\\n' "$expected" "$checked_out" "$tagged_commit"
+          test "$checked_out" = "$expected"
+          test "$tagged_commit" = "$expected"
+
       - name: Verify exact version, jiter dependency, and lockfile
         shell: bash
         run: |
