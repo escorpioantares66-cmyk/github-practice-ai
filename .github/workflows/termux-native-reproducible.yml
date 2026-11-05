@@ -101,6 +101,10 @@ jobs:
             --output jiter-0.18.0.tar.gz
           echo "a0ca63fd9450a212e4e658d4cfe0ab4977c4f9b0003c68828b843c65e27662ff  jiter-0.18.0.tar.gz" | sha256sum --check
 
+      - name: Validate Termux recipe shell syntax
+        shell: bash
+        run: bash -n packaging/termux/python-jiter/build.sh
+
       - name: Install exact recipe into official Termux build tree
         shell: bash
         run: |
@@ -224,12 +228,15 @@ jobs:
           cp replica-1/build-manifest.txt verified/
           sha256sum verified/* > verified/SHA256SUMS
 
-      - name: Generate signed build provenance attestations
+      - name: Attest Termux package build
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: |
-            verified/python-jiter_0.18.0_aarch64.deb
-            verified/jiter-0.18.0-aarch64.so
+          subject-path: verified/python-jiter_0.18.0_aarch64.deb
+
+      - name: Attest native extension build
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: verified/jiter-0.18.0-aarch64.so
 
       - name: Upload verified reproducible artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
