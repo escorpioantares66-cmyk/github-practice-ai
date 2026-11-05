@@ -732,3 +732,181 @@ def test_missing_crypto_library_disables_only_sandbox_authority(
     monkeypatch.setattr(builtins, "__import__", without_crypto)
     with pytest.raises(sandbox_approval.SandboxApprovalConfigurationError):
         _create(authority, scope)
+
+@pytest.mark.parametrize("decision", ["approve", "deny"])
+def test_http_approver_rate_limit_blocks_both_decision_routes(
+    authority, scope, monkeypatch, decision
+):
+    client = TestClient(app)
+    created = client.post(
+        "/v1/sandbox/approvals",
+        json={"scope": scope},
+        headers={"X-API-Key": REQUESTER_KEY},
+    )
+    assert created.status_code == 200
+    approval_id = created.json()["approval_id"]
+    monkeypatch.setattr(auth, "check_rate_limit", lambda *_args, **_kwargs: False)
+
+    response = client.post(
+        f"/v1/sandbox/approvals/{approval_id}/{decision}",
+        headers={"X-Approver-Key": APPROVER_KEY},
+    )
+
+    assert response.status_code == 429
+    assert sandbox_approval.inspect(
+        approval_id, requester="automation"
+    )["status"] == "pending"
+
+
+def test_http_consume_rate_limit_blocks_before_authority_transition(
+    authority, scope, monkeypatch
+):
+    client = TestClient(app)
+    headers = {"X-API-Key": REQUESTER_KEY}
+    created = client.post(
+        "/v1/sandbox/approvals", json={"scope": scope}, headers=headers
+    ).json()
+    approval_id = created["approval_id"]
+    approved = client.post(
+        f"/v1/sandbox/approvals/{approval_id}/approve",
+        headers={"X-Approver-Key": APPROVER_KEY},
+    )
+    assert approved.status_code == 200
+    receipt = approved.json()["receipt"]
+    monkeypatch.setattr(auth, "check_rate_limit", lambda *_args, **_kwargs: False)
+
+    response = client.post(
+        f"/v1/sandbox/approvals/{approval_id}/consume",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "nonce": receipt["claims"]["nonce"],
+            "scope": scope,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 429
+    assert sandbox_approval.inspect(
+        approval_id, requester="automation"
+    )["status"] == "approved"
+
+
+def test_http_read_and_consume_routes_enforce_requester_ownership(
+    authority, scope, monkeypatch
+):
+    monkeypatch.setenv(
+        "AGENT_API_KEYS",
+        f"automation={REQUESTER_KEY},intruder=other-requester-secret",
+    )
+    client = TestClient(app)
+    owner_headers = {"X-API-Key": REQUESTER_KEY}
+    intruder_headers = {"X-API-Key": "other-requester-secret"}
+    created = client.post(
+        "/v1/sandbox/approvals",
+        json={"scope": scope},
+        headers=owner_headers,
+    ).json()
+    approval_id = created["approval_id"]
+    approved = client.post(
+        f"/v1/sandbox/approvals/{approval_id}/approve",
+        headers={"X-Approver-Key": APPROVER_KEY},
+    )
+    assert approved.status_code == 200
+    nonce = approved.json()["receipt"]["claims"]["nonce"]
+
+    assert client.get(
+        f"/v1/sandbox/approvals/{approval_id}", headers=intruder_headers
+    ).status_code == 403
+    assert client.get(
+        f"/v1/sandbox/approvals/{approval_id}/decision",
+        headers=intruder_headers,
+    ).status_code == 403
+    denied_consume = client.post(
+        f"/v1/sandbox/approvals/{approval_id}/consume",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "nonce": nonce,
+            "scope": scope,
+        },
+        headers=intruder_headers,
+    )
+    assert denied_consume.status_code == 403
+    assert sandbox_approval.inspect(
+        approval_id, requester="automation"
+    )["status"] == "approved"
+
+
+@pytest.mark.parametrize("decision", ["approve", "deny"])
+def test_http_decision_audit_failure_never_returns_success(
+    authority, scope, monkeypatch, decision
+):
+    client = TestClient(app)
+    created = client.post(
+        "/v1/sandbox/approvals",
+        json={"scope": scope},
+        headers={"X-API-Key": REQUESTER_KEY},
+    ).json()
+    approval_id = created["approval_id"]
+
+    def fail_audit(*_args, **_kwargs):
+        raise OSError("simulated decision audit failure")
+
+    monkeypatch.setattr(sandbox_approval, "_append_audit", fail_audit)
+    response = client.post(
+        f"/v1/sandbox/approvals/{approval_id}/{decision}",
+        headers={"X-Approver-Key": APPROVER_KEY},
+    )
+
+    assert response.status_code == 503
+    state = sandbox_approval.inspect(approval_id, requester="automation")
+    assert state["status"] == decision + "d" if decision == "approve" else "denied"
+    assert state["audit_status"] == "failed"
+    assert client.get(
+        f"/v1/sandbox/approvals/{approval_id}/decision",
+        headers={"X-API-Key": REQUESTER_KEY},
+    ).status_code == 409
+
+
+def test_http_consume_audit_failure_is_operator_review_not_success(
+    authority, scope, monkeypatch
+):
+    client = TestClient(app)
+    headers = {"X-API-Key": REQUESTER_KEY}
+    created = client.post(
+        "/v1/sandbox/approvals", json={"scope": scope}, headers=headers
+    ).json()
+    approval_id = created["approval_id"]
+    approved = client.post(
+        f"/v1/sandbox/approvals/{approval_id}/approve",
+        headers={"X-Approver-Key": APPROVER_KEY},
+    )
+    nonce = approved.json()["receipt"]["claims"]["nonce"]
+
+    def fail_audit(*_args, **_kwargs):
+        raise OSError("simulated consumption audit failure")
+
+    monkeypatch.setattr(sandbox_approval, "_append_audit", fail_audit)
+    response = client.post(
+        f"/v1/sandbox/approvals/{approval_id}/consume",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "nonce": nonce,
+            "scope": scope,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 503
+    state = sandbox_approval.inspect(approval_id, requester="automation")
+    assert state["status"] == "consumed"
+    assert state["audit_status"] == "failed"
+    assert client.post(
+        f"/v1/sandbox/approvals/{approval_id}/consume",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "nonce": nonce,
+            "scope": scope,
+        },
+        headers=headers,
+    ).status_code == 503
+
