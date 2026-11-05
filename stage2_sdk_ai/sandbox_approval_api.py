@@ -59,7 +59,12 @@ def _approver_identity(x_approver_key: str | None) -> str:
     return identity
 
 
-def _raise_http(exc: sandbox_approval.SandboxApprovalError) -> None:
+def _raise_http(exc: Exception) -> None:
+    if isinstance(exc, OSError):
+        raise HTTPException(
+            status_code=503,
+            detail="Sandbox approval storage requires operator review",
+        ) from exc
     if isinstance(exc, sandbox_approval.SandboxApprovalNotFound):
         raise HTTPException(status_code=404, detail="Sandbox approval not found") from exc
     if isinstance(exc, sandbox_approval.SandboxApprovalForbidden):
@@ -88,7 +93,7 @@ def create_sandbox_approval(
             issuer=os.getenv("SANDBOX_APPROVAL_ISSUER", ""),
             audience=os.getenv("SANDBOX_APPROVAL_AUDIENCE", ""),
         )
-    except sandbox_approval.SandboxApprovalError as exc:
+    except (sandbox_approval.SandboxApprovalError, OSError) as exc:
         _raise_http(exc)
 
 
@@ -104,7 +109,7 @@ def approve_sandbox_request(
         return sandbox_approval.decide(
             approval_id, approver_key=x_approver_key or "", decision="approved"
         )
-    except sandbox_approval.SandboxApprovalError as exc:
+    except (sandbox_approval.SandboxApprovalError, OSError) as exc:
         _raise_http(exc)
 
 
@@ -120,7 +125,7 @@ def deny_sandbox_request(
         return sandbox_approval.decide(
             approval_id, approver_key=x_approver_key or "", decision="denied"
         )
-    except sandbox_approval.SandboxApprovalError as exc:
+    except (sandbox_approval.SandboxApprovalError, OSError) as exc:
         _raise_http(exc)
 
 
@@ -134,7 +139,7 @@ def get_sandbox_decision(
     requester = _requester_identity(x_api_key)
     try:
         return sandbox_approval.get_decision(approval_id, requester=requester)
-    except sandbox_approval.SandboxApprovalError as exc:
+    except (sandbox_approval.SandboxApprovalError, OSError) as exc:
         _raise_http(exc)
 
 
@@ -148,7 +153,7 @@ def inspect_sandbox_approval(
     requester = _requester_identity(x_api_key)
     try:
         return sandbox_approval.inspect(approval_id, requester=requester)
-    except sandbox_approval.SandboxApprovalError as exc:
+    except (sandbox_approval.SandboxApprovalError, OSError) as exc:
         _raise_http(exc)
 
 
@@ -169,5 +174,5 @@ def consume_sandbox_approval(
             nonce=req.nonce,
             scope=req.scope.model_dump(),
         )
-    except sandbox_approval.SandboxApprovalError as exc:
+    except (sandbox_approval.SandboxApprovalError, OSError) as exc:
         _raise_http(exc)

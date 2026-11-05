@@ -122,3 +122,33 @@ The HTTP layer also authenticates and rate-limits approver requests before
 dispatch. The authority repeats credential validation so internal callers
 cannot bypass authorization by supplying a fabricated principal name. Invalid,
 missing, legacy unnamed, malformed, or role-conflicting credentials fail closed.
+
+## API lifecycle enforcement matrix
+
+Every state-changing HTTP route delegates the transition to the authority and
+must preserve its result rather than treating an attempted transition as
+success:
+
+| Route | Required principal | Ownership / lifecycle rule | Audit requirement |
+|---|---|---|---|
+| POST collection | Named requester | Creates only a pending request owned by that requester | Creation event must be durable before success |
+| POST /{id}/approve | Named approver | Approver must differ from requester; only pending, unexpired requests may transition | Approval event and signed receipt must be durable before success |
+| POST /{id}/deny | Named approver | Same separation-of-duties and pending-only transition; denial is terminal | Denial event must be durable before success |
+| POST /{id}/consume | Owning named requester | Approved receipt, nonce, full scope and idempotency UUID must match; only identical retries are accepted | Consumption event must be durable; uncertain writes remain consumed and require review |
+| GET /{id} | Owning named requester | No cross-requester inspection | Audit history is parsed and integrity-checked |
+| GET /{id}/decision | Owning named requester | Evidence is returned only for a completed approved decision | Audit chain and signed receipt must verify |
+
+The versioned API tests exercise authorization and rate limiting on both decision
+routes and consumption, requester isolation on both read routes and consumption,
+terminal decisions, identical-only consume retries, and fail-closed HTTP
+responses when decision or consumption audit writes fail. These HTTP checks
+complement—not replace—the authority's own identity, scope, transition, and
+hash-chain validation.
+
+The legacy note-write API has a separate lifecycle: `POST /write` creates a
+request for the authenticated requester, `POST /approve` and `POST /deny`
+require a separately configured approver, and `POST /write/execute` requires
+the owning requester and a durably audited, unconsumed approval. Its existing
+API tests cover self-approval, ownership mismatch, terminal decisions,
+audit-write failures, replay, and execution recovery.
+
