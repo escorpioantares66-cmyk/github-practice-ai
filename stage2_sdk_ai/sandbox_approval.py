@@ -281,16 +281,54 @@ def _events_for(approval_id: str) -> list[dict[str, Any]]:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def verify_audit_log() -> dict[str, Any]:
-    """Verify the complete local sandbox approval audit chain."""
+def verify_audit_log(
+    expected_checkpoint: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Verify the complete local sandbox chain and an optional prefix anchor."""
     directory = _ensure_store()
     lock_path = directory / ".audit.lock"
     fd = open_private_file(lock_path, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
         try:
-            sequence, last_hash = _read_audit_state()
-            return {"valid": True, "events": sequence, "last_hash": last_hash}
+            entries = _read_audit_entries()
+            sequence = len(entries)
+            last_hash = entries[-1]["hash"] if entries else "0" * 64
+            result = {"valid": True, "events": sequence, "last_hash": last_hash}
+            if expected_checkpoint is not None:
+                if (
+                    not isinstance(expected_checkpoint, dict)
+                    or set(expected_checkpoint) != {"sequence", "head_hash"}
+                    or isinstance(expected_checkpoint.get("sequence"), bool)
+                    or not isinstance(expected_checkpoint.get("sequence"), int)
+                    or expected_checkpoint["sequence"] < 0
+                    or not isinstance(expected_checkpoint.get("head_hash"), str)
+                    or not _DIGEST_RE.fullmatch(expected_checkpoint["head_hash"])
+                ):
+                    raise SandboxApprovalError("Sandbox audit checkpoint is malformed")
+                checkpoint_sequence = expected_checkpoint["sequence"]
+                checkpoint_hash = (
+                    "0" * 64
+                    if checkpoint_sequence == 0
+                    else (
+                        entries[checkpoint_sequence - 1]["hash"]
+                        if checkpoint_sequence <= sequence
+                        else None
+                    )
+                )
+                if (
+                    checkpoint_sequence > sequence
+                    or checkpoint_hash is None
+                    or not secrets.compare_digest(
+                        checkpoint_hash, expected_checkpoint["head_hash"]
+                    )
+                ):
+                    raise SandboxApprovalError(
+                        "Sandbox audit history is truncated or diverges from checkpoint"
+                    )
+                result["checkpoint_verified"] = True
+                result["checkpoint_sequence"] = checkpoint_sequence
+            return result
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
