@@ -49,5 +49,15 @@ termux_step_post_make_install() {
     echo "Patching Android libpython dependency into ${_JITER_SO}"
 
     # Android's dynamic linker requires an explicit libpython dependency.
-    patchelf --add-needed "libpython${TERMUX_PYTHON_VERSION}.so" "${_JITER_SO}"
+    # The cross-link may already have emitted it; do not add a duplicate NEEDED entry.
+    local _LIBPYTHON="libpython${TERMUX_PYTHON_VERSION}.so"
+    if ! patchelf --print-needed "${_JITER_SO}" | grep -Fxq "${_LIBPYTHON}"; then
+        patchelf --add-needed "${_LIBPYTHON}" "${_JITER_SO}"
+    fi
+
+    local _LIBPYTHON_COUNT
+    _LIBPYTHON_COUNT="$(patchelf --print-needed "${_JITER_SO}" | grep -Fxc "${_LIBPYTHON}")"
+    if [ "${_LIBPYTHON_COUNT}" -ne 1 ]; then
+        termux_error_exit "Expected exactly one ${_LIBPYTHON} NEEDED entry; found ${_LIBPYTHON_COUNT}"
+    fi
 }
