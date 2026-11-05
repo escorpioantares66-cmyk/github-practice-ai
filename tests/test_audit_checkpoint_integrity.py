@@ -8,7 +8,6 @@ from stage2_sdk_ai import approval, audit_checkpoint_integrity, sandbox_approval
 MAIN_STORE_ID = "main-store-test-001"
 SANDBOX_STORE_ID = "sandbox-store-test-001"
 
-
 @pytest.fixture
 def main_audit(monkeypatch, tmp_path):
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
@@ -16,15 +15,12 @@ def main_audit(monkeypatch, tmp_path):
     approval._ensure_dirs()
     approval.request_approval("write_note", {"path": "first.md"})
 
-
 @pytest.fixture
 def sandbox_audit(monkeypatch, tmp_path):
     monkeypatch.setenv("SANDBOX_APPROVALS_DIR", str(tmp_path / "sandbox-approvals"))
     sandbox_approval._append_audit(
         "a" * 32, "request_created", "automation", {}, 123.0
     )
-
-
 
 def test_main_checkpoint_creation_refuses_missing_audit_file(monkeypatch, tmp_path):
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
@@ -38,7 +34,6 @@ def test_main_checkpoint_creation_refuses_missing_audit_file(monkeypatch, tmp_pa
     assert not missing_log.exists()
     assert not missing_log.parent.exists()
 
-
 def test_sandbox_checkpoint_creation_refuses_missing_audit_file(monkeypatch, tmp_path):
     missing_store = tmp_path / "sandbox-approvals"
     monkeypatch.setenv("SANDBOX_APPROVALS_DIR", str(missing_store))
@@ -48,7 +43,6 @@ def test_sandbox_checkpoint_creation_refuses_missing_audit_file(monkeypatch, tmp
             audit_checkpoint_integrity.SANDBOX_AUTHORITY, SANDBOX_STORE_ID
         )
     assert not missing_store.exists()
-
 
 def test_main_checkpoint_verifies_exact_head_and_reports_later_suffix(main_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
@@ -73,7 +67,6 @@ def test_main_checkpoint_verifies_exact_head_and_reports_later_suffix(main_audit
     assert later["valid"] is True
     assert later["checkpoint_sequence"] < later["current_sequence"]
     assert later["unanchored_suffix"] == 1
-
 
 def test_main_checkpoint_detects_rehashed_history_rewrite(main_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
@@ -100,7 +93,6 @@ def test_main_checkpoint_detects_rehashed_history_rewrite(main_audit):
             store_id=MAIN_STORE_ID,
         )
 
-
 def test_main_checkpoint_rejects_truncation_before_anchor(main_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID
@@ -113,7 +105,6 @@ def test_main_checkpoint_rejects_truncation_before_anchor(main_audit):
             authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
             store_id=MAIN_STORE_ID,
         )
-
 
 def test_sandbox_checkpoint_verifies_exact_head_and_reports_later_suffix(sandbox_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
@@ -141,7 +132,6 @@ def test_sandbox_checkpoint_verifies_exact_head_and_reports_later_suffix(sandbox
     assert later["checkpoint_sequence"] < later["current_sequence"]
     assert later["unanchored_suffix"] == 1
 
-
 def test_sandbox_checkpoint_detects_rehashed_history_rewrite(sandbox_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.SANDBOX_AUTHORITY, SANDBOX_STORE_ID
@@ -168,7 +158,6 @@ def test_sandbox_checkpoint_detects_rehashed_history_rewrite(sandbox_audit):
             store_id=SANDBOX_STORE_ID,
         )
 
-
 def test_sandbox_checkpoint_rejects_truncation_before_anchor(sandbox_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.SANDBOX_AUTHORITY, SANDBOX_STORE_ID
@@ -182,7 +171,6 @@ def test_sandbox_checkpoint_rejects_truncation_before_anchor(sandbox_audit):
             authority=audit_checkpoint_integrity.SANDBOX_AUTHORITY,
             store_id=SANDBOX_STORE_ID,
         )
-
 
 def test_main_checkpoint_cannot_be_used_for_sandbox(sandbox_audit):
     checkpoint = {
@@ -201,7 +189,6 @@ def test_main_checkpoint_cannot_be_used_for_sandbox(sandbox_audit):
             authority=audit_checkpoint_integrity.SANDBOX_AUTHORITY,
             store_id=SANDBOX_STORE_ID,
         )
-
 
 @pytest.mark.parametrize(
     "change",
@@ -227,7 +214,6 @@ def test_envelope_rejects_invalid_fields(main_audit, change):
             store_id=MAIN_STORE_ID,
         )
 
-
 def test_sandbox_envelope_rejects_main_legacy_prefix_count(sandbox_audit):
     checkpoint = {
         "format_version": 1,
@@ -246,7 +232,6 @@ def test_sandbox_envelope_rejects_main_legacy_prefix_count(sandbox_audit):
             store_id=SANDBOX_STORE_ID,
         )
 
-
 def test_envelope_rejects_wrong_authority_and_store_id(main_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID
@@ -263,7 +248,6 @@ def test_envelope_rejects_wrong_authority_and_store_id(main_audit):
             authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
             store_id="another-store",
         )
-
 
 def test_parser_rejects_duplicate_keys_and_oversized_payload():
     duplicate = (
@@ -285,7 +269,6 @@ def test_parser_rejects_duplicate_keys_and_oversized_payload():
             store_id=MAIN_STORE_ID,
         )
 
-
 def test_serialized_checkpoint_is_canonical_and_round_trips(main_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID
@@ -303,8 +286,6 @@ def test_serialized_checkpoint_is_canonical_and_round_trips(main_audit):
     assert parsed == checkpoint
     assert encoded.endswith(b"\n")
 
-
-
 def _trusted_floor(checkpoint):
     return {
         "authority": checkpoint["authority"],
@@ -314,7 +295,6 @@ def _trusted_floor(checkpoint):
         "created_at": checkpoint["created_at"],
         "checkpoint_id": checkpoint["checkpoint_id"],
     }
-
 
 def test_main_checkpoint_freshness_accepts_age_boundary_and_rejects_stale(main_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
@@ -345,7 +325,6 @@ def test_main_checkpoint_freshness_accepts_age_boundary_and_rejects_stale(main_a
             max_unanchored_suffix=0,
         )
 
-
 def test_main_checkpoint_rejects_suffix_over_policy_limit(main_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=100.0
@@ -375,7 +354,6 @@ def test_main_checkpoint_rejects_suffix_over_policy_limit(main_audit):
     )
     assert accepted["unanchored_suffix"] == 1
 
-
 def test_main_checkpoint_rejects_restored_older_checkpoint(main_audit):
     older = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=100.0
@@ -396,7 +374,6 @@ def test_main_checkpoint_rejects_restored_older_checkpoint(main_audit):
             max_unanchored_suffix=10,
         )
 
-
 def test_main_checkpoint_rejects_same_head_with_older_publication_time(main_audit):
     trusted = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=101.0
@@ -415,7 +392,6 @@ def test_main_checkpoint_rejects_same_head_with_older_publication_time(main_audi
             max_unanchored_suffix=0,
         )
 
-
 def test_main_checkpoint_rejects_future_publication_timestamp(main_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=200.0
@@ -431,7 +407,6 @@ def test_main_checkpoint_rejects_future_publication_timestamp(main_audit):
             max_age_seconds=100.0,
             max_unanchored_suffix=0,
         )
-
 
 def test_missing_checkpoint_or_trusted_floor_requires_operator_recovery(main_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
@@ -452,7 +427,6 @@ def test_missing_checkpoint_or_trusted_floor_requires_operator_recovery(main_aud
                 max_age_seconds=10.0,
                 max_unanchored_suffix=0,
             )
-
 
 def test_policy_rejects_invalid_limits_and_wrong_floor_identity(main_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
@@ -492,7 +466,6 @@ def test_policy_rejects_invalid_limits_and_wrong_floor_identity(main_audit):
             max_age_seconds=10.0,
             max_unanchored_suffix=0,
         )
-
 
 def test_sandbox_checkpoint_freshness_and_suffix_policy(sandbox_audit):
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
@@ -538,7 +511,6 @@ def test_sandbox_checkpoint_freshness_and_suffix_policy(sandbox_audit):
             max_unanchored_suffix=1,
         )
 
-
 def test_sandbox_checkpoint_rejects_rollback_to_older_checkpoint(sandbox_audit):
     older = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.SANDBOX_AUTHORITY,
@@ -565,8 +537,6 @@ def test_sandbox_checkpoint_rejects_rollback_to_older_checkpoint(sandbox_audit):
             max_unanchored_suffix=10,
         )
 
-
-
 def test_main_checkpoint_verification_refuses_missing_audit_log(monkeypatch, tmp_path):
     monkeypatch.setattr(approval, "_approvals_dir", tmp_path / "approvals")
     audit_path = tmp_path / "logs" / "audit.jsonl"
@@ -587,7 +557,6 @@ def test_main_checkpoint_verification_refuses_missing_audit_log(monkeypatch, tmp
             store_id=MAIN_STORE_ID,
         )
     assert not audit_path.exists()
-
 
 def test_sandbox_checkpoint_verification_refuses_missing_audit_log(
     monkeypatch, tmp_path
@@ -611,8 +580,6 @@ def test_sandbox_checkpoint_verification_refuses_missing_audit_log(
             store_id=SANDBOX_STORE_ID,
         )
     assert not audit_path.exists()
-
-
 
 def test_checkpoint_rejects_same_sequence_conflicting_trusted_head(main_audit):
     trusted = audit_checkpoint_integrity.create_checkpoint_envelope(
