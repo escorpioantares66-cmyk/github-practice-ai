@@ -24,9 +24,10 @@ Rollback detection therefore requires two separate pieces of state:
 2. A trusted floor representing the last checkpoint accepted by the operator.
 
 The trusted floor must be retained independently of the candidate checkpoint
-and must not be writable or restorable by the application UID. It is the
-minimum accepted sequence, head hash, and publication timestamp for that
-authority/store. If the floor is stored beside the candidate in the same
+and must not be writable or restorable by the application UID. It preserves
+the accepted sequence, head hash, legacy-prefix count, and publication
+timestamp for that authority/store. The floor's checkpoint ID is retained for
+operator evidence. If the floor is stored beside the candidate in the same
 rollbackable location, it does not provide rollback protection.
 
 This model protects against application-UID compromise only while the
@@ -43,6 +44,7 @@ The floor schema is exactly:
 | `store_id` | Trusted identity of that audit store |
 | `sequence` | Last operator-accepted sequence |
 | `head_hash` | Hash at that accepted sequence |
+| `legacy_entries` | Main audit legacy-prefix count; always zero for sandbox |
 | `created_at` | Last accepted checkpoint timestamp |
 | `checkpoint_id` | Last accepted checkpoint identifier |
 
@@ -62,8 +64,13 @@ requires:
 - explicit maximum unanchored suffix event count.
 
 The verifier first compares the candidate against the trusted floor, then
-checks the candidate against the full local audit history, and finally
-evaluates age and suffix limits. It rejects:
+verifies the trusted floor itself against the full local audit history, then
+checks the candidate against that history, and finally evaluates age and
+suffix limits. This prevents a locally valid, rehashed history from being
+accepted merely because a newer candidate was generated after the rewrite:
+the earlier operator-trusted prefix must still be present. The floor includes
+the main legacy-prefix count so the main verifier can validate its exact
+historical boundary. It rejects:
 
 - candidate sequence below the trusted floor;
 - a different head hash at the same sequence;
@@ -72,7 +79,8 @@ evaluates age and suffix limits. It rejects:
 - age greater than the configured maximum;
 - an unanchored suffix greater than the configured maximum;
 - missing candidate or missing trusted floor;
-- malformed floor, wrong authority, or wrong store identity.
+- malformed floor, wrong authority, or wrong store identity;
+- a trusted floor whose sequence/hash no longer matches the audit history.
 
 The policy function has no defaults and does not persist or advance the floor.
 A successful return means only that the supplied checkpoint passed this
@@ -142,6 +150,8 @@ The focused checkpoint integrity suite now covers:
 - suffix exactly at the configured boundary and suffix beyond the limit;
 - restoration of an older valid main checkpoint;
 - restoration of an older valid sandbox checkpoint;
+- validly rehashed main history rewritten after the trusted floor;
+- validly rehashed sandbox history rewritten after the trusted floor;
 - same-sequence publication-time regression;
 - future-dated checkpoint;
 - missing checkpoint and missing trusted floor;
