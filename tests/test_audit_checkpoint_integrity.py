@@ -292,6 +292,7 @@ def _trusted_floor(checkpoint):
         "store_id": checkpoint["store_id"],
         "sequence": checkpoint["sequence"],
         "head_hash": checkpoint["head_hash"],
+        "legacy_entries": checkpoint["legacy_entries"],
         "created_at": checkpoint["created_at"],
         "checkpoint_id": checkpoint["checkpoint_id"],
     }
@@ -593,6 +594,104 @@ def test_checkpoint_rejects_same_sequence_conflicting_trusted_head(main_audit):
             conflict,
             authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
             store_id=MAIN_STORE_ID,
+            trusted_floor=_trusted_floor(trusted),
+            now=102.0,
+            max_age_seconds=100.0,
+            max_unanchored_suffix=0,
+        )
+
+
+def test_main_policy_rejects_rehashed_history_after_trusted_floor(main_audit):
+    trusted = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=100.0
+    )
+    approval.request_approval("write_note", {"path": "after-floor.md"})
+
+    entries = [
+        json.loads(line)
+        for line in approval._audit_file.read_text(encoding="utf-8").splitlines()
+    ]
+    entries[0]["record"]["tool"] = "rewritten_after_trusted_floor"
+    previous_hash = "0" * 64
+    for entry in entries:
+        entry["previous_hash"] = previous_hash
+        entry["hash"] = hashlib.sha256(
+            approval._canonical_audit_entry(entry)
+        ).hexdigest()
+        previous_hash = entry["hash"]
+    approval._audit_file.write_text(
+        "".join(
+            json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\\n"
+            for entry in entries
+        ),
+        encoding="utf-8",
+    )
+
+    # The rewritten chain is internally consistent and the newer candidate
+    # matches it. Only checking the independently retained floor catches
+    # that this history no longer contains the operator-trusted prefix.
+    assert approval.verify_audit_log()["valid"] is True
+    candidate = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=101.0
+    )
+    with pytest.raises(approval.AuditLogIntegrityError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            candidate,
+            authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+            store_id=MAIN_STORE_ID,
+            trusted_floor=_trusted_floor(trusted),
+            now=102.0,
+            max_age_seconds=100.0,
+            max_unanchored_suffix=0,
+        )
+
+
+def test_sandbox_policy_rejects_rehashed_history_after_trusted_floor(sandbox_audit):
+    trusted = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+        SANDBOX_STORE_ID,
+        created_at=100.0,
+    )
+    sandbox_approval._append_audit(
+        "b" * 32, "request_created", "automation", {}, 124.0
+    )
+
+    entries = sandbox_approval._read_audit_entries()
+    entries[0]["actor"] = "rewritten_after_trusted_floor"
+    previous_hash = "0" * 64
+    rewritten = []
+    for entry in entries:
+        value = dict(entry)
+        value.pop("hash", None)
+        value["previous_hash"] = previous_hash
+        digest = hashlib.sha256(
+            sandbox_approval._canonical(value)
+        ).hexdigest()
+        value["hash"] = digest
+        previous_hash = digest
+        rewritten.append(value)
+    audit_path = sandbox_approval._store_dir() / "audit.jsonl"
+    audit_path.write_text(
+        "".join(
+            json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\\n"
+            for entry in rewritten
+        ),
+        encoding="utf-8",
+    )
+
+    # The new local chain and candidate are internally valid. The retained
+    # floor must still match its original sequence/hash in that history.
+    assert sandbox_approval.verify_audit_log()["valid"] is True
+    candidate = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+        SANDBOX_STORE_ID,
+        created_at=101.0,
+    )
+    with pytest.raises(sandbox_approval.SandboxApprovalError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            candidate,
+            authority=audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+            store_id=SANDBOX_STORE_ID,
             trusted_floor=_trusted_floor(trusted),
             now=102.0,
             max_age_seconds=100.0,
