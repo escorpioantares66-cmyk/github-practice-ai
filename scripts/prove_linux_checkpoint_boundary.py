@@ -6,6 +6,7 @@ import grp
 import os
 import pwd
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -46,13 +47,48 @@ def expect_denied(
     print(f"PASS: {label} denied for application UID")
 
 
+def candidate_layout_is_safe(
+    path: Path, operator_uid: int, group_gid: int
+) -> bool:
+    try:
+        file_info = path.lstat()
+        directory_info = path.parent.lstat()
+        if not stat.S_ISREG(file_info.st_mode) or path.is_symlink():
+            return False
+        if not stat.S_ISDIR(directory_info.st_mode) or path.parent.is_symlink():
+            return False
+        if file_info.st_nlink != 1:
+            return False
+        if (
+            file_info.st_uid != operator_uid
+            or file_info.st_gid != group_gid
+            or stat.S_IMODE(file_info.st_mode) != 0o640
+        ):
+            return False
+        if (
+            directory_info.st_uid != operator_uid
+            or directory_info.st_gid != group_gid
+            or stat.S_IMODE(directory_info.st_mode) != 0o750
+        ):
+            return False
+        for ancestor in path.parent.parents:
+            info = ancestor.lstat()
+            if not stat.S_ISDIR(info.st_mode) or ancestor.is_symlink():
+                return False
+            if info.st_uid != 0 or info.st_mode & 0o022:
+                return False
+        return True
+    except OSError:
+        return False
+
+
 def main() -> int:
     require_root()
     suffix = uuid.uuid4().hex[:10]
     app_user = f"ckptapp{suffix}"
     op_user = f"ckptop{suffix}"
     read_group = f"ckptread{suffix}"
-    root = Path(tempfile.mkdtemp(prefix="checkpoint-proof-", dir="/tmp"))
+    root = Path(tempfile.mkdtemp(prefix="checkpoint-proof-", dir="/run"))
     checkpoint_dir = root / "published"
     checkpoint = checkpoint_dir / "main.json"
     operator_tmp = checkpoint_dir / ".main.json.operator-tmp"
@@ -106,10 +142,44 @@ def main() -> int:
         ):
             raise AssertionError("checkpoint path is not operator-owned")
         if (
-            checkpoint_dir.stat().st_mode & 0o022
-            or checkpoint.stat().st_mode & 0o022
+            checkpoint_dir.stat().st_gid != group_gid
+            or checkpoint.stat().st_gid != group_gid
+            or checkpoint_dir.stat().st_mode & 0o777 != 0o750
+            or checkpoint.stat().st_mode & 0o777 != 0o640
         ):
-            raise AssertionError("checkpoint path is group/other writable")
+            raise AssertionError("checkpoint group or exact mode is incorrect")
+        if not candidate_layout_is_safe(checkpoint, operator_uid, group_gid):
+            raise AssertionError("safe checkpoint layout preflight rejected setup")
+
+        symlink_path = checkpoint_dir / "symlink.json"
+        symlink_path.symlink_to(checkpoint)
+        if candidate_layout_is_safe(symlink_path, operator_uid, group_gid):
+            raise AssertionError("symlink checkpoint path was accepted")
+        symlink_path.unlink()
+        hardlink_path = checkpoint_dir / "hardlink.json"
+        os.link(checkpoint, hardlink_path)
+        if candidate_layout_is_safe(checkpoint, operator_uid, group_gid):
+            raise AssertionError("hard-linked checkpoint was accepted")
+        hardlink_path.unlink()
+        print("PASS: symlink and hard-link checkpoint paths are rejected")
+
+        subprocess.run(["chown", f"root:{read_group}", str(checkpoint)], check=True)
+        if candidate_layout_is_safe(checkpoint, operator_uid, group_gid):
+            raise AssertionError("unexpected checkpoint owner was accepted")
+        subprocess.run(["chown", f"{op_user}:{read_group}", str(checkpoint)], check=True)
+        os.chmod(checkpoint, 0o660)
+        if candidate_layout_is_safe(checkpoint, operator_uid, group_gid):
+            raise AssertionError("unexpected checkpoint mode was accepted")
+        os.chmod(checkpoint, 0o640)
+        os.chmod(checkpoint_dir, 0o770)
+        if candidate_layout_is_safe(checkpoint, operator_uid, group_gid):
+            raise AssertionError("writable checkpoint directory was accepted")
+        os.chmod(checkpoint_dir, 0o750)
+        os.chmod(root, 0o777)
+        if candidate_layout_is_safe(checkpoint, operator_uid, group_gid):
+            raise AssertionError("writable ancestor was accepted")
+        os.chmod(root, 0o711)
+        print("PASS: wrong owner/mode and writable directory/ancestor are rejected")
 
         print(
             f"PASS: distinct non-root UIDs "
