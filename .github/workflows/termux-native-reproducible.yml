@@ -6,9 +6,7 @@ on:
     types: [opened, synchronize, reopened]
     branches: [main]
     paths:
-      - ".github/workflows/termux-native-reproducible.yml"
-      - "packaging/termux/**"
-      - "docs/termux-native-dependency-provenance.md"
+      - "packaging/termux/python-jiter/**"
 
 permissions:
   contents: read
