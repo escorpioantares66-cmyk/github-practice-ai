@@ -99,7 +99,7 @@ def approve_sandbox_request(
 ):
     if not _ID_RE.fullmatch(approval_id):
         raise HTTPException(status_code=422, detail="Invalid approval ID")
-    approver = _approver_identity(x_approver_key)
+    _approver_identity(x_approver_key)
     try:
         return sandbox_approval.decide(
             approval_id, approver_key=x_approver_key or "", decision="approved"
