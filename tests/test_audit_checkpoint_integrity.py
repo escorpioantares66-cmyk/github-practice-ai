@@ -302,3 +302,255 @@ def test_serialized_checkpoint_is_canonical_and_round_trips(main_audit):
     )
     assert parsed == checkpoint
     assert encoded.endswith(b"\n")
+
+
+
+def _trusted_floor(checkpoint):
+    return {
+        "authority": checkpoint["authority"],
+        "store_id": checkpoint["store_id"],
+        "sequence": checkpoint["sequence"],
+        "head_hash": checkpoint["head_hash"],
+        "created_at": checkpoint["created_at"],
+        "checkpoint_id": checkpoint["checkpoint_id"],
+    }
+
+
+def test_main_checkpoint_freshness_accepts_age_boundary_and_rejects_stale(main_audit):
+    checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=100.0
+    )
+    floor = _trusted_floor(checkpoint)
+
+    accepted = audit_checkpoint_integrity.verify_checkpoint_with_policy(
+        checkpoint,
+        authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+        store_id=MAIN_STORE_ID,
+        trusted_floor=floor,
+        now=110.0,
+        max_age_seconds=10.0,
+        max_unanchored_suffix=0,
+    )
+    assert accepted["policy_accepted"] is True
+    assert accepted["freshness_age_seconds"] == 10.0
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointPolicyError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            checkpoint,
+            authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+            store_id=MAIN_STORE_ID,
+            trusted_floor=floor,
+            now=110.001,
+            max_age_seconds=10.0,
+            max_unanchored_suffix=0,
+        )
+
+
+def test_main_checkpoint_rejects_suffix_over_policy_limit(main_audit):
+    checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=100.0
+    )
+    floor = _trusted_floor(checkpoint)
+    approval.request_approval("write_note", {"path": "later.md"})
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointPolicyError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            checkpoint,
+            authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+            store_id=MAIN_STORE_ID,
+            trusted_floor=floor,
+            now=101.0,
+            max_age_seconds=10.0,
+            max_unanchored_suffix=0,
+        )
+
+    accepted = audit_checkpoint_integrity.verify_checkpoint_with_policy(
+        checkpoint,
+        authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+        store_id=MAIN_STORE_ID,
+        trusted_floor=floor,
+        now=101.0,
+        max_age_seconds=10.0,
+        max_unanchored_suffix=1,
+    )
+    assert accepted["unanchored_suffix"] == 1
+
+
+def test_main_checkpoint_rejects_restored_older_checkpoint(main_audit):
+    older = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=100.0
+    )
+    approval.request_approval("write_note", {"path": "newer.md"})
+    newer = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=101.0
+    )
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointRollbackError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            older,
+            authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+            store_id=MAIN_STORE_ID,
+            trusted_floor=_trusted_floor(newer),
+            now=102.0,
+            max_age_seconds=100.0,
+            max_unanchored_suffix=10,
+        )
+
+
+def test_main_checkpoint_rejects_same_head_with_older_publication_time(main_audit):
+    trusted = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=101.0
+    )
+    older_publication = dict(trusted)
+    older_publication["created_at"] = 100.0
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointRollbackError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            older_publication,
+            authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+            store_id=MAIN_STORE_ID,
+            trusted_floor=_trusted_floor(trusted),
+            now=102.0,
+            max_age_seconds=100.0,
+            max_unanchored_suffix=0,
+        )
+
+
+def test_main_checkpoint_rejects_future_publication_timestamp(main_audit):
+    checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=200.0
+    )
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointPolicyError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            checkpoint,
+            authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+            store_id=MAIN_STORE_ID,
+            trusted_floor=_trusted_floor(checkpoint),
+            now=199.0,
+            max_age_seconds=100.0,
+            max_unanchored_suffix=0,
+        )
+
+
+def test_missing_checkpoint_or_trusted_floor_requires_operator_recovery(main_audit):
+    checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=100.0
+    )
+    floor = _trusted_floor(checkpoint)
+
+    for candidate, trusted in ((None, floor), (checkpoint, None)):
+        with pytest.raises(
+            audit_checkpoint_integrity.AuditCheckpointRecoveryRequired
+        ):
+            audit_checkpoint_integrity.verify_checkpoint_with_policy(
+                candidate,
+                authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+                store_id=MAIN_STORE_ID,
+                trusted_floor=trusted,
+                now=101.0,
+                max_age_seconds=10.0,
+                max_unanchored_suffix=0,
+            )
+
+
+def test_policy_rejects_invalid_limits_and_wrong_floor_identity(main_audit):
+    checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.MAIN_AUTHORITY, MAIN_STORE_ID, created_at=100.0
+    )
+    floor = _trusted_floor(checkpoint)
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointPolicyError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            checkpoint,
+            authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+            store_id=MAIN_STORE_ID,
+            trusted_floor=floor,
+            now=101.0,
+            max_age_seconds=True,
+            max_unanchored_suffix=0,
+        )
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointPolicyError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            checkpoint,
+            authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+            store_id=MAIN_STORE_ID,
+            trusted_floor=floor,
+            now=101.0,
+            max_age_seconds=10.0,
+            max_unanchored_suffix=True,
+        )
+
+    wrong_floor = dict(floor, store_id="different-store")
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointIntegrityError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            checkpoint,
+            authority=audit_checkpoint_integrity.MAIN_AUTHORITY,
+            store_id=MAIN_STORE_ID,
+            trusted_floor=wrong_floor,
+            now=101.0,
+            max_age_seconds=10.0,
+            max_unanchored_suffix=0,
+        )
+
+
+def test_sandbox_checkpoint_freshness_and_suffix_policy(sandbox_audit):
+    checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+        SANDBOX_STORE_ID,
+        created_at=100.0,
+    )
+    floor = _trusted_floor(checkpoint)
+    sandbox_approval._append_audit(
+        "b" * 32, "request_created", "automation", {}, 124.0
+    )
+
+    accepted = audit_checkpoint_integrity.verify_checkpoint_with_policy(
+        checkpoint,
+        authority=audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+        store_id=SANDBOX_STORE_ID,
+        trusted_floor=floor,
+        now=110.0,
+        max_age_seconds=10.0,
+        max_unanchored_suffix=1,
+    )
+    assert accepted["policy_accepted"] is True
+    assert accepted["unanchored_suffix"] == 1
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointPolicyError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            checkpoint,
+            authority=audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+            store_id=SANDBOX_STORE_ID,
+            trusted_floor=floor,
+            now=110.0,
+            max_age_seconds=10.0,
+            max_unanchored_suffix=0,
+        )
+
+
+def test_sandbox_checkpoint_rejects_rollback_to_older_checkpoint(sandbox_audit):
+    older = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+        SANDBOX_STORE_ID,
+        created_at=100.0,
+    )
+    sandbox_approval._append_audit(
+        "b" * 32, "request_created", "automation", {}, 124.0
+    )
+    newer = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+        SANDBOX_STORE_ID,
+        created_at=101.0,
+    )
+
+    with pytest.raises(audit_checkpoint_integrity.AuditCheckpointRollbackError):
+        audit_checkpoint_integrity.verify_checkpoint_with_policy(
+            older,
+            authority=audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+            store_id=SANDBOX_STORE_ID,
+            trusted_floor=_trusted_floor(newer),
+            now=102.0,
+            max_age_seconds=100.0,
+            max_unanchored_suffix=10,
+        )
