@@ -222,6 +222,67 @@ def create_checkpoint_envelope(
         envelope, authority=authority, store_id=store_id
     )
 
+def _verify_checkpoint_set(
+    checkpoints: list[dict[str, Any] | bytes | str],
+    *,
+    authority: str,
+    store_id: str,
+) -> list[dict[str, Any]]:
+    """Verify multiple anchors against one locked audit-history snapshot."""
+    if not checkpoints:
+        raise AuditCheckpointIntegrityError("at least one checkpoint is required")
+    envelopes = [
+        parse_checkpoint(checkpoint, authority=authority, store_id=store_id)
+        if isinstance(checkpoint, (bytes, str))
+        else validate_checkpoint_envelope(
+            checkpoint, authority=authority, store_id=store_id
+        )
+        for checkpoint in checkpoints
+    ]
+
+    if authority == MAIN_AUTHORITY:
+        _require_existing_audit_file(approval._audit_file)
+        expected = [
+            {
+                "version": 1,
+                "sequence": envelope["sequence"],
+                "legacy_entries": envelope["legacy_entries"],
+                "head_hash": envelope["head_hash"],
+                "created_at": envelope["created_at"],
+            }
+            for envelope in envelopes
+        ]
+        result = approval.verify_audit_log(expected_checkpoints=expected)
+        current_sequence = result["chained_entries"]
+    else:
+        _require_existing_audit_file(
+            sandbox_approval._store_dir() / "audit.jsonl"
+        )
+        expected = [
+            {
+                "sequence": envelope["sequence"],
+                "head_hash": envelope["head_hash"],
+            }
+            for envelope in envelopes
+        ]
+        result = sandbox_approval.verify_audit_log(expected_checkpoints=expected)
+        current_sequence = result["events"]
+
+    return [
+        {
+            "valid": True,
+            "checkpoint_verified": True,
+            "authority": authority,
+            "store_id": store_id,
+            "checkpoint_id": envelope["checkpoint_id"],
+            "checkpoint_sequence": envelope["sequence"],
+            "current_sequence": current_sequence,
+            "unanchored_suffix": current_sequence - envelope["sequence"],
+        }
+        for envelope in envelopes
+    ]
+
+
 def verify_checkpoint(
     checkpoint: dict[str, Any] | bytes | str,
     *,
@@ -234,50 +295,9 @@ def verify_checkpoint(
     Events after that sequence are returned as an unanchored suffix; no
     freshness or maximum-suffix policy is imposed by this non-enforcing API.
     """
-    if isinstance(checkpoint, (bytes, str)):
-        envelope = parse_checkpoint(
-            checkpoint, authority=authority, store_id=store_id
-        )
-    else:
-        envelope = validate_checkpoint_envelope(
-            checkpoint, authority=authority, store_id=store_id
-        )
-
-    checkpoint_sequence = envelope["sequence"]
-    if authority == MAIN_AUTHORITY:
-        _require_existing_audit_file(approval._audit_file)
-        result = approval.verify_audit_log(
-            {
-                "version": 1,
-                "sequence": checkpoint_sequence,
-                "legacy_entries": envelope["legacy_entries"],
-                "head_hash": envelope["head_hash"],
-                "created_at": envelope["created_at"],
-            }
-        )
-        current_sequence = result["chained_entries"]
-    else:
-        _require_existing_audit_file(
-            sandbox_approval._store_dir() / "audit.jsonl"
-        )
-        result = sandbox_approval.verify_audit_log(
-            {
-                "sequence": checkpoint_sequence,
-                "head_hash": envelope["head_hash"],
-            }
-        )
-        current_sequence = result["events"]
-
-    return {
-        "valid": True,
-        "checkpoint_verified": True,
-        "authority": authority,
-        "store_id": store_id,
-        "checkpoint_id": envelope["checkpoint_id"],
-        "checkpoint_sequence": checkpoint_sequence,
-        "current_sequence": current_sequence,
-        "unanchored_suffix": current_sequence - checkpoint_sequence,
-    }
+    return _verify_checkpoint_set(
+        [checkpoint], authority=authority, store_id=store_id
+    )[0]
 
 class AuditCheckpointPolicyError(AuditCheckpointIntegrityError):
     """A valid checkpoint fails the explicitly supplied freshness policy."""
@@ -422,11 +442,8 @@ def verify_checkpoint_with_policy(
         "created_at": floor["created_at"],
         "checkpoint_id": floor["checkpoint_id"],
     }
-    floor_verification = verify_checkpoint(
-        floor_envelope, authority=authority, store_id=store_id
-    )
-    verification = verify_checkpoint(
-        envelope, authority=authority, store_id=store_id
+    floor_verification, verification = _verify_checkpoint_set(
+        [floor_envelope, envelope], authority=authority, store_id=store_id
     )
     age_seconds = now - envelope["created_at"]
     if age_seconds > max_age_seconds:
