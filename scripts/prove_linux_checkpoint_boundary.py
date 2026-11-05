@@ -73,13 +73,16 @@ def main():
         publisher = """
 import os,sys
 from pathlib import Path
-target=Path(sys.argv[1]); stage=sys.argv[2]; tmp=target.parent/'.publish.tmp'
+target=Path(sys.argv[1]); stage=sys.argv[2]; gid=int(sys.argv[3]); tmp=target.parent/'.publish.tmp'
 fd=os.open(tmp, os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600)
 with os.fdopen(fd,'w',encoding='utf-8') as f:
     f.write('NEW-CHECKPOINT\\n'); f.flush()
     if stage == 'before_file_fsync': os._exit(31)
     os.fsync(f.fileno())
     if stage == 'after_file_fsync_before_rename': os._exit(32)
+    os.fchown(f.fileno(), -1, gid)
+    os.fchmod(f.fileno(), 0o640)
+    os.fsync(f.fileno())
 os.replace(tmp,target)
 if stage == 'after_rename_before_directory_fsync': os._exit(33)
 dfd=os.open(target.parent,os.O_RDONLY|os.O_DIRECTORY)
@@ -92,13 +95,13 @@ finally: os.close(dfd)
             ("after_file_fsync_before_rename", old, 32),
             ("after_rename_before_directory_fsync", "NEW-CHECKPOINT\n", 33),
         ):
-            reset = run_as(op_user, "from pathlib import Path; import sys; Path(sys.argv[1]).write_text(sys.argv[2])", str(checkpoint), old)
+            reset = run_as(op_user, "from pathlib import Path; import sys; p=Path(sys.argv[1]); p.write_text(sys.argv[2]); (p.parent/'.publish.tmp').unlink(missing_ok=True)", str(checkpoint), old)
             if reset.returncode: raise AssertionError(f"operator reset failed: {reset.stderr}")
-            result = run_as(op_user, publisher, str(checkpoint), stage)
+            result = run_as(op_user, publisher, str(checkpoint), stage, str(grp.getgrnam(read_group).gr_gid))
             if result.returncode != exit_code: raise AssertionError(f"{stage}: unexpected exit {result.returncode}: {result.stderr}")
             if checkpoint.read_text(encoding="utf-8") != expected: raise AssertionError(f"{stage}: unexpected checkpoint state")
             print(f"PASS: interruption at {stage} leaves expected recoverable state")
-        publish_ok = run_as(op_user, publisher, str(checkpoint), "complete")
+        publish_ok = run_as(op_user, publisher, str(checkpoint), "complete", str(grp.getgrnam(read_group).gr_gid))
         if publish_ok.returncode: raise AssertionError(f"complete publication failed: {publish_ok.stderr}")
         st = checkpoint.stat()
         if st.st_uid != operator_uid or st.st_mode & 0o022: raise AssertionError("published ownership/mode changed")
