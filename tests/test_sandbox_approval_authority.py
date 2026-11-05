@@ -309,6 +309,7 @@ def test_denial_is_terminal_and_never_produces_signed_approval(authority, scope)
         )
 
 
+
 def test_http_api_authenticates_requester_and_approver(authority, scope):
     client = TestClient(app)
     body = {"scope": scope}
@@ -349,6 +350,7 @@ def test_http_api_authenticates_requester_and_approver(authority, scope):
     assert receipt.json()["claims"]["scope"] == scope
 
 
+
 def test_http_api_rejects_self_approval(authority, scope, monkeypatch):
     monkeypatch.setenv("AGENT_APPROVER_KEYS", f"automation={APPROVER_KEY}")
     client = TestClient(app)
@@ -363,6 +365,7 @@ def test_http_api_rejects_self_approval(authority, scope, monkeypatch):
         headers={"X-Approver-Key": APPROVER_KEY},
     )
     assert response.status_code == 403
+
 
 
 def test_http_consume_is_idempotent_and_scope_bound(authority, scope):
@@ -666,6 +669,7 @@ def test_duplicate_generated_approval_id_does_not_overwrite_existing(
     assert first_path.read_bytes() == original
 
 
+
 def test_http_deny_is_terminal_and_has_no_decision_receipt(authority, scope):
     client = TestClient(app)
     headers = {"X-API-Key": REQUESTER_KEY}
@@ -685,6 +689,7 @@ def test_http_deny_is_terminal_and_has_no_decision_receipt(authority, scope):
     assert evidence.status_code == 409
 
 
+
 def test_http_api_fails_closed_when_signing_configuration_is_missing(
     authority, scope, monkeypatch
 ):
@@ -697,6 +702,7 @@ def test_http_api_fails_closed_when_signing_configuration_is_missing(
     assert response.status_code == 503
 
 
+
 def test_http_api_applies_requester_rate_limit(authority, scope, monkeypatch):
     monkeypatch.setattr(auth, "check_rate_limit", lambda *_args, **_kwargs: False)
     response = TestClient(app).post(
@@ -705,6 +711,7 @@ def test_http_api_applies_requester_rate_limit(authority, scope, monkeypatch):
         headers={"X-API-Key": REQUESTER_KEY},
     )
     assert response.status_code == 429
+
 
 
 def test_http_api_rejects_extra_scope_fields(authority, scope):
@@ -733,6 +740,8 @@ def test_missing_crypto_library_disables_only_sandbox_authority(
     with pytest.raises(sandbox_approval.SandboxApprovalConfigurationError):
         _create(authority, scope)
 
+
+
 @pytest.mark.parametrize("decision", ["approve", "deny"])
 def test_http_approver_rate_limit_blocks_both_decision_routes(
     authority, scope, monkeypatch, decision
@@ -756,6 +765,7 @@ def test_http_approver_rate_limit_blocks_both_decision_routes(
     assert sandbox_approval.inspect(
         approval_id, requester="automation"
     )["status"] == "pending"
+
 
 
 def test_http_consume_rate_limit_blocks_before_authority_transition(
@@ -789,6 +799,7 @@ def test_http_consume_rate_limit_blocks_before_authority_transition(
     assert sandbox_approval.inspect(
         approval_id, requester="automation"
     )["status"] == "approved"
+
 
 
 def test_http_read_and_consume_routes_enforce_requester_ownership(
@@ -836,6 +847,7 @@ def test_http_read_and_consume_routes_enforce_requester_ownership(
     )["status"] == "approved"
 
 
+
 @pytest.mark.parametrize("decision", ["approve", "deny"])
 def test_http_decision_audit_failure_never_returns_success(
     authority, scope, monkeypatch, decision
@@ -866,6 +878,7 @@ def test_http_decision_audit_failure_never_returns_success(
         f"/v1/sandbox/approvals/{approval_id}/decision",
         headers={"X-API-Key": REQUESTER_KEY},
     ).status_code == 409
+
 
 
 def test_http_consume_audit_failure_is_operator_review_not_success(
@@ -910,6 +923,7 @@ def test_http_consume_audit_failure_is_operator_review_not_success(
         },
         headers=headers,
     ).status_code == 503
+
 
 def test_http_state_changing_routes_reject_wrong_credential_role(authority, scope):
     client = TestClient(app)
