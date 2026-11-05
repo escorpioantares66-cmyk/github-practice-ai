@@ -74,9 +74,9 @@ def _create(authority, scope, requester="automation"):
     )
 
 
-def _approve(created, approver="reviewer"):
+def _approve(created):
     return sandbox_approval.decide(
-        created["approval_id"], approver=approver, decision="approved"
+        created["approval_id"], approver_key=APPROVER_KEY, decision="approved"
     )
 
 
@@ -170,15 +170,34 @@ def test_request_scope_rejects_extra_fields_and_wrong_action(authority, scope):
         _create(authority, wrong_action)
 
 
-def test_self_approval_and_duplicate_decision_are_rejected(authority, scope):
+def test_self_approval_and_duplicate_decision_are_rejected(
+    authority, scope, monkeypatch
+):
     created = _create(authority, scope)
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "automation=self-approver-secret")
     with pytest.raises(sandbox_approval.SandboxApprovalForbidden):
         sandbox_approval.decide(
-            created["approval_id"], approver="automation", decision="approved"
+            created["approval_id"],
+            approver_key="self-approver-secret",
+            decision="approved",
         )
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={APPROVER_KEY}")
     _approve(created)
     with pytest.raises(sandbox_approval.SandboxApprovalConflict):
         _approve(created)
+
+
+def test_decision_service_rejects_asserted_identity_without_credential(
+    authority, scope
+):
+    created = _create(authority, scope)
+    with pytest.raises(sandbox_approval.SandboxApprovalForbidden):
+        sandbox_approval.decide(
+            created["approval_id"], approver_key="reviewer", decision="approved"
+        )
+    assert sandbox_approval.inspect(
+        created["approval_id"], requester="automation"
+    )["status"] == "pending"
 
 
 def test_scope_mismatch_cannot_consume_approval(authority, scope):
@@ -279,7 +298,7 @@ def test_requester_cannot_inspect_another_principals_approval(authority, scope):
 def test_denial_is_terminal_and_never_produces_signed_approval(authority, scope):
     created = _create(authority, scope)
     result = sandbox_approval.decide(
-        created["approval_id"], approver="reviewer", decision="denied"
+        created["approval_id"], approver_key=APPROVER_KEY, decision="denied"
     )
 
     assert result["status"] == "denied"
@@ -588,7 +607,7 @@ def test_audit_history_prevents_replay_after_approval_record_rollback(
 
 
 def test_audit_history_prevents_second_approval_after_record_rollback(
-    authority, scope
+    authority, scope, monkeypatch
 ):
     created = _create(authority, scope)
     _approve(created)
@@ -611,8 +630,14 @@ def test_audit_history_prevents_second_approval_after_record_rollback(
     ]
 
     with pytest.raises(sandbox_approval.SandboxApprovalConflict):
+        monkeypatch.setenv(
+            "AGENT_APPROVER_KEYS",
+            f"reviewer={APPROVER_KEY},second-reviewer=second-approver-secret",
+        )
         sandbox_approval.decide(
-            created["approval_id"], approver="second-reviewer", decision="approved"
+            created["approval_id"],
+            approver_key="second-approver-secret",
+            decision="approved",
         )
 
 

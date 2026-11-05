@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from . import auth
 from .secure_storage import (
     ensure_private_directory,
     open_private_file,
@@ -576,15 +577,21 @@ def create_request(
 def decide(
     approval_id: str,
     *,
-    approver: str,
+    approver_key: str,
     decision: str,
     now: float | None = None,
 ) -> dict[str, Any]:
-    """Record one authenticated, non-self approval or denial."""
+    """Record one decision after independently authenticating the approver."""
+    if not auth.verify_approver_key(approver_key):
+        raise SandboxApprovalForbidden("Configured approver credentials are required")
+    try:
+        approver = auth.approver_identity(approver_key)
+    except ValueError as exc:
+        raise SandboxApprovalForbidden(
+            "Configured approver identity is unavailable"
+        ) from exc
     if decision not in {"approved", "denied"}:
         raise SandboxApprovalError("Invalid decision")
-    if not isinstance(approver, str) or not approver.strip() or len(approver) > 128:
-        raise SandboxApprovalError("Invalid approver identity")
     path = _record_path(approval_id)
     with _locked(path):
         record = _load(approval_id)
