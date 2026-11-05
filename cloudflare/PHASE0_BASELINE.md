@@ -205,16 +205,6 @@ The GitHub repository connector permits remote source inspection and branch comm
 
 The combined commit-status endpoint returned no legacy status entries for the baseline SHA; this is not evidence that required GitHub Actions checks are absent or failed. Verify Actions check runs in GitHub before treating the baseline CI state as current.
 
-## Updated Phase 0 exit criteria
-
-- [x] Feature branch created from the exact baseline commit.
-- [x] Baseline configuration and CI contract recorded.
-- [x] Existing acceptance-test inventory recorded (92 tests).
-- [x] Static source inventory of filesystem, locking, SQLite, API-import, and crypto assumptions recorded.
-- [ ] Local baseline test/coverage and CI-equivalent results captured.
-- [ ] Phase 0 reviewed and explicitly closed before Phase 1 implementation begins.
-
-
 ## Baseline CI execution results
 
 The exact base commit was checked against the repository's existing GitHub Actions workflow. This is the CI run attached to the commit itself (not a run on the prototype branch):
