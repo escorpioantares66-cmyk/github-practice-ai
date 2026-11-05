@@ -566,6 +566,7 @@ def test_sandbox_checkpoint_verification_refuses_missing_audit_log(
     sandbox_approval._ensure_store()
     audit_path = store / "audit.jsonl"
     audit_path.write_bytes(b"")
+    audit_path.chmod(0o600)
     checkpoint = audit_checkpoint_integrity.create_checkpoint_envelope(
         audit_checkpoint_integrity.SANDBOX_AUTHORITY,
         SANDBOX_STORE_ID,
