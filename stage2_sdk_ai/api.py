@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from stage2_sdk_ai import auth, cost_guard, input_guard, output_guard
 from stage2_sdk_ai.agent_loop import UsageAccountingError, run_agent
 from stage2_sdk_ai.logging_setup import get_logger
+from stage2_sdk_ai.sandbox_approval_api import router as sandbox_approval_router
 
 if not hasattr(pydantic.BaseModel, "model_fields"):
     pass
@@ -65,6 +66,23 @@ class RequestBodyLimitMiddleware:
             if not auth.check_rate_limit(approver_identity, role="approver"):
                 await self._json_error(scope, send, 429, "Approver rate limit exceeded")
                 return
+
+        elif method == "POST" and path.startswith("/v1/sandbox/approvals"):
+            if path == "/v1/sandbox/approvals" or path.endswith("/consume"):
+                api_key = headers.get(b"x-api-key", b"").decode("latin-1")
+                if (
+                    not auth.verify_api_key(api_key)
+                    or auth.approval_requester_identity(api_key) is None
+                ):
+                    await self._json_error(scope, send, 401, "Invalid API key")
+                    return
+            elif path.endswith("/approve") or path.endswith("/deny"):
+                approver_key = headers.get(b"x-approver-key", b"").decode("latin-1")
+                if not auth.verify_approver_key(approver_key):
+                    await self._json_error(
+                        scope, send, 403, "Invalid or missing approver credentials"
+                    )
+                    return
 
         with self._counter_lock:
             at_capacity = self._active_buffers >= self.max_concurrent_buffers
@@ -540,3 +558,7 @@ def query_compat(*args, **kwargs):
     }
 
 query = query_compat
+
+
+# Keep the sandbox authorization API isolated from the legacy note-write routes.
+app.include_router(sandbox_approval_router)
