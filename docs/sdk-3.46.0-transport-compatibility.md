@@ -156,3 +156,47 @@ Required input to complete the comparison:
 Do not substitute a newly downloaded sdist for either original archive. The jiter comparison can be evaluated against its attested PyPI digest once the original hash is recovered. The pydantic-core comparison additionally remains limited by the absence of PyPI publisher provenance.
 
 Production remains pinned to `openai==1.40.0`; migration and candidate wheel installation remain **NO-GO**. No native rebuild, installation, transfer, production dependency change, or `main` modification was performed in this follow-up.
+
+
+### Recovered pip HTTP-cache source-archive evidence (2026-11-07)
+
+The user supplied a read-only inspection of two pip HTTP-cache bodies and their adjacent metadata sidecars. The body files were opened as gzip source archives, their package metadata was inspected, and their SHA-256 values were calculated locally. The metadata sidecars identify the cached HTTP responses as PyPI package sdists.
+
+| Field | `jiter==0.18.0` | `pydantic-core==2.50.4` |
+|---|---|---|
+| Cached body | `~/.cache/pip/http-v2/6/d/9/9/0/6d990fb872fe8e93c8a3cd73a32449ee295e16c34928f316c1ba0acf.body` | `~/.cache/pip/http-v2/1/7/a/8/f/17a8f20f977a0e87babeb735f8d6499a757500f66ff7622444c24a88.body` |
+| Body size / HTTP Content-Length | 234,470 bytes | 522,249 bytes |
+| Local cache modification time (EAT) | 2026-10-26 18:31:21.267988 +03:00 | 2026-11-05 20:04:17.356215 +03:00 |
+| HTTP Last-Modified | 2026-10-23 13:51:15 GMT | 2026-11-05 09:15:32 GMT |
+| HTTP Date | 2026-10-26 15:31:21 GMT | 2026-11-05 17:04:16 GMT |
+| PyPI response metadata | project `jiter`, version `0.18.0`, package type `sdist`, status 200 | project `pydantic-core`, version `2.50.4`, package type `sdist`, status 200 |
+| Recovered body SHA-256 | `a0ca63fd9450a212e4e658d4cfe0ab4977c4f9b0003c68828b843c65e27662ff` | `aead3b74b68396bf0feab5d57e050b730ded7df55853c1e048a87e00aaf033c6` |
+
+The sidecar Content-Length values agree with the respective body sizes. The sidecars also contain HTTP response headers including ETag, cache date, and PyPI-specific project/version/package-type headers. The inspected metadata preview does not expose the original request URL; the PyPI response headers and package metadata are evidence of the cached response identity, not a contemporaneous build-input manifest.
+
+#### Interpretation
+
+- **jiter 0.18.0:** The locally recovered cached body hash exactly matches the independently published PyPI sdist SHA-256 and the verified GitHub Actions publishing attestation already recorded above. This strongly supports the authenticity of this cached archive.
+- **pydantic-core 2.50.4:** The recovered body hash is now directly supported as the SHA-256 of a locally cached body whose sidecar identifies a successful PyPI response for the 2.50.4 sdist. This corrects the earlier statement that no local archive hash had been recovered. It does **not** establish an independently authenticated upstream checksum: PyPI marks this release **Without provenance**, and no publisher attestation has been identified.
+- Cache modification times closely track the response Date headers and help date the cache entries. They do not establish that either archive was consumed by the original wheel build.
+- The two recovered cache bodies are separate from the original build evidence. The recorded wheel-build command was:
+
+  ```bash
+  pip wheel --no-deps --no-cache-dir --no-binary=jiter,pydantic-core
+  ```
+
+  Because that command explicitly used `--no-cache-dir`, the pip HTTP-cache entries cannot be presumed to have supplied its build inputs. The build log records the sdist filenames but not their hashes, URLs, or exact upstream VCS identities. No contemporaneous record has been found tying either recovered cache body to the archive consumed by that build.
+
+#### Provenance status after cache recovery
+
+| Question | Result |
+|---|---|
+| Is the cached jiter body byte-identical to the attested PyPI sdist? | **YES** — exact SHA-256 match |
+| Does the cached pydantic-core body's sidecar identify a PyPI 2.50.4 sdist response? | **YES** |
+| Is the pydantic-core cached body independently publisher-attested? | **NO** — PyPI reports no provenance |
+| Are either cached body proven to be the original Termux wheel-build input? | **NO** — original command used `--no-cache-dir`; no build-time hash linkage |
+| Are the API 24 wheels source-proven or established equivalent to PR #42 outputs? | **NO** — unchanged; their embedded extension hashes differ from the independently attested PR #42 reference hashes |
+
+The earlier section's **ORIGINAL ARCHIVE COMPARISON: NOT PERFORMED** remains correct. The new cache findings are additional local provenance evidence; they do not turn the original build-input comparison into PASS or FAIL. Do not relabel either cache body as the original build input, and do not use the pydantic-core hash as an independently authenticated PyPI checksum.
+
+No source archive was newly downloaded, no package was installed, and no native build or device mutation was performed for this update. Production remains pinned to `openai==1.40.0`; the migration and candidate-wheel installation recommendation remains **NO-GO**.
