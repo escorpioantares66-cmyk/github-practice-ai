@@ -64,11 +64,11 @@ No test makes a live OpenAI API call or uses a billable provider request.
 |---|---|---|---|
 | Python | Project supports >=3.9 | SDK requires >=3.10 | **Compatibility regression** for Python 3.9 |
 | HTTP transport | `httpx==0.28.1` and SDK 1.40.0 | `httpx2>=2.12,<3`; legacy `httpx` is no longer installed by the SDK | **Material migration**; custom transports and integrations must use HTTPX2 |
-| Jiter | Project `jiter>=0.4,<1` | SDK `jiter>=0.16,<1` | Higher native floor; user's separate Jiter 0.18.0 validation is encouraging but not a complete stack validation |
-| AnyIO | Project `anyio>=4.0` | SDK `anyio>=4.10,<5` | Broad range admits vulnerable releases; resolve and audit exact version |
+| Jiter | Project `jiter>=0.4,<1` | SDK `jiter>=0.16,<1` | Higher native floor; candidate CI resolved `jiter==0.19.0` on all three matrix runners; the prior Termux 0.18.0 validation remains separate historical evidence |
+| AnyIO | Project `anyio>=4.0` | SDK `anyio>=4.10,<5` | Candidate CI resolved `anyio==4.16.0` (above the reviewed fixed boundary); SDK metadata still permits earlier vulnerable versions unless the deployment resolver constrains it |
 | Pydantic | Project `pydantic>=2.12` | SDK `pydantic>=1.10.13,<3` with exclusions for early 2.x | Wider SDK compatibility range; project constraint currently controls its own resolver |
-| typing-extensions | Not explicitly direct-pinned by project | SDK `typing-extensions>=4.14,<5` | New runtime floor; capture exact resolved version |
-| httpcore2 | Not present in baseline SDK transport graph | Transitive HTTPX2 transport dependency | Capture exact version from candidate freeze and audit independently |
+| typing-extensions | Not explicitly direct-pinned by project | SDK `typing-extensions>=4.14,<5` | Candidate CI resolved `typing-extensions==4.16.0`; no finding was reported by the CI `pip-audit` scan |
+| httpcore2 | Not present in baseline SDK transport graph | Transitive HTTPX2 transport dependency | Candidate CI resolved `httpcore2==2.16.0`, above the reviewed 2.10.0 fixed floor |
 
 The CI artifacts show the same resolved candidate stack on all three Python versions. The candidate workflow's `pip check` step succeeded on each runner.
 
