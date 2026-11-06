@@ -1,4 +1,4 @@
-"""Network-boundary tests for the isolated OpenAI SDK 3.46.0 transport stack.
+""""Network-boundary tests for the isolated OpenAI SDK 3.46.0 transport stack.
 
 All servers bind to loopback. No public network, provider credential, or billable
 OpenAI request is used. The candidate CI job installs HTTPX2 and cryptography.
@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import select
+import socket
+import socketserver
 import ssl
 import threading
 import time
@@ -117,10 +120,89 @@ def _start_server(handler, *, tls_context: ssl.SSLContext | None = None):
     return server, thread, url
 
 
-def _stop_server(server: ThreadingHTTPServer, thread: threading.Thread) -> None:
+def _stop_server(server, thread: threading.Thread) -> None:
     server.shutdown()
     server.server_close()
     thread.join(timeout=2)
+
+
+def _start_connect_proxy():
+    """Start a loopback-only HTTP CONNECT proxy with a bidirectional tunnel."""
+    seen: list[str] = []
+
+    class ConnectHandler(socketserver.BaseRequestHandler):
+        def handle(self) -> None:
+            self.request.settimeout(3)
+            reader = self.request.makefile("rb")
+            request_line = reader.readline().decode("ascii", errors="replace").strip()
+            parts = request_line.split()
+            if len(parts) != 3 or parts[0] != "CONNECT":
+                self.request.sendall(b"HTTP/1.1 405 Method Not Allowed\r\n\r\n")
+                return
+
+            authority = parts[1]
+            seen.append(authority)
+            while reader.readline() not in (b"\r\n", b"\n", b""):
+                pass
+            host, separator, port_text = authority.rpartition(":")
+            if not separator or host != "127.0.0.1":
+                self.request.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+                return
+
+            try:
+                upstream = socket.create_connection((host, int(port_text)), timeout=3)
+            except (OSError, ValueError):
+                self.request.sendall(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+                return
+
+            with upstream:
+                self.request.sendall(
+                    b"HTTP/1.1 200 Connection Established\r\n\r\n"
+                )
+                self.request.setblocking(False)
+                upstream.setblocking(False)
+                sockets = (self.request, upstream)
+                while True:
+                    readable, _, exceptional = select.select(sockets, (), sockets, 3)
+                    if exceptional or not readable:
+                        return
+                    for source in readable:
+                        destination = upstream if source is self.request else self.request
+                        try:
+                            data = source.recv(65536)
+                        except OSError:
+                            return
+                        if not data:
+                            return
+                        try:
+                            destination.sendall(data)
+                        except OSError:
+                            return
+
+    class ConnectServer(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+    server = ConnectServer(("127.0.0.1", 0), ConnectHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    proxy_url = f"http://127.0.0.1:{server.server_address[1]}"
+    return server, thread, proxy_url, seen
+
+
+def _exception_chain(error: BaseException):
+    """Yield wrapped causes and contexts without looping on repeated exceptions."""
+    pending = [error]
+    visited: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in visited:
+            continue
+        visited.add(id(current))
+        yield current
+        for nested in (current.__cause__, current.__context__):
+            if nested is not None:
+                pending.append(nested)
 
 
 def test_sdk_accepts_explicit_custom_ca_context_for_https(tmp_path) -> None:
@@ -178,8 +260,13 @@ def test_sdk_honors_ssl_cert_file_and_trust_env_false_disables_it(
             max_retries=0,
             http_client=DefaultHttpx2Client(trust_env=False, timeout=3.0),
         ) as client:
-            with pytest.raises(APIConnectionError):
+            with pytest.raises(APIConnectionError) as exc_info:
                 client.models.list()
+
+        chain = tuple(_exception_chain(exc_info.value))
+        assert any(
+            isinstance(error, ssl.SSLCertVerificationError) for error in chain
+        ) or any("CERTIFICATE_VERIFY_FAILED" in str(error) for error in chain)
         assert seen == ["/v1/models"]
     finally:
         _stop_server(server, thread)
@@ -223,15 +310,60 @@ def test_sdk_respects_environment_proxy_and_trust_env_false_bypasses_it(
         _stop_server(target, target_thread)
 
 
-def test_httpx2_enforces_read_timeout_against_slow_loopback_server() -> None:
+def test_sdk_uses_https_connect_proxy_and_validates_target_certificate(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cert_path, key_path = _write_loopback_certificate(tmp_path)
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(cert_path, key_path)
+    target_seen: list[str] = []
+    target, target_thread, target_url = _start_server(
+        _handler_for(target_seen), tls_context=server_context
+    )
+    proxy, proxy_thread, proxy_url, proxy_seen = _start_connect_proxy()
+
+    monkeypatch.setenv("SSL_CERT_FILE", cert_path)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", proxy_url)
+    monkeypatch.setenv("https_proxy", proxy_url)
+    for name in ("HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    for name in ("NO_PROXY", "no_proxy"):
+        monkeypatch.setenv(name, "")
+
+    try:
+        with OpenAI(
+            api_key=API_KEY, base_url=target_url, max_retries=0, timeout=3.0
+        ) as client:
+            assert client.models.list().data == []
+
+        expected_authority = f"127.0.0.1:{target.server_port}"
+        assert proxy_seen == [expected_authority]
+        assert target_seen == ["/v1/models"]
+    finally:
+        _stop_server(proxy, proxy_thread)
+        _stop_server(target, target_thread)
+
+
+def test_sdk_maps_read_timeout_to_api_connection_error() -> None:
     seen: list[str] = []
     server, thread, base_url = _start_server(
-        _handler_for(seen, delay=0.25)
+        _handler_for(seen, delay=0.3)
     )
     try:
-        with httpx2.Client(timeout=0.05, trust_env=False) as client:
-            with pytest.raises(httpx2.ReadTimeout):
-                client.get(f"{base_url}/slow")
+        with OpenAI(
+            api_key=API_KEY,
+            base_url=base_url,
+            max_retries=0,
+            timeout=0.05,
+            http_client=DefaultHttpx2Client(trust_env=False, timeout=0.05),
+        ) as client:
+            with pytest.raises(APIConnectionError) as exc_info:
+                client.models.list()
+
+        chain = tuple(_exception_chain(exc_info.value))
+        assert any(isinstance(error, httpx2.ReadTimeout) for error in chain)
+        assert seen == ["/v1/models"]
     finally:
         _stop_server(server, thread)
 
@@ -249,5 +381,3 @@ def test_sdk_maps_transport_connection_failure_to_api_connection_error() -> None
     ) as client:
         with pytest.raises(APIConnectionError):
             client.models.list()
-
-
