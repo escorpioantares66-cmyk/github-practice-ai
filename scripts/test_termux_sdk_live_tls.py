@@ -22,17 +22,22 @@ def main() -> None:
     system_ca = ssl.get_default_verify_paths().cafile
     certifi_ca = certifi.where()
     url = os.environ.get("TERMUX_TLS_TEST_URL", "https://example.com/")
+    evidence: list[str] = []
 
-    print("=== Termux SDK transport evidence ===")
-    print(f"Python: {platform.python_version()}")
-    print(f"Platform: {sys.platform} / {platform.machine()} / {sysconfig.get_platform()}")
-    print(f"OpenSSL: {ssl.OPENSSL_VERSION}")
-    print(f"OpenAI SDK: {openai.__version__}")
-    print(f"HTTPX2: {version('httpx2')}")
-    print(f"System CA bundle: {system_ca}")
-    print(f"Certifi CA bundle: {certifi_ca}")
-    print(f"Direct HTTPS probe URL: {url}")
-    print("Proxy environment: bypassed (trust_env=False)")
+    def record(line: str) -> None:
+        print(line)
+        evidence.append(line)
+
+    record("=== Termux SDK transport evidence ===")
+    record(f"Python: {platform.python_version()}")
+    record(f"Platform: {sys.platform} / {platform.machine()} / {sysconfig.get_platform()}")
+    record(f"OpenSSL: {ssl.OPENSSL_VERSION}")
+    record(f"OpenAI SDK: {openai.__version__}")
+    record(f"HTTPX2: {version('httpx2')}")
+    record(f"Termux OpenSSL CA bundle: {system_ca}")
+    record(f"Certifi CA bundle: {certifi_ca}")
+    record(f"Direct HTTPS probe URL: {url}")
+    record("Proxy environment: bypassed (trust_env=False)")
 
     bundles = (("Termux OpenSSL", system_ca), ("Certifi", certifi_ca))
     for label, ca_path in bundles:
@@ -46,9 +51,17 @@ def main() -> None:
             follow_redirects=True,
         ) as client:
             response = client.get(url)
-        print(f"{label} CA: PASS (HTTP {response.status_code})")
+        record(f"{label} CA: PASS (HTTP {response.status_code})")
 
-    print("Both CA bundles completed direct HTTPS with certificate verification.")
+    record("Both CA bundles completed direct HTTPS with certificate verification.")
+    evidence_path = Path(
+        os.environ.get(
+            "TERMUX_EVIDENCE_FILE",
+            "termux-sdk-3.46.0-termux-evidence.txt",
+        )
+    )
+    evidence_path.write_text("\n".join(evidence) + "\n", encoding="utf-8")
+    print(f"Evidence report written: {evidence_path.resolve()}")
 
 
 if __name__ == "__main__":
