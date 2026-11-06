@@ -1,7 +1,7 @@
 # OpenAI Python SDK 3.46.0 application assessment
 
 **Assessment snapshot:** 2026-11-07  
-**CI evidence run:** 2026-11-06 (PR #46 head `bad2d86dcc2d62d1b0b1c8cd79dbe180240e801b`)  
+**CI evidence run:** 2026-11-06 (PR #46 head `0d070985074f9ead813bca315a03dcd5177aec51`)  
 **Candidate:** `openai==3.46.0`  
 **Production baseline:** `openai==1.40.0`  
 **Decision:** **NO-GO for production migration; continue isolated evaluation.**  
@@ -51,10 +51,10 @@ No test makes a live OpenAI API call or uses a billable provider request.
 
 - PR #45, merged as [`b3ee3624309efee0e1e993a4064c21d8a56bb218`](https://github.com/escorpioantares66-cmyk/github-practice-ai/commit/b3ee3624309efee0e1e993a4064c21d8a56bb218), added lifecycle fixes, provider-error propagation, and real SDK transport/API integration tests. The PR was reported green before merge.
 - PR #45's description records a prior Termux CPython 3.14.8 smoke test of 13 tests. This is historical device evidence, not a fresh run performed by this assessment.
-- **Fresh CI result:** workflow run [#42293189952](https://github.com/escorpioantares66-cmyk/github-practice-ai/actions/runs/42293189952) completed successfully. All three SDK transport matrix jobs completed successfully; the Python 3.15 matrix entry is explicitly experimental (`continue-on-error: true`). The separate `ci-hardened-v1.1` and Linux checkpoint-boundary workflow runs also completed successfully.
-- **Python 3.13.18:** `17 passed, 3 warnings in 1.50s`; `pip check` passed; `pip-audit` exit code `0`, with no vulnerabilities reported across 36 installed distributions.
+- **Fresh CI result:** workflow run [#42295660361](https://github.com/escorpioantares66-cmyk/github-practice-ai/actions/runs/42295660361) completed successfully. All three SDK transport matrix jobs and all four regular `build` jobs (Python 3.11–3.14) completed successfully. The Python 3.15 matrix entry is explicitly experimental (`continue-on-error: true`). The separate Linux checkpoint-boundary workflow [#42295660077](https://github.com/escorpioantares66-cmyk/github-practice-ai/actions/runs/42295660077) also completed successfully.
+- **Python 3.13.18:** `17 passed, 3 warnings in 1.70s`; `pip check` passed; `pip-audit` exit code `0`, with no vulnerabilities reported across 36 installed distributions.
 - **Python 3.14.10:** `17 passed, 3 warnings in 1.63s`; `pip check` passed; `pip-audit` exit code `0`, with no vulnerabilities reported across 36 installed distributions.
-- **Python 3.15.2 (experimental):** `17 passed, 3 warnings in 1.47s`; `pip check` passed; `pip-audit` exit code `0`, with no vulnerabilities reported across 36 installed distributions.
+- **Python 3.15.2 (experimental):** `17 passed, 3 warnings in 1.68s`; `pip check` passed; `pip-audit` exit code `0`, with no vulnerabilities reported across 36 installed distributions.
 - Each artifact also contains the exact `pip freeze --all`, environment metadata, JSON audit output, and complete pytest output. The warning summary includes Pydantic class-based `Config` deprecations; the logs also emit a pytest-asyncio fixture-loop-scope deprecation notice. These are warnings, not test failures, and should be cleaned up before relying on the candidate stack long term.
 - These are GitHub-hosted Linux x86_64 results. They do not replace a fresh Termux CPython 3.14 device test. PR #45's earlier Termux CPython 3.14.8 smoke result remains historical evidence only.
 
@@ -136,13 +136,13 @@ The CI job additionally runs `scripts/audit_sdk_candidate_env.sh`. It records:
 - a `pip-audit` JSON report scanned against the candidate environment from a separate temporary audit-tool virtual environment;
 - the audit exit status.
 
-The evidence is stored as three artifacts attached to [workflow run #42293189952](https://github.com/escorpioantares66-cmyk/github-practice-ai/actions/runs/42293189952):
+The evidence is stored as three artifacts attached to [workflow run #42295660361](https://github.com/escorpioantares66-cmyk/github-practice-ai/actions/runs/42295660361):
 
 | Runner | Artifact name | Artifact ID | SHA-256 digest |
 |---|---|---:|---|
-| Python 3.13.18 | `sdk-3.46.0-evidence-python-3.13` | `13540338170` | `8afaf7221dac467f3db5fee1f5b8fc6ed02f852f566a92fedaf075855d211697` |
-| Python 3.14.10 | `sdk-3.46.0-evidence-python-3.14` | `13540387560` | `cbc5aa06421d47bc40f60044a8a4a0ecb7a9cf280f0aeb1499d3758e077ca7bf` |
-| Python 3.15.2 (experimental) | `sdk-3.46.0-evidence-python-3.15` | `13540158581` | `d9eccf6819351bfff9e5a0c11c18f96a68770094c517228851d19e5502fd6ea2` |
+| Python 3.13.18 | `sdk-3.46.0-evidence-python-3.13` | `13541287151` | `22737d0a055aee714647777ec7d1e6bb0c95379e5618c542950ccf55e6eadcac` |
+| Python 3.14.10 | `sdk-3.46.0-evidence-python-3.14` | `13541807042` | `becfe38f496fdf7dec739f653d19821c515caba9d2f38481847193632b04e272` |
+| Python 3.15.2 (experimental) | `sdk-3.46.0-evidence-python-3.15` | `13540714960` | `204a8b212ec9e129f940006cdbd7f98eeb9cb4aa4b4fbb47bbde4717e555ed4d` |
 
 GitHub reported all three artifacts unexpired at review time, with retention through 2026-12-06. Use the artifact files—not the dependency specifiers alone—as the immutable evidence for this run. The Python 3.15 result is informational/experimental and is not a required compatibility gate.
 
