@@ -78,7 +78,7 @@ This section records the read-only provenance follow-up for the locally generate
 | Package | Upstream source identity/reference | Published sdist SHA-256 | Publisher provenance |
 |---|---|---|---|
 | `jiter==0.18.0` | `pydantic/jiter`, commit `fc2da0bd1fb699a6c4e9641e9e1c06fa6d5d93e8` | `a0ca63fd9450a212e4e658d4cfe0ab4977c4f9b0003c68828b843c65e27662ff` | PyPI displays a verified GitHub Actions publishing attestation for this sdist and commit. |
-| `pydantic-core==2.50.4` | PR #42 reference: `pydantic/pydantic`, tag `core-v2.50.4`, commit `ea492e04654ab7f7a1f9287ea912419452ead4dd` | `aead3b74b68396bf0feab5d57e050b730ded7df55853c1e048a87e00aaf033c6` | PyPI lists the 2.50.4 sdist as **Without provenance**. The checksum is a PyPI file-integrity reference, not a signed source-to-build attestation. |
+| `pydantic-core==2.50.4` | PR #42 reference: `pydantic/pydantic`, tag `core-v2.50.4`, commit `ea492e04654ab7f7a1f9287ea912419452ead4dd` | **Not established in this investigation** | PyPI lists the 2.50.4 sdist as **Without provenance**. The exact sdist SHA-256 has not been independently extracted from the release-file metadata in this investigation. |
 
 Public release references:
 - jiter: https://pypi.org/project/jiter/0.18.0/
@@ -136,3 +136,23 @@ A wheelhouse manifest proves consistency with the recorded wheel hashes, not sou
 To close the archive comparison without rebuilding or installing anything, recover the exact original source archives from an independently retained build artifact or trusted local backup, then calculate SHA-256 and compare them with the PyPI references above. Do not substitute newly downloaded archives as proof of what the earlier build consumed.
 
 The production pin remains `openai==1.40.0`. No production dependency, lockfile, application runtime, or `main` branch change is part of this assessment.
+
+
+### Follow-up verification and correction (2026-11-07)
+
+A fresh review of the PyPI release page reconfirmed:
+- jiter 0.18.0's sdist SHA-256 and its PyPI-verified GitHub Actions publishing attestation;
+- pydantic-core 2.50.4's sdist is marked **Without provenance**.
+
+The PyPI page content retrieved for pydantic-core in this review did not expose a source-archive SHA-256. Accordingly, the earlier value `aead3b74b68396bf0feab5d57e050b730ded7df55853c1e048a87e00aaf033c6` is withdrawn from this report and must not be used as an authoritative checksum. No pydantic-core upstream sdist checksum is asserted here.
+
+**Original archive comparison outcome: NOT PERFORMED.** No recovered SHA-256 values for the exact original Termux-consumed source archives were supplied or found in the currently available PR evidence. The previously reported Termux searches found neither archive in the home directory nor in pip's listed cache contents. Therefore there is no valid basis to report either source comparison as PASS or FAIL.
+
+Required input to complete the comparison:
+- SHA-256 of the exact original `jiter-0.18.0.tar.gz` consumed by the Termux build;
+- SHA-256 of the exact original `pydantic_core-2.50.4.tar.gz` consumed by the Termux build;
+- evidence tying each hash to the original build inputs (for example, preserved build artifact/manifest or contemporaneous build record).
+
+Do not substitute a newly downloaded sdist for either original archive. The jiter comparison can be evaluated against its attested PyPI digest once the original hash is recovered. The pydantic-core comparison additionally remains limited by the absence of PyPI publisher provenance.
+
+Production remains pinned to `openai==1.40.0`; migration and candidate wheel installation remain **NO-GO**. No native rebuild, installation, transfer, production dependency change, or `main` modification was performed in this follow-up.
