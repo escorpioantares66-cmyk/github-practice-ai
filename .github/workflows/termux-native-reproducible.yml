@@ -1,0 +1,300 @@
+name: Termux native dependency reproducibility
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths:
+      - ".github/workflows/termux-native-reproducible.yml"
+      - "packaging/termux/python-jiter/**"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  jiter-change-filter:
+    name: Decide whether this commit needs a jiter rebuild
+    runs-on: ubuntu-24.04
+    outputs:
+      should_build: ${{ steps.detect.outputs.should_build }}
+    steps:
+      - name: Inspect files changed by the current PR head commit
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          test -n "$PR_NUMBER"
+          # Inspect every file changed by the PR, not just the latest commit.
+          # Otherwise a docs-only follow-up could skip a rebuild after a recipe
+          # change (or failed native build) earlier in the same PR.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+            --jq '.[].filename' > changed-files.txt
+
+          if grep -Eq '^(packaging/termux/python-jiter/|\.github/workflows/termux-native-reproducible\.yml$)' changed-files.txt; then
+            echo "Current commit changes the jiter recipe/workflow; enabling independent builds."
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Current commit does not change jiter build inputs; skipping native jiter rebuild."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  pydantic-core-source-identity:
+    name: Verify official pydantic-core 2.50.4 source identity
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Check out official pydantic source tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: pydantic/pydantic
+          ref: core-v2.50.4
+          path: pydantic-source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Assert immutable upstream commit identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="ea492e04654ab7f7a1f9287ea912419452ead4dd"
+          checked_out="$(git -C pydantic-source rev-parse HEAD)"
+          tagged_commit="$(git -C pydantic-source rev-parse 'refs/tags/core-v2.50.4^{commit}')"
+          printf 'expected=%s\\nchecked_out=%s\\ntag_commit=%s\\n' "$expected" "$checked_out" "$tagged_commit"
+          test "$checked_out" = "$expected"
+          test "$tagged_commit" = "$expected"
+
+      - name: Verify exact version, jiter dependency, and lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import pathlib
+          import tomllib
+
+          root = pathlib.Path("pydantic-source/pydantic-core")
+          cargo = tomllib.loads((root / "Cargo.toml").read_text())
+          lock = tomllib.loads((root / "Cargo.lock").read_text())
+          pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+
+          assert cargo["package"]["version"] == "2.50.4"
+          assert cargo["dependencies"]["jiter"]["version"] == "0.18.0"
+          jiter = [item for item in lock["package"] if item["name"] == "jiter"]
+          assert len(jiter) == 1 and jiter[0]["version"] == "0.18.0"
+          requires = pyproject["build-system"]["requires"]
+          assert any(item.startswith("maturin>=1.16.0,<2") for item in requires)
+
+          print("pydantic-core version:", cargo["package"]["version"])
+          print("Cargo.toml jiter:", cargo["dependencies"]["jiter"]["version"])
+          print("Cargo.lock jiter:", jiter[0]["version"])
+          print("build backend:", ", ".join(requires))
+          PY
+          {
+            echo "repository=https://github.com/pydantic/pydantic"
+            echo "tag=core-v2.50.4"
+            echo "commit=$(git -C pydantic-source rev-parse HEAD)"
+            echo "cargo_toml_blob=$(git -C pydantic-source rev-parse HEAD:pydantic-core/Cargo.toml)"
+            echo "cargo_lock_blob=$(git -C pydantic-source rev-parse HEAD:pydantic-core/Cargo.lock)"
+            echo "pyproject_blob=$(git -C pydantic-source rev-parse HEAD:pydantic-core/pyproject.toml)"
+            echo "declared_version=2.50.4"
+            echo "jiter_version=0.18.0"
+            echo "pypi_provenance=absent; official_git_tag_is_source_identity"
+          } > pydantic-core-2.50.4-source-identity.txt
+          cat pydantic-core-2.50.4-source-identity.txt
+
+      - name: Preserve source identity record
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: pydantic-core-2.50.4-source-identity
+          path: pydantic-core-2.50.4-source-identity.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  build-jiter:
+    name: Independent Termux build ${{ matrix.replica }}
+    needs: jiter-change-filter
+    if: needs.jiter-change-filter.outputs.should_build == 'true'
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        replica: [1, 2]
+    steps:
+      - name: Check out investigation branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out pinned official Termux build system
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: termux/termux-packages
+          ref: 74a426129b7e868858a7b2329b9a12a5da0c5250
+          path: termux-packages
+          persist-credentials: false
+
+      - name: Verify jiter source archive hash
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://files.pythonhosted.org/packages/source/j/jiter/jiter-0.18.0.tar.gz \
+            --output jiter-0.18.0.tar.gz
+          echo "a0ca63fd9450a212e4e658d4cfe0ab4977c4f9b0003c68828b843c65e27662ff  jiter-0.18.0.tar.gz" | sha256sum --check
+
+      - name: Validate Termux recipe shell syntax
+        shell: bash
+        run: bash -n packaging/termux/python-jiter/build.sh
+
+      - name: Install exact recipe into official Termux build tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e termux-packages/packages/python-jiter
+          mkdir -p termux-packages/packages/python-jiter
+          install -m 0644 packaging/termux/python-jiter/build.sh \
+            termux-packages/packages/python-jiter/build.sh
+          chmod +x termux-packages/packages/python-jiter/build.sh
+
+      - name: Build aarch64 package in pinned official builder
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd termux-packages
+          TERMUX_BUILDER_IMAGE_NAME="ghcr.io/termux/package-builder@sha256:44999857244619e25bc8e3427904a16d36cc0c0e087704af039e5bdf94814ac9" \
+            ./scripts/run-docker.sh -d ./build-package.sh -I -C -a aarch64 python-jiter
+
+      - name: Inspect package and native ELF
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t packages < <(find termux-packages -type f \
+            -name 'python-jiter_0.18.0_aarch64.deb' -not -path '*/.git/*' -print)
+          test "${#packages[@]}" -eq 1
+          package="${packages[0]}"
+
+          test "$(dpkg-deb -f "$package" Package)" = "python-jiter"
+          test "$(dpkg-deb -f "$package" Version)" = "0.18.0"
+          test "$(dpkg-deb -f "$package" Architecture)" = "aarch64"
+
+          mkdir extracted
+          dpkg-deb --extract "$package" extracted
+          mapfile -t extensions < <(find extracted -type f \
+            -path '*/lib/python3.14/site-packages/jiter*.so' -print)
+          test "${#extensions[@]}" -eq 1
+          extension="${extensions[0]}"
+
+          readelf -h "$extension" | grep -F "AArch64"
+          needed_count="$(readelf -d "$extension" | grep -Fc 'Shared library: [libpython3.14.so]')"
+          test "$needed_count" -eq 1
+          readelf -d "$extension" | grep -F 'Library runpath: [/data/data/com.termux/files/usr/lib]'
+          if readelf --version-info "$extension" | grep -q "GLIBC_"; then
+            echo "Unexpected GLIBC symbol version requirement in Android ELF" >&2
+            exit 1
+          fi
+
+          mkdir results
+          cp "$package" results/python-jiter_0.18.0_aarch64.deb
+          cp "$extension" results/jiter-0.18.0-aarch64.so
+          {
+            echo "replica=${{ matrix.replica }}"
+            echo "jiter_version=0.18.0"
+            echo "jiter_upstream_repository=https://github.com/pydantic/jiter"
+            echo "jiter_upstream_commit=fc2da0bd1fb699a6c4e9641e9e1c06fa6d5d93e8"
+            echo "jiter_sdist_sha256=a0ca63fd9450a212e4e658d4cfe0ab4977c4f9b0003c68828b843c65e27662ff"
+            echo "termux_packages_commit=74a426129b7e868858a7b2329b9a12a5da0c5250"
+            echo "termux_builder_image=ghcr.io/termux/package-builder@sha256:44999857244619e25bc8e3427904a16d36cc0c0e087704af039e5bdf94814ac9"
+            echo "termux_rust_package=1.99.1"
+            echo "termux_maturin_package=1.16.0"
+            echo "termux_ndk_major=30"
+            echo "python_abi=cp314"
+            echo "android_arch=aarch64"
+            echo "package_sha256=$(sha256sum results/python-jiter_0.18.0_aarch64.deb | awk '{print $1}')"
+            echo "extension_sha256=$(sha256sum results/jiter-0.18.0-aarch64.so | awk '{print $1}')"
+            echo "extension_needed_libraries:"
+            readelf -d results/jiter-0.18.0-aarch64.so | grep NEEDED
+          } > results/build-manifest.txt
+          cat results/build-manifest.txt
+
+      - name: Upload independent build result
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: jiter-aarch64-replica-${{ matrix.replica }}
+          path: results/
+          if-no-files-found: error
+          retention-days: 90
+
+  compare-and-attest:
+    name: Compare independent artifacts and attest verified output
+    needs:
+      - jiter-change-filter
+      - pydantic-core-source-identity
+      - build-jiter
+    if: needs.jiter-change-filter.outputs.should_build == 'true'
+    runs-on: ubuntu-26.04
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Download independent build results
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name jiter-aarch64-replica-1 --dir replica-1
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name jiter-aarch64-replica-2 --dir replica-2
+
+      - name: Require byte-for-byte reproducibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp replica-1/python-jiter_0.18.0_aarch64.deb \
+            replica-2/python-jiter_0.18.0_aarch64.deb
+          cmp replica-1/jiter-0.18.0-aarch64.so \
+            replica-2/jiter-0.18.0-aarch64.so
+          test "$(awk -F= '/^package_sha256=/{print $2}' replica-1/build-manifest.txt)" = \
+               "$(awk -F= '/^package_sha256=/{print $2}' replica-2/build-manifest.txt)"
+          test "$(awk -F= '/^extension_sha256=/{print $2}' replica-1/build-manifest.txt)" = \
+               "$(awk -F= '/^extension_sha256=/{print $2}' replica-2/build-manifest.txt)"
+          echo "Both independent Termux packages and native extensions are byte-identical."
+
+      - name: Prepare verified artifact bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir verified
+          cp replica-1/python-jiter_0.18.0_aarch64.deb verified/
+          cp replica-1/jiter-0.18.0-aarch64.so verified/
+          cp replica-1/build-manifest.txt verified/
+          (cd verified && sha256sum build-manifest.txt jiter-0.18.0-aarch64.so python-jiter_0.18.0_aarch64.deb > SHA256SUMS)
+
+      - name: Attest Termux package build
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: verified/python-jiter_0.18.0_aarch64.deb
+
+      - name: Attest native extension build
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: verified/jiter-0.18.0-aarch64.so
+
+      - name: Upload verified reproducible artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: verified-jiter-0.18.0-termux-aarch64
+          path: verified/
+          if-no-files-found: error
+          retention-days: 90

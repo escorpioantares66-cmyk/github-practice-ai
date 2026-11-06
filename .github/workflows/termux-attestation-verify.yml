@@ -1,0 +1,75 @@
+name: Verify existing Termux build attestations
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+    paths:
+      - ".github/workflows/termux-attestation-verify.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  attestations: read
+  contents: read
+
+jobs:
+  verify-existing-attestations:
+    name: Independently verify existing jiter 0.18.0 attestations
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.number == 42
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SOURCE_REF: refs/pull/42/merge
+      SOURCE_WORKFLOW: ${{ github.repository }}/.github/workflows/termux-native-reproducible.yml
+      SOURCE_RUN_ID: "42095834299"
+      PACKAGE_SHA256: 099afda9a872612ba405ffb0c1d1f7e0a85718db581aaff9dd1fedf09e038c9d
+      EXTENSION_SHA256: 892b3fba41c25b406308a83c81492bbcb31238b0f2b5c9b3b8046cf0a8d73765
+    steps:
+      - name: Download the already-built artifact from the original run
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download "$SOURCE_RUN_ID" --repo "$GH_REPO" \
+            --name verified-jiter-0.18.0-termux-aarch64 --dir verified
+          test -s verified/python-jiter_0.18.0_aarch64.deb
+          test -s verified/jiter-0.18.0-aarch64.so
+          test -s verified/SHA256SUMS
+
+      - name: Recheck the exact previously approved artifact digests
+        working-directory: verified
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum --check SHA256SUMS
+          actual_package="$(sha256sum python-jiter_0.18.0_aarch64.deb | awk '{print $1}')"
+          actual_extension="$(sha256sum jiter-0.18.0-aarch64.so | awk '{print $1}')"
+          test "$actual_package" = "$PACKAGE_SHA256"
+          test "$actual_extension" = "$EXTENSION_SHA256"
+          printf 'Package SHA-256: %s\nExtension SHA-256: %s\n' \
+            "$actual_package" "$actual_extension"
+
+      - name: Cryptographically verify package attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh attestation verify verified/python-jiter_0.18.0_aarch64.deb \
+            --repo "$GH_REPO" \
+            --signer-workflow "$SOURCE_WORKFLOW" \
+            --source-ref "$SOURCE_REF" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --cert-oidc-issuer https://token.actions.githubusercontent.com \
+            --deny-self-hosted-runners
+
+      - name: Cryptographically verify native extension attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh attestation verify verified/jiter-0.18.0-aarch64.so \
+            --repo "$GH_REPO" \
+            --signer-workflow "$SOURCE_WORKFLOW" \
+            --source-ref "$SOURCE_REF" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --cert-oidc-issuer https://token.actions.githubusercontent.com \
+            --deny-self-hosted-runners
