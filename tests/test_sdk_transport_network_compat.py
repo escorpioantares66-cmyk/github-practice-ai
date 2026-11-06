@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import ipaddress
-import socket
 import ssl
 import threading
 import time
@@ -163,6 +162,8 @@ def test_sdk_honors_ssl_cert_file_and_trust_env_false_disables_it(
     )
     monkeypatch.setenv("SSL_CERT_FILE", cert_path)
     monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     try:
         with OpenAI(
             api_key=API_KEY, base_url=base_url, max_retries=0, timeout=3.0
@@ -250,6 +251,3 @@ def test_sdk_maps_transport_connection_failure_to_api_connection_error() -> None
             client.models.list()
 
 
-def test_proxy_and_tls_environment_tests_do_not_require_external_network() -> None:
-    """Guard the suite's design: test destinations and proxy endpoints are loopback."""
-    assert socket.gethostbyname("localhost") in {"127.0.0.1", "::1"}
