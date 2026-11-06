@@ -97,7 +97,6 @@ def _real_llm_pick_tool(
     try:
         from openai import OpenAI
 
-        client = OpenAI(api_key=key)
         prompt = (
             "You are a read-only assistant. Available tools: "
             "search(query, top_k), read_note(path). "
@@ -107,11 +106,12 @@ def _real_llm_pick_tool(
             f"User query (untrusted): {query}\\n"
             f"Tool history (untrusted): {json.dumps(history)[:1500]}"
         )
-        response = client.chat.completions.create(
-            model=cost_guard.MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=cost_guard.MAX_COMPLETION_TOKENS_PER_CALL,
-        )
+        with OpenAI(api_key=key) as client:
+            response = client.chat.completions.create(
+                model=cost_guard.MODEL_NAME,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=cost_guard.MAX_COMPLETION_TOKENS_PER_CALL,
+            )
     except ImportError:
         logger.warning(
             "openai package not installed; model call unavailable",

@@ -397,3 +397,150 @@ def test_beta_realtime_x509_identity_is_rejected_even_with_explicit_authorizatio
             client,
             {"Authorization": "Bearer caller-managed-test-token"},
         )
+
+
+def test_agent_loop_uses_real_sdk_and_closes_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    import openai
+
+    from stage2_sdk_ai import agent_loop
+
+    monkeypatch.setenv("OPENAI_API_KEY", API_KEY)
+    monkeypatch.delenv("STAGE2_SDK_AI_MOCK_MODE", raising=False)
+    seen: list[dict] = []
+    clients: list[OpenAI] = []
+    sdk_openai = openai.OpenAI
+
+    def factory(*, api_key: str) -> OpenAI:
+        def handler(request: httpx2.Request):
+            body = json.loads(request.content.decode("utf-8"))
+            seen.append({"method": request.method, "path": request.url.path, "body": body})
+            return httpx2.Response(
+                200,
+                request=request,
+                json=_completion_payload(
+                    '{"tool":"final","args":{"answer":"sdk-agent-ok"}}'
+                ),
+            )
+
+        http_client = httpx2.Client(transport=httpx2.MockTransport(handler))
+        client = sdk_openai(api_key=api_key, base_url=BASE_URL, http_client=http_client)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(openai, "OpenAI", factory)
+    monkeypatch.setattr(agent_loop.cost_guard, "record_model_usage", lambda *a, **k: None)
+    monkeypatch.setattr(agent_loop.cost_guard, "MODEL_NAME", "gpt-4o-mini")
+    monkeypatch.setattr(agent_loop.cost_guard, "MAX_PROMPT_TOKENS_PER_CALL", 100)
+    monkeypatch.setattr(agent_loop.cost_guard, "MAX_COMPLETION_TOKENS_PER_CALL", 100)
+    result = agent_loop._real_llm_pick_tool("sdk integration", [], requester="sdk-user")
+    assert result == {"tool": "final", "args": {"answer": "sdk-agent-ok"}}
+    assert seen[0]["path"] == "/v1/chat/completions"
+    assert clients and all(client._client.is_closed for client in clients)
+
+
+def test_rag_and_embedding_wrappers_close_sync_sdk_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import openai
+
+    monkeypatch.setenv("OPENAI_API_KEY", API_KEY)
+    monkeypatch.delenv("STAGE2_SDK_AI_MOCK_MODE", raising=False)
+    seen: list[dict] = []
+    clients: list[OpenAI] = []
+    sdk_openai = openai.OpenAI
+
+    def factory(*, api_key: str) -> OpenAI:
+        http_client = httpx2.Client(
+            transport=httpx2.MockTransport(lambda request: _transport_handler(request, seen))
+        )
+        client = sdk_openai(api_key=api_key, base_url=BASE_URL, http_client=http_client)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(openai, "OpenAI", factory)
+    assert rag_chain._get_llm_answer("lifecycle test")[1] is False
+    assert vector_store._get_query_embedding("lifecycle test")[2] is False
+    assert len(clients) == 2
+    assert all(client._client.is_closed for client in clients)
+
+
+@pytest.mark.asyncio
+async def test_async_client_propagates_exhausted_provider_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenCompletions:
+        async def create(self, **kwargs):
+            raise RuntimeError("provider unavailable")
+
+    class BrokenClient:
+        def __init__(self, **kwargs):
+            self.chat = type("Chat", (), {"completions": BrokenCompletions()})()
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(client_module, "AsyncOpenAI", BrokenClient)
+    monkeypatch.setattr(client_module, "HAS_OPENAI", True)
+    monkeypatch.setenv("CI", "false")
+    instance = AIClient(AIConfig(api_key=API_KEY, max_retries=1))
+    try:
+        with pytest.raises(RuntimeError, match="provider unavailable"):
+            await instance.complete("must not become a mock answer")
+        with pytest.raises(RuntimeError, match="provider unavailable"):
+            await instance.chat([{"role": "user", "content": "must not become a mock"}])
+    finally:
+        await instance.aclose()
+
+
+def test_query_api_runs_agent_through_real_sdk_mock_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    import openai
+    from fastapi.testclient import TestClient
+
+    from stage2_sdk_ai import agent_loop, auth, cost_guard, quota_store
+    from stage2_sdk_ai.api import app
+
+    monkeypatch.setenv("OPENAI_API_KEY", API_KEY)
+    monkeypatch.setenv("AGENT_QUOTA_DB_PATH", str(tmp_path / "api-quota.sqlite3"))
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.delenv("STAGE2_SDK_AI_MOCK_MODE", raising=False)
+    monkeypatch.setattr(agent_loop, "_is_mock", lambda: False)
+    monkeypatch.setattr(auth, "verify_api_key", lambda key: key == "api-test-key")
+    monkeypatch.setattr(auth, "check_requester_rate_limit", lambda key: True)
+    monkeypatch.setattr(auth, "requester_identity", lambda key: "api-requester")
+
+    seen: list[dict] = []
+    sdk_openai = openai.OpenAI
+
+    def factory(*, api_key: str) -> OpenAI:
+        def handler(request: httpx2.Request):
+            assert request.headers.get("authorization") == f"Bearer {API_KEY}"
+            body = json.loads(request.content.decode("utf-8"))
+            seen.append({"path": request.url.path, "body": body})
+            return httpx2.Response(
+                200,
+                request=request,
+                json=_completion_payload(
+                    '{"tool":"final","args":{"answer":"api-sdk-integration-ok"}}'
+                ),
+            )
+
+        transport = httpx2.MockTransport(handler)
+        return sdk_openai(api_key=api_key, base_url=BASE_URL,
+                          http_client=httpx2.Client(transport=transport))
+
+    monkeypatch.setattr(openai, "OpenAI", factory)
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/query",
+            headers={"X-API-Key": "api-test-key"},
+            json={"query": "integration test", "top_k": 2},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answer"] == "api-sdk-integration-ok"
+    assert [item["path"] for item in seen] == ["/v1/chat/completions"]
+    usage = quota_store.get_daily_usage("api-requester", cost_guard._utc_day())
+    assert usage["input_tokens"] == 2
+    assert usage["output_tokens"] == 3
