@@ -37,6 +37,36 @@ The tests make no public network requests, do not use a real OpenAI API key, and
 
 The candidate CI job pins `httpx2==2.16.0`, the exact version resolved by the previously reviewed CI evidence, so subsequent runs exercise a reproducible HTTPX2 transport version. The candidate CI job installs `cryptography` only to generate ephemeral test certificates. It does not add `cryptography` as a new production dependency; it is already a direct project dependency.
 
+
+## Isolated Android/Termux validation stage
+
+The opt-in device script, `scripts/check_termux_sdk_compat.sh`, now pins
+`httpx2==2.16.0` to match candidate CI. It verifies the retained native
+wheelhouse and its SHA256 manifest before creating a temporary virtual
+environment. Candidate packages are installed only in that venv, which is
+removed on exit; the production Termux Python environment and existing
+`openai==1.40.0` installation are not modified.
+
+After installation, the stage:
+
+1. Records Python, Android platform, OpenSSL, OpenAI SDK, and HTTPX2 versions.
+2. Performs direct HTTPS requests with proxy environment inheritance disabled,
+   first using the Termux OpenSSL CA bundle and then the Certifi CA bundle.
+   The probe URL defaults to `https://example.com/` and can be overridden with
+   `TERMUX_TLS_TEST_URL` for networks that block that host.
+3. Writes the version and CA-probe results to
+   `termux-sdk-3.46.0-termux-evidence.txt` by default. Set
+   `TERMUX_EVIDENCE_FILE` to choose another evidence destination.
+4. Runs the loopback transport suite, including untrusted-certificate
+   rejection, SDK timeout mapping, and SDK connection-error mapping.
+5. Runs the existing SDK/application integration suite.
+
+The script retains the explicit `ALLOW_TERMUX_TEST_INSTALL=1` authorization
+gate. Merely preparing this stage does not authorize transferring the
+wheelhouse or running candidate installation on the user's device. The
+authenticated proxy and SOCKS cases remain out of scope because no proxy is
+configured in the user's reported Termux environment.
+
 ## Remaining limitations
 
 Passing these tests will establish the tested HTTPX2 behaviors on GitHub-hosted Linux runners. It will not, by itself, establish:
