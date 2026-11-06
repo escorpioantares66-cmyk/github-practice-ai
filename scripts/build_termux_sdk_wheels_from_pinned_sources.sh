@@ -40,8 +40,12 @@ MATURIN_VERSION="$("$MATURIN_BIN" --version)"
 }
 
 clone_at() {
-  local url="$1" commit="$2" dest="$3"
+  local url="$1" commit="$2" dest="$3" sparse_path="${4:-}"
   git clone --filter=blob:none --no-checkout "$url" "$dest"
+  if [[ -n "$sparse_path" ]]; then
+    git -C "$dest" sparse-checkout init --cone
+    git -C "$dest" sparse-checkout set "$sparse_path"
+  fi
   git -C "$dest" checkout --detach "$commit"
   [[ "$(git -C "$dest" rev-parse HEAD)" == "$commit" ]]
   [[ -z "$(git -C "$dest" status --porcelain)" ]]
@@ -53,7 +57,7 @@ JITER_REPO="https://github.com/pydantic/jiter.git"
 CORE_REPO="https://github.com/pydantic/pydantic.git"
 
 clone_at "$JITER_REPO" "$JITER_COMMIT" "$BUILD_ROOT/jiter"
-clone_at "$CORE_REPO" "$CORE_COMMIT" "$BUILD_ROOT/pydantic"
+clone_at "$CORE_REPO" "$CORE_COMMIT" "$BUILD_ROOT/pydantic" "pydantic-core"
 
 JITER_TREE="$(git -C "$BUILD_ROOT/jiter" rev-parse 'HEAD^{tree}')"
 CORE_TREE="$(git -C "$BUILD_ROOT/pydantic" rev-parse 'HEAD^{tree}')"
