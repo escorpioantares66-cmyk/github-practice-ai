@@ -401,6 +401,7 @@ def test_beta_realtime_x509_identity_is_rejected_even_with_explicit_authorizatio
 
 def test_agent_loop_uses_real_sdk_and_closes_client(monkeypatch: pytest.MonkeyPatch) -> None:
     import openai
+
     from stage2_sdk_ai import agent_loop
 
     monkeypatch.setenv("OPENAI_API_KEY", API_KEY)
@@ -494,8 +495,8 @@ async def test_async_client_propagates_exhausted_provider_errors(
 def test_query_api_runs_agent_through_real_sdk_mock_transport(
     monkeypatch: pytest.MonkeyPatch, tmp_path,
 ) -> None:
-    import openai
     from fastapi.testclient import TestClient
+    import openai
 
     from stage2_sdk_ai import agent_loop, auth, cost_guard, quota_store
     from stage2_sdk_ai.api import app
