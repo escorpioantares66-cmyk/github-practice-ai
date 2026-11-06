@@ -6,7 +6,7 @@ It does not change application dependency pins, PR #41, or `main`.
 ## Exact compatibility target
 
 - Android / Termux, CPython 3.14, aarch64.
-- OpenAI SDK 3.46.0.
+- OpenAI SDK selection and adoption are out of scope. The production baseline remains `openai==1.40.0`; newer SDK evaluation is isolated in PR #41.
 - `jiter==0.18.0`.
 - `pydantic-core==2.50.4`.
 
