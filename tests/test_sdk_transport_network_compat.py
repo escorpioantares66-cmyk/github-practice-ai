@@ -5,8 +5,8 @@ OpenAI request is used. The candidate CI job installs HTTPX2 and cryptography.
 """
 from __future__ import annotations
 
-import json
 import ipaddress
+import json
 import ssl
 import threading
 import time
