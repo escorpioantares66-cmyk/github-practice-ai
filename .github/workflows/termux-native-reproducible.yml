@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   jiter-change-filter:
@@ -23,7 +24,7 @@ jobs:
         id: detect
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         shell: bash
         run: |
           set -euo pipefail
@@ -32,9 +33,12 @@ jobs:
             exit 0
           fi
 
-          test -n "$PR_HEAD_SHA"
-          gh api "repos/$GITHUB_REPOSITORY/commits/$PR_HEAD_SHA" \
-            --jq '.files[].filename' > changed-files.txt
+          test -n "$PR_NUMBER"
+          # Inspect every file changed by the PR, not just the latest commit.
+          # Otherwise a docs-only follow-up could skip a rebuild after a recipe
+          # change (or failed native build) earlier in the same PR.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+            --jq '.[].filename' > changed-files.txt
 
           if grep -Eq '^(packaging/termux/python-jiter/|\.github/workflows/termux-native-reproducible\.yml$)' changed-files.txt; then
             echo "Current commit changes the jiter recipe/workflow; enabling independent builds."
