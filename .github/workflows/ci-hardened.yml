@@ -88,6 +88,7 @@ jobs:
       - name: Verify real SDK clients and request paths through mock transports
         run: |
           PYTHONPATH=. python -m pytest -q -o addopts="" tests/test_openai_sdk_transport_compat.py
-      - name: Validate Termux smoke-test script syntax
+      - name: Validate Termux build and smoke-test script syntax
         run: |
+          bash -n scripts/build_termux_sdk_wheels.sh
           bash -n scripts/check_termux_sdk_compat.sh
