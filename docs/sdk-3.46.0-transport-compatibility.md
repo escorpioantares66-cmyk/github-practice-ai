@@ -14,13 +14,15 @@ This isolated assessment closes a specific evidence gap identified by the merged
 
 The dedicated candidate CI job runs `tests/test_sdk_transport_network_compat.py` in addition to the existing `tests/test_openai_sdk_transport_compat.py` suite.
 
-The new tests use only loopback-bound local HTTP/HTTPS servers and synthetic credentials:
+The new tests use only loopback-bound local HTTP/HTTPS servers, a loopback CONNECT proxy, and synthetic credentials:
 
 1. **Custom CA trust:** create a short-lived self-signed loopback certificate and verify an SDK request using an explicit `ssl.SSLContext` passed to `DefaultHttpx2Client`.
 2. **Environment trust configuration:** verify that the SDK's default HTTPX2 client honors `SSL_CERT_FILE`, and that `trust_env=False` does not inherit that environment-provided trust bundle.
-3. **Proxy behavior:** verify that an environment-configured HTTP proxy is used by default and that a custom client with `trust_env=False` bypasses it.
-4. **Timeout behavior:** verify that HTTPX2 raises a read timeout against a deliberately slow loopback server.
-5. **Connection failure mapping:** verify that the SDK surfaces a transport connection failure as `APIConnectionError` when retries are disabled.
+3. **HTTP proxy behavior:** verify that an environment-configured HTTP proxy is used by default and that a custom client with `trust_env=False` bypasses it.
+4. **HTTPS CONNECT and TLS validation:** route an SDK HTTPS request through a local CONNECT proxy, verify the CONNECT authority, and validate the target certificate using the environment-provided CA bundle.
+5. **TLS negative case:** when `trust_env=False` disables the test CA bundle, assert that the SDK error chain contains a certificate-verification failure rather than accepting any generic connection error.
+6. **SDK timeout mapping:** configure the actual `OpenAI` client with a short timeout and retries disabled, then assert that the SDK surfaces `APIConnectionError` wrapping an HTTPX2 `ReadTimeout` against a deliberately slow loopback server.
+7. **Connection failure mapping:** verify that the SDK surfaces a transport connection failure as `APIConnectionError` when retries are disabled.
 
 The tests make no public network requests, do not use a real OpenAI API key, and do not make billable provider calls.
 
@@ -33,7 +35,7 @@ The tests make no public network requests, do not use a real OpenAI API key, and
 - No Termux installation, device mutation, or local environment change.
 - No SDK migration or production rollout.
 
-The candidate CI job installs `cryptography` only to generate ephemeral test certificates. It does not add `cryptography` as a new production dependency; it is already a direct project dependency.
+The candidate CI job pins `httpx2==2.16.0`, the exact version resolved by the previously reviewed CI evidence, so subsequent runs exercise a reproducible HTTPX2 transport version. The candidate CI job installs `cryptography` only to generate ephemeral test certificates. It does not add `cryptography` as a new production dependency; it is already a direct project dependency.
 
 ## Remaining limitations
 
