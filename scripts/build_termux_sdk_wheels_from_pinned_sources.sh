@@ -57,6 +57,8 @@ clone_at "$CORE_REPO" "$CORE_COMMIT" "$BUILD_ROOT/pydantic"
 
 JITER_TREE="$(git -C "$BUILD_ROOT/jiter" rev-parse 'HEAD^{tree}')"
 CORE_TREE="$(git -C "$BUILD_ROOT/pydantic" rev-parse 'HEAD^{tree}')"
+[[ -f "$BUILD_ROOT/jiter/Cargo.lock" ]] || { echo "Pinned jiter source has no Cargo.lock" >&2; exit 2; }
+[[ -f "$BUILD_ROOT/pydantic/pydantic-core/Cargo.lock" ]] || { echo "Pinned pydantic-core source has no Cargo.lock" >&2; exit 2; }
 mkdir "$OUTPUT_DIR"
 
 {
@@ -76,9 +78,11 @@ mkdir "$OUTPUT_DIR"
   echo "jiter repository: $JITER_REPO"
   echo "jiter commit: $JITER_COMMIT"
   echo "jiter tree: $JITER_TREE"
+  echo "jiter Cargo.lock SHA256: $(sha256sum "$BUILD_ROOT/jiter/Cargo.lock" | cut -d " " -f1)"
   echo "pydantic repository: $CORE_REPO"
   echo "pydantic commit: $CORE_COMMIT"
   echo "pydantic tree: $CORE_TREE"
+  echo "pydantic-core Cargo.lock SHA256: $(sha256sum "$BUILD_ROOT/pydantic/pydantic-core/Cargo.lock" | cut -d " " -f1)"
   echo "pydantic-core package subdirectory: pydantic-core/"
   echo "pydantic-core publisher provenance: unavailable for PyPI 2.50.4; source commit is pinned here, but this is not an upstream publisher attestation."
 } | tee "$OUTPUT_DIR/BUILD-EVIDENCE.txt"
