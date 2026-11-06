@@ -11,6 +11,22 @@ OUTPUT_DIR="${SOURCE_PINNED_WHEELHOUSE_DIR:-$HOME/pr41-api24-source-pinned-wheel
 BUILD_ROOT="${SOURCE_BUILD_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/gh-ai-source-build.XXXXXX")}"
 KEEP_BUILD_ROOT="${KEEP_SOURCE_BUILD_ROOT:-0}"
 
+if [[ "${PREFIX:-}" != *"/com.termux/files/usr" ]]; then
+  echo "ERROR: run this build only inside Termux (PREFIX must end in /com.termux/files/usr)." >&2
+  exit 2
+fi
+PLATFORM="$("$PYTHON_BIN" -c 'import sysconfig; print(sysconfig.get_platform())')"
+EXPECTED_ANDROID_API_LEVEL="${EXPECTED_ANDROID_API_LEVEL:-24}"
+if [[ "$PLATFORM" != "android-${EXPECTED_ANDROID_API_LEVEL}-arm64_v8a" ]]; then
+  echo "ERROR: expected Android API ${EXPECTED_ANDROID_API_LEVEL} aarch64 Python; got: $PLATFORM" >&2
+  exit 2
+fi
+if [[ -n "${ANDROID_API_LEVEL:-}" && "$ANDROID_API_LEVEL" != "$EXPECTED_ANDROID_API_LEVEL" ]]; then
+  echo "ERROR: ANDROID_API_LEVEL conflicts with Python platform." >&2
+  exit 2
+fi
+export ANDROID_API_LEVEL="$EXPECTED_ANDROID_API_LEVEL"
+
 cleanup() {
   if [[ "$KEEP_BUILD_ROOT" != "1" ]]; then rm -rf "$BUILD_ROOT"; else echo "Source/build checkout retained: $BUILD_ROOT"; fi
 }
