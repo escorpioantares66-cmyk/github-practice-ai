@@ -12,6 +12,13 @@ if [[ "${PREFIX:-}" != *"/com.termux/files/usr" ]]; then
   exit 2
 fi
 
+if [[ "${ALLOW_TERMUX_NATIVE_BUILD:-}" != "1" ]]; then
+  echo "STOP: native source builds are disabled by default." >&2
+  echo "After reviewing the build-only procedure, explicitly authorize it with:" >&2
+  echo "  ALLOW_TERMUX_NATIVE_BUILD=1 bash scripts/build_termux_sdk_wheels.sh" >&2
+  exit 3
+fi
+
 PYTHON_BIN="${PYTHON_BIN:-python}"
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || {
   echo "ERROR: Python executable not found: $PYTHON_BIN" >&2
