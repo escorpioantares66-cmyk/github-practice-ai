@@ -39,6 +39,7 @@ Review the generated evidence before proceeding:
 ```bash
 cat "$HOME/pr41-api24-source-pinned-wheelhouse/BUILD-EVIDENCE.txt"
 cat "$HOME/pr41-api24-source-pinned-wheelhouse/SHA256SUMS.txt"
+cat "$HOME/pr41-api24-source-pinned-termux-evidence.txt"
 sha256sum "$HOME/pr41-api24-source-pinned-wheelhouse"/*.whl
 ```
 
