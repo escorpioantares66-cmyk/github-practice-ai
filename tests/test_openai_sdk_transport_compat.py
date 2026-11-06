@@ -480,3 +480,57 @@ async def test_async_client_propagates_exhausted_provider_errors(
             await instance.chat([{"role": "user", "content": "must not become a mock"}])
     finally:
         await instance.aclose()
+
+
+def test_query_api_runs_agent_through_real_sdk_mock_transport(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    import openai
+    from fastapi.testclient import TestClient
+
+    from stage2_sdk_ai import agent_loop, auth, cost_guard, quota_store
+    from stage2_sdk_ai.api import app
+
+    monkeypatch.setenv("OPENAI_API_KEY", API_KEY)
+    monkeypatch.setenv("AGENT_QUOTA_DB_PATH", str(tmp_path / "api-quota.sqlite3"))
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.delenv("STAGE2_SDK_AI_MOCK_MODE", raising=False)
+    monkeypatch.setattr(agent_loop, "_is_mock", lambda: False)
+    monkeypatch.setattr(auth, "verify_api_key", lambda key: key == "api-test-key")
+    monkeypatch.setattr(auth, "check_requester_rate_limit", lambda key: True)
+    monkeypatch.setattr(auth, "requester_identity", lambda key: "api-requester")
+
+    seen: list[dict] = []
+    sdk_openai = openai.OpenAI
+
+    def factory(*, api_key: str) -> OpenAI:
+        def handler(request: httpx2.Request):
+            assert request.headers.get("authorization") == f"Bearer {API_KEY}"
+            body = json.loads(request.content.decode("utf-8"))
+            seen.append({"path": request.url.path, "body": body})
+            return httpx2.Response(
+                200,
+                request=request,
+                json=_completion_payload(
+                    '{"tool":"final","args":{"answer":"api-sdk-integration-ok"}}'
+                ),
+            )
+
+        transport = httpx2.MockTransport(handler)
+        return sdk_openai(api_key=api_key, base_url=BASE_URL,
+                          http_client=httpx2.Client(transport=transport))
+
+    monkeypatch.setattr(openai, "OpenAI", factory)
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/query",
+            headers={"X-API-Key": "api-test-key"},
+            json={"query": "integration test", "top_k": 2},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answer"] == "api-sdk-integration-ok"
+    assert [item["path"] for item in seen] == ["/v1/chat/completions"]
+    usage = quota_store.get_daily_usage("api-requester", cost_guard._utc_day())
+    assert usage["input_tokens"] == 2
+    assert usage["output_tokens"] == 3
