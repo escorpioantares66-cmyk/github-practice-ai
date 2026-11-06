@@ -39,6 +39,8 @@ def _install_fake_openai(monkeypatch, content=None, raise_exc=None):
             self.api_key = api_key
             self.chat = FakeChat()
 
+    FakeOpenAI.__enter__ = lambda self: self
+    FakeOpenAI.__exit__ = lambda self, exc_type, exc, tb: False
     fake_module.OpenAI = FakeOpenAI
     monkeypatch.setitem(sys.modules, "openai", fake_module)
 

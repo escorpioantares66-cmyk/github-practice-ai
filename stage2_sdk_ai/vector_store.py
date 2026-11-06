@@ -137,10 +137,10 @@ def _get_query_embedding(text: str) -> tuple[Any, int, bool]:
     try:
         from openai import OpenAI  # type: ignore
 
-        client = OpenAI(api_key=key)
-        response = client.embeddings.create(
-            model="text-embedding-3-small", input=text
-        )
+        with OpenAI(api_key=key) as client:
+            response = client.embeddings.create(
+                model="text-embedding-3-small", input=text
+            )
         embedding = _validated_embedding(response.data[0].embedding)
         return embedding, EMBEDDING_DIM, False
     except Exception as exc:

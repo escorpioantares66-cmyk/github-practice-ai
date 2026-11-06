@@ -67,10 +67,7 @@ class AIClient:
                     return out
                 except Exception:
                     if i == self.config.max_retries - 1:
-                        # fallback to mocked on CI to keep tests GREEN
-                        out = f"mocked:{prompt[:20]}"
-                        self._cache[prompt] = out
-                        return out
+                        raise
                     await self._retry_sleep(i)
             return ""
 
@@ -92,9 +89,7 @@ class AIClient:
                     return out
                 except Exception:
                     if i == self.config.max_retries - 1:
-                        out = f"mocked-chat:{messages[-1]['content'][:20]}"
-                        self._cache[key] = out
-                        return out
+                        raise
                     await self._retry_sleep(i)
             return ""
 
@@ -115,9 +110,7 @@ class AIClient:
                         if chunk.choices[0].delta.content:
                             yield chunk.choices[0].delta.content
                 except Exception:
-                    for ch in f"mocked-stream:{prompt[:20]}".split():
-                        yield ch + " "
-                        await asyncio.sleep(0.01)
+                    raise
 
     async def embed(self, text: str) -> list[float]:
         key = f"embed:{text}"

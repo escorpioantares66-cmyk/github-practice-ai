@@ -13,15 +13,15 @@ def _get_llm_answer(prompt: str) -> tuple[str, bool]:
     try:
         from openai import OpenAI  # type: ignore
 
-        client = OpenAI(api_key=key)
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
-        )
+        with OpenAI(api_key=key) as client:
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=200,
+            )
         return resp.choices[0].message.content or "", False
-    except Exception:
-        return f"[MOCK FALLBACK] for: {prompt[:80]}", True
+    except Exception as exc:
+        raise RuntimeError("OpenAI chat request failed") from exc
 
 def query_rag(
     query: str, store: RealVectorStore, top_k: int = 3
