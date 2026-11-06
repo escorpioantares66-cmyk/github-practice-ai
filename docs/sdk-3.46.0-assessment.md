@@ -8,7 +8,7 @@
 
 ## Executive decision
 
-SDK 3.46.0 has a materially newer transport stack and additional SDK-level capabilities, but the evidence does not establish that it is safer or more capable for this application in production. The candidate passes the application integration coverage already added for its real SDK transport path (subject to the CI evidence limits below), and the HTTPX2 version floor used by the candidate CI job is above the fixed versions for the HTTPX2 advisories reviewed here. However:
+SDK 3.46.0 has a materially newer transport stack and additional SDK-level capabilities, but the evidence does not establish that it is safer or more capable for this application in production. The candidate now has application integration coverage for its real SDK transport path, and the HTTPX2 version floor used by the candidate CI job is above the fixed versions for the HTTPX2 advisories reviewed here. The fresh test outcome and exact resolved dependency graph remain to be verified from the new CI artifacts. However:
 
 - SDK 3.46.0 requires Python >=3.10; this project declares Python >=3.9.
 - It replaces the SDK-managed `httpx` transport with `httpx2`, changing the transport, custom-client, proxy, TLS trust-store and dependency surface.
@@ -105,9 +105,11 @@ For the HTTPX2 findings, the patched floors are 2.10.0 (WSS/SOCKS and SSE), 2.11
 
 ## Reproducing and collecting evidence
 
-From a clean checkout of the assessment branch:
+From a clean checkout of the assessment branch, create a disposable virtual environment first (do not install into the system Python or the Termux base environment):
 
 ```bash
+python -m venv .venv-sdk-candidate
+. .venv-sdk-candidate/bin/activate
 python -m pip install "openai==3.46.0" "httpx2>=2.15.1,<3" \
   "starlette[full]>=1.2,<2" "fastapi>=0.115" \
   "pytest>=8" "pytest-asyncio>=0.23" "cachetools>=5"
