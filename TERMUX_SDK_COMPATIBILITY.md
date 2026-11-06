@@ -16,7 +16,7 @@ minimum Android API targeted by the generated wheel.
 From the repository root on the actual Termux device:
 
 ```bash
-bash scripts/build_termux_sdk_wheels.sh
+ALLOW_TERMUX_NATIVE_BUILD=1 bash scripts/build_termux_sdk_wheels.sh
 ```
 
 The script derives the Android API target from Python's platform tag, rejects
@@ -25,9 +25,11 @@ conflicting `ANDROID_API_LEVEL` overrides, and builds exactly
 It disables both pip's wheel cache and binary-wheel selection so previously
 cached or published API-33 artifacts cannot be reused.
 
-The script uses `pip wheel`: build-backend requirements may be installed into
+The script requires the explicit `ALLOW_TERMUX_NATIVE_BUILD=1` opt-in before
+starting. It uses `pip wheel`: build-backend requirements are installed into
 temporary isolated build environments, but neither target package is installed
-into the active interpreter or a runtime virtual environment. The generated
+into the active interpreter or a runtime virtual environment. No build is
+started merely by invoking the script without that opt-in. The generated
 wheels and build log are retained in
 `$HOME/pr41-api24-wheelhouse` by default (or in the path supplied through
 `WHEELHOUSE_DIR`). It verifies package versions, the exact CPython/Android
