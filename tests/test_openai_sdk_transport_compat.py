@@ -495,8 +495,8 @@ async def test_async_client_propagates_exhausted_provider_errors(
 def test_query_api_runs_agent_through_real_sdk_mock_transport(
     monkeypatch: pytest.MonkeyPatch, tmp_path,
 ) -> None:
-    from fastapi.testclient import TestClient
     import openai
+    from fastapi.testclient import TestClient
 
     from stage2_sdk_ai import agent_loop, auth, cost_guard, quota_store
     from stage2_sdk_ai.api import app
