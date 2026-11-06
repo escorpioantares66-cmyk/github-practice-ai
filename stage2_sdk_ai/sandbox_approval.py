@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from . import auth
 from .secure_storage import (
     ensure_private_directory,
     open_private_file,
@@ -280,16 +281,68 @@ def _events_for(approval_id: str) -> list[dict[str, Any]]:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def verify_audit_log() -> dict[str, Any]:
-    """Verify the complete local sandbox approval audit chain."""
+def verify_audit_log(
+    expected_checkpoint: dict[str, Any] | None = None,
+    *,
+    expected_checkpoints: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Verify the complete local sandbox chain and an optional prefix anchor."""
     directory = _ensure_store()
     lock_path = directory / ".audit.lock"
     fd = open_private_file(lock_path, os.O_RDWR | os.O_CREAT)
     with os.fdopen(fd, "r+") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
         try:
-            sequence, last_hash = _read_audit_state()
-            return {"valid": True, "events": sequence, "last_hash": last_hash}
+            entries = _read_audit_entries()
+            sequence = len(entries)
+            last_hash = entries[-1]["hash"] if entries else "0" * 64
+            result = {"valid": True, "events": sequence, "last_hash": last_hash}
+            checkpoints = []
+            if expected_checkpoint is not None:
+                checkpoints.append(expected_checkpoint)
+            if expected_checkpoints is not None:
+                if not isinstance(expected_checkpoints, list):
+                    raise SandboxApprovalError(
+                        "Sandbox audit checkpoints must be supplied as a list"
+                    )
+                checkpoints.extend(expected_checkpoints)
+            for index, checkpoint in enumerate(checkpoints):
+                if (
+                    not isinstance(checkpoint, dict)
+                    or set(checkpoint) != {"sequence", "head_hash"}
+                    or isinstance(checkpoint.get("sequence"), bool)
+                    or not isinstance(checkpoint.get("sequence"), int)
+                    or checkpoint["sequence"] < 0
+                    or not isinstance(checkpoint.get("head_hash"), str)
+                    or not _DIGEST_RE.fullmatch(checkpoint["head_hash"])
+                ):
+                    raise SandboxApprovalError("Sandbox audit checkpoint is malformed")
+                checkpoint_sequence = checkpoint["sequence"]
+                checkpoint_hash = (
+                    "0" * 64
+                    if checkpoint_sequence == 0
+                    else (
+                        entries[checkpoint_sequence - 1]["hash"]
+                        if checkpoint_sequence <= sequence
+                        else None
+                    )
+                )
+                if (
+                    checkpoint_sequence > sequence
+                    or checkpoint_hash is None
+                    or not secrets.compare_digest(
+                        checkpoint_hash, checkpoint["head_hash"]
+                    )
+                ):
+                    raise SandboxApprovalError(
+                        "Sandbox audit history is truncated or diverges from checkpoint"
+                    )
+                if index == 0:
+                    result["checkpoint_verified"] = True
+                    result["checkpoint_sequence"] = checkpoint_sequence
+            if checkpoints:
+                result["checkpoints_verified"] = len(checkpoints)
+            return result
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
@@ -576,15 +629,21 @@ def create_request(
 def decide(
     approval_id: str,
     *,
-    approver: str,
+    approver_key: str,
     decision: str,
     now: float | None = None,
 ) -> dict[str, Any]:
-    """Record one authenticated, non-self approval or denial."""
+    """Record one decision after independently authenticating the approver."""
+    if not auth.verify_approver_key(approver_key):
+        raise SandboxApprovalForbidden("Configured approver credentials are required")
+    try:
+        approver = auth.approver_identity(approver_key)
+    except ValueError as exc:
+        raise SandboxApprovalForbidden(
+            "Configured approver identity is unavailable"
+        ) from exc
     if decision not in {"approved", "denied"}:
         raise SandboxApprovalError("Invalid decision")
-    if not isinstance(approver, str) or not approver.strip() or len(approver) > 128:
-        raise SandboxApprovalError("Invalid approver identity")
     path = _record_path(approval_id)
     with _locked(path):
         record = _load(approval_id)

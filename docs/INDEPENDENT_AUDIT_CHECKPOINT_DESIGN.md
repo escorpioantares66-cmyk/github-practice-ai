@@ -1,0 +1,154 @@
+# Independent audit checkpoint: local candidate design
+
+## Decision status
+
+**Design and proof-of-boundary only. Not implemented as an operational dependency. Not enabled.**
+
+The current approval workflows continue to use their existing audit verification behavior. No approval, denial, consumption, execution, or sandbox lifecycle operation is changed by this design record.
+
+The initial zero-cost candidate is a local checkpoint file controlled by a separate operator identity on a Linux host. It is not a second directory owned by the application account.
+
+## Current implementation findings
+
+### Main approval audit
+
+- `approval.verify_audit_log(expected_checkpoint)` can compare the complete verified local history with a supplied checkpoint.
+- `approval.create_audit_checkpoint()` creates a checkpoint from the current verified chain head.
+- The normal verifier accepts no checkpoint, and normal approval operations do not require one.
+- The existing `audit_checkpoint_store.py` integration retrieves an S3 checkpoint, but it is optional and is not part of the normal approval operation path.
+- The main checkpoint schema contains version, chained sequence, legacy-entry count, head hash, and creation time.
+
+### Sandbox approval audit
+
+- `sandbox_approval.verify_audit_log()` verifies only the local sandbox audit hash chain.
+- Sandbox approval lifecycle operations have no independent checkpoint retrieval or comparison path.
+- Its chain has its own event sequence and last hash, so it needs a distinct authority identifier and checkpoint state. A main-approval checkpoint must never be accepted for the sandbox log, or vice versa.
+
+### Storage boundary
+
+The existing private-storage helpers require files and directories to be owned by the effective application UID and use owner-only permissions. They are appropriate for application-owned private data, but cannot directly read a checkpoint owned by a separate operator UID.
+
+The current Termux environment uses one Android application identity for both the application process and operator activity. A different local path under that identity does not provide a separate authorization boundary.
+
+## Candidate threat model
+
+The local candidate can protect against an attacker who has compromised the application process or application UID but has not compromised the operator UID or host root.
+
+It does **not** protect against:
+- host root or kernel compromise;
+- compromise of the operator account or its credentials;
+- physical access that permits booting or modifying the host outside the operating system controls;
+- a malicious operator advancing the checkpoint after approving a rewritten history.
+
+The operator identity, its login path, and its ability to publish checkpoint updates are part of the trusted computing base. If the application and operator share a UID, the candidate is rejected as non-independent.
+
+## Candidate filesystem layout and permissions
+
+On a Linux host only, the proposed layout is:
+
+- a dedicated operator-owned checkpoint directory;
+- directory owner: operator UID; directory group: a read-only group containing the application UID; mode `0750`;
+- checkpoint file owner: operator UID; group: the same read-only application group; mode `0640`;
+- no group or other write permission on either directory or file;
+- application process receives read access only to the exact checkpoint file;
+- application process is not a member of any group with write access to the checkpoint path;
+- operator publishes updates through a same-directory temporary file, fsync, atomic rename, and directory fsync;
+- the application never creates, repairs, rotates, replaces, or deletes checkpoint files.
+
+The path must be provisioned by the operator before the application starts. Application startup must not create missing checkpoint directories or files. Symlinks, non-regular files, unexpected ownership, unexpected modes, extra hard links, and writable ancestors must be rejected.
+
+This permission model is only a candidate until a real two-UID integration test proves that the application UID can read but cannot create, replace, rename, chmod, or delete the checkpoint.
+
+## Checkpoint envelope
+
+Use a strict, versioned envelope with exact fields:
+
+- `format_version`: checkpoint format version;
+- `authority`: fixed identifier distinguishing the main approval log from the sandbox approval log;
+- `store_id`: stable identifier for the specific audit store, preventing cross-store substitution;
+- `sequence`: the authority-specific sequence number;
+- `head_hash`: SHA-256 hash at that sequence;
+- `legacy_entries`: main approval legacy-prefix count; zero for the sandbox authority;
+- `created_at`: operator publication time in UTC epoch seconds;
+- `checkpoint_id`: unique publication identifier.
+
+Reject duplicate JSON keys, unknown or missing fields, booleans in integer fields, invalid hashes, non-finite timestamps, invalid authority/store identifiers, and files above a small fixed size limit. The two authorities must use separate checkpoint files or separately keyed envelopes and must never share sequence state.
+
+The initial format is deliberately not a replacement for the existing audit event formats. It is an independently retained statement of a verified head.
+
+## Freshness, rollback, and unanchored suffix
+
+A checkpoint for sequence N proves the local history only through sequence N. It can detect a rewrite or truncation that changes history at or before N. It does **not** prove that entries appended after N have not been rewritten.
+
+This limitation is material. A periodic manually published checkpoint leaves an unanchored suffix between publications. A maximum checkpoint age bounds elapsed time, but does not prove that the suffix is intact.
+
+Therefore:
+
+1. A checkpoint must never be silently accepted merely because it is well-formed.
+2. A checkpoint behind the current head must be reported as a valid prefix anchor, not as proof of the entire current log.
+3. The operational policy must define a maximum unanchored suffix and publication cadence before any enforcement decision.
+4. If exact current-head anchoring is required for every approval-sensitive operation, the checkpoint must match the current head. A manual operator publication process cannot provide this continuously without blocking operations between publications.
+5. A stale or lower-sequence checkpoint must not be replaced automatically. Checkpoint rollback or unexplained sequence regression requires operator investigation.
+6. A local file alone cannot prove its own monotonic history against an operator/root attacker who can restore an older file. The trust claim is limited to the application-UID threat model.
+
+No freshness duration or publication cadence is selected in this document. That requires an explicit operational decision based on the expected approval volume and acceptable unanchored suffix.
+
+## Publication and recovery protocol
+
+1. The operator reads and verifies the complete relevant audit history using the authority-specific verifier.
+2. The operator reviews the current head and any unresolved integrity/recovery findings.
+3. The operator exports a checkpoint for that exact authority, store, sequence, and head hash.
+4. The operator validates the exported envelope and publishes it atomically to the operator-owned read-only path.
+5. The operator confirms ownership, group, modes, file identity, and the published content after replacement.
+6. The application reads the checkpoint without write capability and compares it with the correct audit history.
+7. If the checkpoint is missing, unreadable, malformed, stale under the eventual policy, rolled back, or inconsistent, the system reports an integrity failure. It does not generate a replacement.
+8. Recovery preserves all audit bytes and checkpoint artifacts. An operator investigates from the last known trusted checkpoint, verifies archived segments and active history, and records the recovery decision before publishing any new checkpoint.
+9. If the trusted checkpoint is lost and no independently retained copy exists, the history cannot be silently re-established as trusted by exporting the current head. That would bless potentially rewritten history.
+
+Crash tests must cover interruption before temporary-file fsync, after file fsync but before rename, after rename but before directory fsync, and after publication but before operator confirmation. Recovery must distinguish an old valid checkpoint from a newly published but durability-uncertain checkpoint. It must never infer success from a partially completed publication.
+
+## Proof gates before implementation can be considered independent
+
+### Filesystem and identity proof
+
+- Run the application under a dedicated non-privileged UID.
+- Run checkpoint publication under a different operator UID.
+- Prove application read succeeds.
+- Prove application create, write, truncate, chmod, unlink, rename, and parent-directory mutation fail with permission errors.
+- Prove the application cannot access operator-only temporary files or publication credentials.
+- Reject same-UID configurations and writable parent directories.
+- Repeat on the actual intended host filesystem; unit tests that run both roles as the same UID are not proof.
+
+### Integrity and policy proof
+
+For both audit authorities, test:
+- missing, malformed, duplicate-key, oversized, wrong-authority, wrong-store, and tampered checkpoints;
+- valid checkpoint with later append-only events;
+- truncation before and at the checkpoint sequence;
+- altered history before the checkpoint;
+- rewritten unanchored suffix after the checkpoint, demonstrating the known detection gap;
+- stale checkpoint, sequence regression, and restoration of an older checkpoint;
+- checkpoint path symlink, hard link, ownership, group, and mode violations;
+- independent checkpoint substitution between main and sandbox logs.
+
+### Recovery proof
+
+- Simulate each publication interruption point.
+- Preserve the prior checkpoint when publication fails.
+- Ensure no automatic checkpoint advancement after an integrity failure.
+- Demonstrate operator-only recovery from a known trusted checkpoint.
+- Demonstrate that loss of the only trusted checkpoint does not produce a falsely trusted replacement.
+- Preserve approval execution recovery records and audit evidence during all recovery paths.
+
+## Enforcement gate
+
+Mandatory checkpoint enforcement remains **disabled** until all of the following are true:
+
+1. The actual host provides a demonstrated application/operator UID separation.
+2. Both main and sandbox audit authorities have authority-specific checkpoint verification.
+3. The accepted freshness and unanchored-suffix policy is explicitly chosen.
+4. Rollback, tampering, stale/missing checkpoint, crash, and recovery tests pass.
+5. The full CI matrix and coverage gate pass.
+6. A human reviews the security boundary and approves a separate enforcement change.
+
+This design record does not authorize a deployment, account provisioning, paid service, destructive rotation, audit truncation, or a change to the Cloudflare prototype.

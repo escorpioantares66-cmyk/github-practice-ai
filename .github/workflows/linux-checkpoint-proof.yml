@@ -1,0 +1,21 @@
+name: linux-independent-checkpoint-boundary
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  two-uid-boundary:
+    name: Linux two-UID checkpoint proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Prove operator-owned read-only checkpoint boundary
+        run: sudo python scripts/prove_linux_checkpoint_boundary.py
