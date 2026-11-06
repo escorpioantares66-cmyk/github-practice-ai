@@ -96,6 +96,7 @@ jobs:
         run: |
           bash -n scripts/build_termux_sdk_wheels.sh
           bash -n scripts/check_termux_sdk_compat.sh
+          bash -n scripts/run_termux_sdk_compat_with_evidence.sh
           python -m py_compile scripts/test_termux_sdk_live_tls.py
       - name: Upload reproducible SDK assessment evidence
         if: always()
