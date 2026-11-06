@@ -67,3 +67,72 @@ Passing these tests will establish the tested HTTPX2 behaviors on GitHub-hosted 
 ## Acceptance gate
 
 This PR is a test-and-evidence milestone only. Require all candidate transport tests, regular project CI, Ruff, and dependency audit to pass. Review the complete Termux evidence transcript after the device run. Keep the production pin and the existing NO-GO migration recommendation unchanged until all migration gates in `docs/sdk-3.46.0-assessment.md` are satisfied and the user explicitly authorizes a production change.
+
+
+## Native wheel source-identity investigation (2026-11-07)
+
+This section records the read-only provenance follow-up for the locally generated Android API 24 wheelhouse and the separately cached Android API 33 wheels. No package was installed, no source was downloaded, and no native build was run during this investigation.
+
+### Upstream source release references
+
+| Package | Upstream source identity/reference | Published sdist SHA-256 | Publisher provenance |
+|---|---|---|---|
+| `jiter==0.18.0` | `pydantic/jiter`, commit `fc2da0bd1fb699a6c4e9641e9e1c06fa6d5d93e8` | `a0ca63fd9450a212e4e658d4cfe0ab4977c4f9b0003c68828b843c65e27662ff` | PyPI displays a verified GitHub Actions publishing attestation for this sdist and commit. |
+| `pydantic-core==2.50.4` | PR #42 reference: `pydantic/pydantic`, tag `core-v2.50.4`, commit `ea492e04654ab7f7a1f9287ea912419452ead4dd` | `aead3b74b68396bf0feab5d57e050b730ded7df55853c1e048a87e00aaf033c6` | PyPI lists the 2.50.4 sdist as **Without provenance**. The checksum is a PyPI file-integrity reference, not a signed source-to-build attestation. |
+
+Public release references:
+- jiter: https://pypi.org/project/jiter/0.18.0/
+- pydantic-core: https://pypi.org/project/pydantic_core/2.50.4/
+
+### Local archive availability and comparison status
+
+The Termux wheelhouse build log records downloads named `jiter-0.18.0.tar.gz` and `pydantic_core-2.50.4.tar.gz`, followed by successful wheel builds. The log excerpt does not record source archive digests or source VCS identities.
+
+A read-only search under `$HOME` found neither source archive. The pip cache inspection found only these cached wheel files:
+- `jiter-0.18.0-cp314-cp314-android_33_arm64_v8a.whl`
+- `pydantic_core-2.50.1-cp314-cp314-android_33_arm64_v8a.whl`
+- `pydantic_core-2.50.4-cp314-cp314-android_33_arm64_v8a.whl`
+
+It did not recover either source archive. Consequently, the locally downloaded source distributions cannot currently be compared against the upstream sdist hashes above. In particular:
+- jiter's upstream sdist has a verified publishing attestation, but the exact local archive used by the Termux build has not been hash-verified against it;
+- pydantic-core's published sdist checksum is known, but PyPI reports no publishing provenance for that release, and the exact local archive used by the Termux build has not been hash-verified against it.
+
+The `Repository commit: d644194dda0b6e00035ca6976c02fa5d81f8d586` recorded in the local `BUILD-INFO.txt` identifies the project repository checkout used to run the build script. It is not either package's upstream source commit and does not establish the source archive identity.
+
+### Wheel and native-extension identity observations
+
+The locally generated API 24 wheels have the following recorded whole-wheel SHA-256 values:
+- jiter: `86cafd710426934de4571c03eb768e4c8ecc89687247fa1dd9c2a3bd68b90426`
+- pydantic-core: `2abe8bf828e8cea327bf9a900223fca8151b9392578bf1f7f8e8c65090446600`
+
+The cached API 33 wheels have these whole-wheel SHA-256 values:
+- jiter: `09e5ca7993c487b8beaf6ce6befeba16937a2e9c9b9959710c2bbdc15560cbaf`
+- pydantic-core 2.50.4: `ebf888e6c5ef9fe8d8d4b7a8c68861ff95d6f699bb6320d6e4a4e63cb4bd76fa`
+
+The user-provided embedded native extension hashes are identical across the API 24 and API 33 wheels:
+- jiter: `5b220cf7cf177104cb927d9f375bcdaeaa0c7c678466efcaf40d68e06b1c177d`
+- pydantic-core: `f581f4ad221c1b1527c847d4c70fffe62344991a0739242c0e4f60a26b922a3b`
+
+These extension hashes do **not** match the PR #42 independently attested native extensions:
+- jiter PR #42: `892b3fba41c25b406308a83c81492bbcb31238b0f2c9b3b8046cf0a8d73765`
+- pydantic-core PR #42: `12cdf82028a452773368aa55528494dd85420dfc4a2474c05aa750b8f03b2e62`
+
+Matching extension hashes across API 24 and API 33 show that the embedded native bytes are identical between those two wheel sets. They do not prove how or when those bytes were built, nor that the source archives were authentic. Different hashes from PR #42 show the local extensions are not byte-identical to the PR #42 reference outputs; that alone does not demonstrate a defect or malicious modification.
+
+### Validation-script limitation
+
+The current build and compatibility scripts verify wheel versions, Android platform tags, and wheelhouse manifest checksums. They do not:
+- record or enforce source sdist SHA-256 values;
+- record or enforce upstream source VCS commits;
+- compare embedded native extension hashes with PR #42 attestations; or
+- lock and attest the complete native build dependency environment.
+
+A wheelhouse manifest proves consistency with the recorded wheel hashes, not source provenance. This limitation remains open and must not be described as a completed source-provenance verification.
+
+### Updated decision and required next evidence
+
+**Decision remains NO-GO for installing the retained candidate wheels or migrating the production SDK.** The source archive comparison is pending because the exact source archives are unavailable locally. The pydantic-core PyPI sdist also lacks publisher provenance.
+
+To close the archive comparison without rebuilding or installing anything, recover the exact original source archives from an independently retained build artifact or trusted local backup, then calculate SHA-256 and compare them with the PyPI references above. Do not substitute newly downloaded archives as proof of what the earlier build consumed.
+
+The production pin remains `openai==1.40.0`. No production dependency, lockfile, application runtime, or `main` branch change is part of this assessment.
