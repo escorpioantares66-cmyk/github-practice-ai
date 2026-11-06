@@ -115,6 +115,7 @@ import asyncio
 import platform
 import sys
 import sysconfig
+from importlib.metadata import version
 
 import httpx2
 import jiter
@@ -126,7 +127,7 @@ from openai import AsyncOpenAI, OpenAI
 print(f"Python: {platform.python_version()} ({sys.platform}, {platform.machine()})")
 print(f"Python platform: {sysconfig.get_platform()}")
 print(f"OpenAI SDK: {openai.__version__}")
-print(f"jiter: {jiter.__version__}")
+print(f"jiter: {version('jiter')}")
 print(f"pydantic-core: {pydantic_core.__version__}")
 print(f"HTTPX2: {httpx2.__version__}")
 print(f"Starlette: {starlette.__version__}")
