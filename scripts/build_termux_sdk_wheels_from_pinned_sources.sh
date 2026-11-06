@@ -57,7 +57,8 @@ MATURIN_VERSION="$("$MATURIN_BIN" --version)"
 
 clone_at() {
   local url="$1" commit="$2" dest="$3" sparse_path="${4:-}"
-  git clone --filter=blob:none --no-checkout "$url" "$dest"
+  git clone --filter=blob:none --no-checkout --depth 1 "$url" "$dest"
+  git -C "$dest" fetch --filter=blob:none --depth 1 origin "$commit"
   if [[ -n "$sparse_path" ]]; then
     git -C "$dest" sparse-checkout init --cone
     git -C "$dest" sparse-checkout set "$sparse_path"
