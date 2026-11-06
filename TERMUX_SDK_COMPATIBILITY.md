@@ -65,3 +65,23 @@ does not promote candidate dependency pins into production.
 The scripts do not install system packages. A Rust toolchain is required for
 native source builds and must be provisioned separately if it is not already
 available.
+
+## Verified device result (2026-11-06)
+
+The two-stage procedure was completed on the actual Android/Termux device:
+
+- Device: Android API 33, AArch64.
+- Interpreter: CPython 3.14.8.
+- Interpreter platform: `android-24-arm64_v8a`.
+- Native wheels built and verified:
+  - `jiter-0.18.0-cp314-cp314-android_24_arm64_v8a.whl`
+    - SHA256: `86cafd710426934de4571c03eb768e4c8ecc89687247fa1dd9c2a3bd68b90426`
+  - `pydantic_core-2.50.4-cp314-cp314-android_24_arm64_v8a.whl`
+    - SHA256: `2abe8bf828e8cea327bf9a900223fca8151b9392578bf1f7f8e8c65090446600`
+- Runtime smoke test: **7 passed in 0.88s**.
+- Final script result: `Termux OpenAI SDK compatibility smoke test passed.`
+- The script reported that only the temporary virtual environment was modified and removed on exit; the verified wheelhouse was left untouched.
+
+Pytest emitted a `PytestDeprecationWarning` because the asyncio fixture loop scope is not explicitly configured. It did not fail the run. This warning is recorded separately from the passing test result and should be addressed as test-configuration cleanup, not treated as a runtime compatibility failure.
+
+This is device-specific evidence for the isolated candidate stack only. It does not change or recommend changing the production `openai==1.40.0` baseline, and it does not authorize merging this draft PR.
