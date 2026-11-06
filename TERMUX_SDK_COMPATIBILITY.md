@@ -21,8 +21,9 @@ bash scripts/build_termux_sdk_wheels.sh
 
 The script derives the Android API target from Python's platform tag, rejects
 conflicting `ANDROID_API_LEVEL` overrides, and builds exactly
-`jiter==0.18.0` and `pydantic-core==2.50.4`. It disables pip's wheel cache so
-the previously cached API-33 artifacts cannot be reused.
+`jiter==0.18.0` and `pydantic-core==2.50.4` from their source distributions.
+It disables both pip's wheel cache and binary-wheel selection so previously
+cached or published API-33 artifacts cannot be reused.
 
 The script uses `pip wheel`: build-backend requirements may be installed into
 temporary isolated build environments, but neither target package is installed
