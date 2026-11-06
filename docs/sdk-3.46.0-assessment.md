@@ -1,6 +1,7 @@
 # OpenAI Python SDK 3.46.0 application assessment
 
-**Assessment snapshot:** 2026-11-06  
+**Assessment snapshot:** 2026-11-07  
+**CI evidence run:** 2026-11-06 (PR #46 head `bad2d86dcc2d62d1b0b1c8cd79dbe180240e801b`)  
 **Candidate:** `openai==3.46.0`  
 **Production baseline:** `openai==1.40.0`  
 **Decision:** **NO-GO for production migration; continue isolated evaluation.**  
@@ -8,11 +9,11 @@
 
 ## Executive decision
 
-SDK 3.46.0 has a materially newer transport stack and additional SDK-level capabilities, but the evidence does not establish that it is safer or more capable for this application in production. The candidate now has application integration coverage for its real SDK transport path, and the HTTPX2 version floor used by the candidate CI job is above the fixed versions for the HTTPX2 advisories reviewed here. The fresh test outcome and exact resolved dependency graph remain to be verified from the new CI artifacts. However:
+SDK 3.46.0 has a materially newer transport stack and additional SDK-level capabilities. PR #46's CI artifacts now provide measured evidence: the 17-test SDK transport/API integration suite passed on Python 3.13.18, 3.14.10, and the experimental 3.15.2 runner; `pip check` passed; and `pip-audit` reported zero vulnerabilities across 36 installed distributions in each matrix environment. The exact resolved AnyIO and HTTPX2 dependency versions are above the fixed boundaries for the reviewed advisories. This is positive evidence for the isolated candidate environment, but it does not establish production superiority. Remaining limitations are:
 
 - SDK 3.46.0 requires Python >=3.10; this project declares Python >=3.9.
-- It replaces the SDK-managed `httpx` transport with `httpx2`, changing the transport, custom-client, proxy, TLS trust-store and dependency surface.
-- The SDK permits AnyIO >=4.10,<5, which includes versions affected by three reviewed AnyIO advisories. A candidate runtime resolved to AnyIO >=4.14.2 is needed to clear those findings.
+- The SDK migrates its transport from legacy `httpx` to `httpx2`. The CI environment did contain both `httpx==0.28.1` and `httpx2==2.16.0`; compatibility across the application's broader proxy, TLS, custom-transport, and trust-store configurations remains to be demonstrated.
+- The SDK's broad AnyIO requirement (`>=4.10,<5`) does not itself enforce the safe floor found in this run (`4.16.0`). Keep a resolver constraint or explicit dependency policy in any future deployment plan.
 - The current application primarily exercises Chat Completions. New SDK capabilities do not become application capabilities without deliberate implementation and tests. The current `AIClient.embed` path is a deterministic local mock, not a provider-backed embedding request.
 - There is not yet a fully matched performance, failure-rate, TLS/proxy, or supported-platform A/B dataset comparing 1.40.0 and 3.46.0.
 
@@ -50,8 +51,12 @@ No test makes a live OpenAI API call or uses a billable provider request.
 
 - PR #45, merged as [`b3ee3624309efee0e1e993a4064c21d8a56bb218`](https://github.com/escorpioantares66-cmyk/github-practice-ai/commit/b3ee3624309efee0e1e993a4064c21d8a56bb218), added lifecycle fixes, provider-error propagation, and real SDK transport/API integration tests. The PR was reported green before merge.
 - PR #45's description records a prior Termux CPython 3.14.8 smoke test of 13 tests. This is historical device evidence, not a fresh run performed by this assessment.
-- The 17 test functions are present in the candidate CI module. A function count is not itself a passing test result. The fresh matrix result and exact resolved dependency graph must be captured by the assessment workflow artifact; do not infer a pass from the presence of the tests.
-- This assessment environment did not execute GitHub Actions jobs or run tests on the user's Termux device. The workflow added with this report records the candidate dependency freeze and `pip-audit` output without installing the audit tool into the candidate environment.
+- **Fresh CI result:** workflow run [#42293189952](https://github.com/escorpioantares66-cmyk/github-practice-ai/actions/runs/42293189952) completed successfully. All three SDK transport matrix jobs completed successfully; the Python 3.15 matrix entry is explicitly experimental (`continue-on-error: true`). The separate `ci-hardened-v1.1` and Linux checkpoint-boundary workflow runs also completed successfully.
+- **Python 3.13.18:** `17 passed, 3 warnings in 1.50s`; `pip check` passed; `pip-audit` exit code `0`, with no vulnerabilities reported across 36 installed distributions.
+- **Python 3.14.10:** `17 passed, 3 warnings in 1.63s`; `pip check` passed; `pip-audit` exit code `0`, with no vulnerabilities reported across 36 installed distributions.
+- **Python 3.15.2 (experimental):** `17 passed, 3 warnings in 1.47s`; `pip check` passed; `pip-audit` exit code `0`, with no vulnerabilities reported across 36 installed distributions.
+- Each artifact also contains the exact `pip freeze --all`, environment metadata, JSON audit output, and complete pytest output. The warning summary includes Pydantic class-based `Config` deprecations; the logs also emit a pytest-asyncio fixture-loop-scope deprecation notice. These are warnings, not test failures, and should be cleaned up before relying on the candidate stack long term.
+- These are GitHub-hosted Linux x86_64 results. They do not replace a fresh Termux CPython 3.14 device test. PR #45's earlier Termux CPython 3.14.8 smoke result remains historical evidence only.
 
 ## Dependency and platform comparison
 
@@ -65,7 +70,15 @@ No test makes a live OpenAI API call or uses a billable provider request.
 | typing-extensions | Not explicitly direct-pinned by project | SDK `typing-extensions>=4.14,<5` | New runtime floor; capture exact resolved version |
 | httpcore2 | Not present in baseline SDK transport graph | Transitive HTTPX2 transport dependency | Capture exact version from candidate freeze and audit independently |
 
-The SDK's published metadata and HTTPX2 migration guide are linked below. Candidate CI deliberately uses HTTPX2 >=2.15.1, but the actual resolved version and paired `httpcore2` version must be read from the attached freeze artifact, not assumed from the lower bound.
+The CI artifacts show the same resolved candidate stack on all three Python versions. The candidate workflow's `pip check` step succeeded on each runner.
+
+| Python runner | `openai` | `httpx2` | `httpcore2` | `anyio` | `jiter` | `pydantic` | `typing-extensions` | Test result |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 3.13.18 | 3.46.0 | 2.16.0 | 2.16.0 | 4.16.0 | 0.19.0 | 2.14.3 | 4.16.0 | 17 passed |
+| 3.14.10 | 3.46.0 | 2.16.0 | 2.16.0 | 4.16.0 | 0.19.0 | 2.14.3 | 4.16.0 | 17 passed |
+| 3.15.2 (experimental) | 3.46.0 | 2.16.0 | 2.16.0 | 4.16.0 | 0.19.0 | 2.14.3 | 4.16.0 | 17 passed |
+
+The complete freeze also contains `httpx==0.28.1` alongside `httpx2==2.16.0`, so both transport packages are present in this full application/test environment. The SDK's migration away from legacy HTTPX should not be interpreted as proof that the application no longer installs or uses legacy HTTPX elsewhere. The artifact contains the authoritative full dependency snapshot for each runner.
 
 ## Security advisory findings
 
@@ -83,25 +96,24 @@ Sources: [openai-python Security](https://github.com/openai/openai-python/securi
 
 | Advisory (published) | Component and affected range | Severity | Impact | 3.46.0 applicability |
 |---|---|---|---|---|
-| [GHSA-7mj9-2mp8-4m2p / CVE-2026-84381](https://osv.dev/vulnerability/GHSA-7mj9-2mp8-4m2p) (2026-09-08) | `httpx2` 2.6.0–2.9.1; underlying `httpcore2` before 2.10.0 | High, CVSS 8.1 | WSS through SOCKS5 may be sent without TLS, exposing credentials and frames | **Not affected if** candidate resolves HTTPX2 >=2.15.1 and matching httpcore2 >=2.10.0. The candidate workflow's HTTPX2 lower bound clears the fixed range; exact resolved pair still must be recorded. |
-| [GHSA-f2fp-rgf2-35cp / CVE-2026-84378](https://osv.dev/vulnerability/GHSA-f2fp-rgf2-35cp) (2026-09-08) | `httpx2` before 2.10.0 | Medium, CVSS 5.9 | Quadratic SSE line buffering can cause CPU exhaustion | **Not affected** by HTTPX2 >=2.15.1. |
-| [GHSA-h4x7-gw46-3wm6 / CVE-2026-84379](https://osv.dev/vulnerability/PYSEC-2026-3848) (2026-09-08) | `httpx2` before 2.11.0 | Medium, CVSS 5.3 | CR/LF injection into multipart part headers when untrusted upload metadata is passed | **Not affected** by HTTPX2 >=2.15.1. |
-| [GHSA-pf96-p4fj-6566 / CVE-2026-84380](https://osv.dev/vulnerability/PYSEC-2026-3849) (2026-09-08) | `httpx2` before 2.11.0 | Medium, CVSS 5.6 | Conflicting Content-Length and Transfer-Encoding headers can create request-smuggling ambiguity | **Not affected** by HTTPX2 >=2.15.1. |
-| [GHSA-8xx6-hgc6-gc2m / CVE-2026-84382](https://osv.dev/vulnerability/GHSA-8xx6-hgc6-gc2m) (2026-09-08) | `httpx2` before 2.12.0 | High, CVSS 7.5 | Streaming decompression can allocate very large intermediate buffers and exhaust memory | **Not affected** by HTTPX2 >=2.15.1. |
-| [GHSA-82r6-8w77-94w6 / CVE-2026-63374](https://osv.dev/vulnerability/GHSA-82r6-8w77-94w6) (2026-09-18) | `anyio`; OSV records fixed version 4.14.2 | Critical, CVSS v4 9.3 | IDNA 2003 hostname encoding can permit TLS certificate spoofing for affected internationalized hostnames when the connection is redirected | **Applicability uncertain until exact AnyIO version is captured**; SDK range >=4.10,<5 permits versions before 4.14.2. |
-| [GHSA-3w57-8xmc-8v26 / CVE-2026-63349](https://osv.dev/vulnerability/GHSA-3w57-8xmc-8v26) (2026-09-18) | `anyio` 4.14.0–4.14.1; fixed 4.14.2 | High, CVSS v4 7.0 | `open_process` can fail to apply `extra_groups`, undermining intended supplementary-group privilege dropping | **Applicability uncertain until exact AnyIO version is captured**; the SDK's open-ended range admits affected releases. |
-| [GHSA-5p39-cfhj-2xmp / CVE-2026-64847](https://osv.dev/vulnerability/PYSEC-2026-4024) (2026-10-01) | `anyio`; OSV records fixed version 4.14.2 | Medium, CVSS v4 6.8 | Process-pool workers can block indefinitely if stderr fills an undrained pipe | **Applicability uncertain until exact AnyIO version is captured**; require AnyIO >=4.14.2 to clear the OSV fixed boundary. |
+| [GHSA-7mj9-2mp8-4m2p / CVE-2026-84381](https://osv.dev/vulnerability/GHSA-7mj9-2mp8-4m2p) (2026-09-08) | `httpx2` 2.6.0–2.9.1; underlying `httpcore2` before 2.10.0 | High, CVSS 8.1 | WSS through SOCKS5 may be sent without TLS, exposing credentials and frames | **Not affected in the measured CI environment:** `httpx2==2.16.0` and `httpcore2==2.16.0`, both beyond the affected ranges and fixed floors. |
+| [GHSA-f2fp-rgf2-35cp / CVE-2026-84378](https://osv.dev/vulnerability/GHSA-f2fp-rgf2-35cp) (2026-09-08) | `httpx2` before 2.10.0 | Medium, CVSS 5.9 | Quadratic SSE line buffering can cause CPU exhaustion | **Not affected in the measured CI environment:** `httpx2==2.16.0`. |
+| [GHSA-h4x7-gw46-3wm6 / CVE-2026-84379](https://osv.dev/vulnerability/PYSEC-2026-3848) (2026-09-08) | `httpx2` before 2.11.0 | Medium, CVSS 5.3 | CR/LF injection into multipart part headers when untrusted upload metadata is passed | **Not affected in the measured CI environment:** `httpx2==2.16.0`. |
+| [GHSA-pf96-p4fj-6566 / CVE-2026-84380](https://osv.dev/vulnerability/PYSEC-2026-3849) (2026-09-08) | `httpx2` before 2.11.0 | Medium, CVSS 5.6 | Conflicting Content-Length and Transfer-Encoding headers can create request-smuggling ambiguity | **Not affected in the measured CI environment:** `httpx2==2.16.0`. |
+| [GHSA-8xx6-hgc6-gc2m / CVE-2026-84382](https://osv.dev/vulnerability/GHSA-8xx6-hgc6-gc2m) (2026-09-08) | `httpx2` before 2.12.0 | High, CVSS 7.5 | Streaming decompression can allocate very large intermediate buffers and exhaust memory | **Not affected in the measured CI environment:** `httpx2==2.16.0`. |
+| [GHSA-82r6-8w77-94w6 / CVE-2026-63374](https://osv.dev/vulnerability/GHSA-82r6-8w77-94w6) (2026-09-18) | `anyio`; OSV records fixed version 4.14.2 | Critical, CVSS v4 9.3 | IDNA 2003 hostname encoding can permit TLS certificate spoofing for affected internationalized hostnames when the connection is redirected | **Not affected in the measured CI environment:** `anyio==4.16.0`, above the OSV fixed boundary 4.14.2. The SDK's broad range still permits earlier versions if future resolution is not constrained. |
+| [GHSA-3w57-8xmc-8v26 / CVE-2026-63349](https://osv.dev/vulnerability/GHSA-3w57-8xmc-8v26) (2026-09-18) | `anyio` 4.14.0–4.14.1; fixed 4.14.2 | High, CVSS v4 7.0 | `open_process` can fail to apply `extra_groups`, undermining intended supplementary-group privilege dropping | **Not affected in the measured CI environment:** `anyio==4.16.0`, outside the affected 4.14.0–4.14.1 range. Preserve a minimum-version constraint so this remains true after future resolution. |
+| [GHSA-5p39-cfhj-2xmp / CVE-2026-64847](https://osv.dev/vulnerability/PYSEC-2026-4024) (2026-10-01) | `anyio`; OSV records fixed version 4.14.2 | Medium, CVSS v4 6.8 | Process-pool workers can block indefinitely if stderr fills an undrained pipe | **Not affected in the measured CI environment:** `anyio==4.16.0`, above the OSV fixed boundary 4.14.2. |
 
-For the HTTPX2 findings, the patched floors are 2.10.0 (WSS/SOCKS and SSE), 2.11.0 (multipart and request framing), and 2.12.0 (decompression). HTTPX2 >=2.15.1 is beyond all those floors. The AnyIO advisories are the unresolved dependency risk: SDK 3.46.0's declared range does not itself exclude affected AnyIO versions.
+The measured CI versions clear all eight reviewed dependency-advisory ranges: `httpx2==2.16.0` and `httpcore2==2.16.0` exceed the HTTPX2 fixes, and `anyio==4.16.0` exceeds the AnyIO 4.14.2 fix boundary. In addition, `pip-audit==2.10.1` returned exit code 0 and listed no vulnerabilities in any of the 36 installed distributions on each runner. This result is specific to the resolved artifact environments and the advisory data available to the scanner at run time; it is not a guarantee against undisclosed vulnerabilities or future advisories. The declared AnyIO range remains broad enough to permit a vulnerable version if resolution is changed or constrained differently.
 
 ### Other requested dependency checks
 
-- `httpcore2`: the WSS/SOCKS advisory above is fixed at 2.10.0. The candidate's exact paired version must be confirmed from the freeze artifact.
-- `jiter`: no matching public OSV advisory was identified in the scoped search for this snapshot; exact package audit remains required.
-- `pydantic`: no matching advisory for the `pydantic` distribution was identified in the scoped search. Advisories for the separate `pydantic-ai` project are not applicable to the `pydantic` package and are intentionally excluded.
-- `typing-extensions`: no matching public OSV advisory was identified in the scoped search; exact package audit remains required.
-- `anyio`: three findings above require exact version verification.
-- `httpx2`: five findings above have fixed versions below the candidate workflow's stated lower bound.
+- `httpcore2==2.16.0`: the measured version is above the 2.10.0 fixed floor for the WSS/SOCKS finding.
+- `jiter==0.19.0`, `pydantic==2.14.3`, and `typing-extensions==4.16.0`: no vulnerabilities were reported for these distributions by the candidate's `pip-audit` scan. This is a scanner snapshot, not a guarantee of absence.
+- `anyio==4.16.0`: beyond the reviewed 4.14.2 fix boundary; all three reviewed AnyIO findings are cleared for the measured CI environment.
+- `httpx2==2.16.0` and `httpcore2==2.16.0`: both are beyond the reviewed affected ranges; all five reviewed HTTPX2 findings are cleared for the measured CI environment.
+- Each `pip-audit.json` artifact contains 36 distributions and zero vulnerability entries.
 
 ## Reproducing and collecting evidence
 
@@ -124,7 +136,15 @@ The CI job additionally runs `scripts/audit_sdk_candidate_env.sh`. It records:
 - a `pip-audit` JSON report scanned against the candidate environment from a separate temporary audit-tool virtual environment;
 - the audit exit status.
 
-Download the `sdk-3.46.0-evidence` artifact from the candidate CI job. Compare the exact dependency versions to the affected/fixed ranges above. Do not mark an advisory clear based only on the broad requirement specifier.
+The evidence is stored as three artifacts attached to [workflow run #42293189952](https://github.com/escorpioantares66-cmyk/github-practice-ai/actions/runs/42293189952):
+
+| Runner | Artifact name | Artifact ID | SHA-256 digest |
+|---|---|---:|---|
+| Python 3.13.18 | `sdk-3.46.0-evidence-python-3.13` | `13540338170` | `8afaf7221dac467f3db5fee1f5b8fc6ed02f852f566a92fedaf075855d211697` |
+| Python 3.14.10 | `sdk-3.46.0-evidence-python-3.14` | `13540387560` | `cbc5aa06421d47bc40f60044a8a4a0ecb7a9cf280f0aeb1499d3758e077ca7bf` |
+| Python 3.15.2 (experimental) | `sdk-3.46.0-evidence-python-3.15` | `13540158581` | `d9eccf6819351bfff9e5a0c11c18f96a68770094c517228851d19e5502fd6ea2` |
+
+GitHub reported all three artifacts unexpired at review time, with retention through 2026-12-06. Use the artifact files—not the dependency specifiers alone—as the immutable evidence for this run. The Python 3.15 result is informational/experimental and is not a required compatibility gate.
 
 ## Acceptance criteria
 
@@ -132,7 +152,7 @@ A production GO requires all of the following, with immutable CI evidence:
 
 1. Baseline and candidate tested against the same application commit and equivalent supported Python versions.
 2. All application unit, API, quota, auth, streaming, cancellation, retry, timeout, and client-lifecycle tests pass on both stacks.
-3. Candidate `pip check` passes and `pip-audit` reports no unresolved applicable findings; the exact resolved AnyIO version is >=4.14.2, and HTTPX2/httpcore2 are on patched versions.
+3. Candidate `pip check` passes and `pip-audit` reports no applicable findings for the exact resolved dependency graph; AnyIO is constrained to >=4.14.2, and HTTPX2/httpcore2 remain on patched versions.
 4. TLS certificate verification, proxy behavior, custom transport integration, and HTTPX2 trust-store behavior are explicitly tested.
 5. Python 3.9 support is either preserved through a deliberate compatibility strategy or formally retired as a separate product decision; it must not disappear as an incidental SDK upgrade.
 6. Termux CPython 3.14 native wheels are independently verified and runtime smoke tests pass on the actual device only after explicit user authorization.
@@ -141,7 +161,7 @@ A production GO requires all of the following, with immutable CI evidence:
 
 ## Final recommendation
 
-**NO-GO for production migration today.** The HTTPX2 advisory set is clearable with the candidate's current transport floor, but the AnyIO dependency range is too broad to establish safety without the exact resolved environment. The project also loses declared Python 3.9 compatibility, and the current test set does not yet prove performance or security superiority over 1.40.0.
+**NO-GO for production migration today.** The measured candidate CI environments are clean against the reviewed advisories: all three matrix runs passed 17/17 tests, `pip check` passed, and `pip-audit` found zero vulnerabilities across 36 installed distributions per runner. The exact resolved HTTPX2/httpcore2 and AnyIO versions clear the reviewed findings. However, this does not establish that SDK 3.46.0 is safer or more capable than 1.40.0 for production. The project still loses declared Python 3.9 compatibility; the SDK's open-ended AnyIO requirement can resolve differently in future; transport/TLS/proxy behavior is not yet exhaustively tested; no matched performance/failure-rate comparison exists; and no fresh test has been run on the actual Termux device.
 
 Continue isolated evaluation. Do not change the production SDK pin, dependency files, Termux installation, or production configuration on the strength of this report alone.
 
