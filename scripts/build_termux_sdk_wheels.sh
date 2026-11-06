@@ -75,13 +75,13 @@ fi
   echo "ANDROID_API_LEVEL: $ANDROID_API_LEVEL"
   echo "Rust: $(rustc --version)"
   echo "Cargo: $(cargo --version)"
-  echo "Build command: pip wheel --no-deps --no-cache-dir"
+  echo "Build command: pip wheel --no-deps --no-cache-dir --no-binary=jiter,pydantic-core"
   echo "Packages: jiter==0.18.0 pydantic-core==2.50.4"
 } > "$WHEELHOUSE_DIR/BUILD-INFO.txt"
 
 # --no-cache-dir prevents reuse of the previously cached API-33 wheels.
 # pip wheel builds artifacts but does not install the target packages.
-"$PYTHON_BIN" -m pip wheel --no-deps --no-cache-dir \
+"$PYTHON_BIN" -m pip wheel --no-deps --no-cache-dir --no-binary=jiter,pydantic-core \
   --wheel-dir "$WHEELHOUSE_DIR" \
   "jiter==0.18.0" "pydantic-core==2.50.4" \
   2>&1 | tee "$WHEELHOUSE_DIR/build.log"
