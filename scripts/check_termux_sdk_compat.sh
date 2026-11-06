@@ -155,7 +155,7 @@ VENV_PY="$VENV_DIR/bin/python"
   "jiter==0.18.0" \
   "pydantic-core==2.50.4" \
   "openai==3.46.0" \
-  "httpx2>=2.15.1,<3" \
+  "httpx2==2.16.0" \
   "starlette[full]>=1.2,<2" \
   "pytest>=8" \
   "pytest-asyncio>=0.23" \
@@ -197,6 +197,15 @@ asyncio.run(main())
 print("Default synchronous and asynchronous SDK clients constructed successfully.")
 PY
 
+# Probe both real Termux trust sources with direct HTTPS. This uses no API key
+# and explicitly bypasses proxy environment variables.
+PYTHONPATH="$ROOT_DIR" "$VENV_PY" scripts/test_termux_sdk_live_tls.py
+
+# Run loopback TLS rejection, proxy, timeout, and SDK connection-error tests.
+PYTHONPATH="$ROOT_DIR" "$VENV_PY" -m pytest -q -o addopts="" \
+  tests/test_sdk_transport_network_compat.py
+
+# Retain the broader SDK/application integration checks.
 PYTHONPATH="$ROOT_DIR" "$VENV_PY" -m pytest -q -o addopts="" \
   tests/test_openai_sdk_transport_compat.py
 
