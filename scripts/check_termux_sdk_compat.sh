@@ -211,5 +211,6 @@ PYTHONPATH="$ROOT_DIR" "$VENV_PY" -m pytest -q -o addopts="" \
   tests/test_openai_sdk_transport_compat.py
 
 echo "Termux OpenAI SDK compatibility smoke test passed."
-echo "Only the temporary virtual environment was modified; it is removed on exit."
-echo "The verified wheelhouse was left untouched."
+echo "Candidate packages were installed only in the temporary virtual environment; it is removed on exit."
+echo "The Termux evidence report is retained in the working directory."
+echo "The verified wheelhouse and global Termux environment were left untouched."
