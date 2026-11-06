@@ -410,9 +410,18 @@ def test_agent_loop_uses_real_sdk_and_closes_client(monkeypatch: pytest.MonkeyPa
     sdk_openai = openai.OpenAI
 
     def factory(*, api_key: str) -> OpenAI:
-        http_client = httpx2.Client(
-            transport=httpx2.MockTransport(lambda request: _transport_handler(request, seen))
-        )
+        def handler(request: httpx2.Request):
+            body = json.loads(request.content.decode("utf-8"))
+            seen.append({"method": request.method, "path": request.url.path, "body": body})
+            return httpx2.Response(
+                200,
+                request=request,
+                json=_completion_payload(
+                    '{"tool":"final","args":{"answer":"sdk-agent-ok"}}'
+                ),
+            )
+
+        http_client = httpx2.Client(transport=httpx2.MockTransport(handler))
         client = sdk_openai(api_key=api_key, base_url=BASE_URL, http_client=http_client)
         clients.append(client)
         return client
@@ -423,7 +432,7 @@ def test_agent_loop_uses_real_sdk_and_closes_client(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(agent_loop.cost_guard, "MAX_PROMPT_TOKENS_PER_CALL", 100)
     monkeypatch.setattr(agent_loop.cost_guard, "MAX_COMPLETION_TOKENS_PER_CALL", 100)
     result = agent_loop._real_llm_pick_tool("sdk integration", [], requester="sdk-user")
-    assert result["tool"] == "final"
+    assert result == {"tool": "final", "args": {"answer": "sdk-agent-ok"}}
     assert seen[0]["path"] == "/v1/chat/completions"
     assert clients and all(client._client.is_closed for client in clients)
 
