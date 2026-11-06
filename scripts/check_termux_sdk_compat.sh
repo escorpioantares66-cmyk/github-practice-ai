@@ -159,7 +159,8 @@ VENV_PY="$VENV_DIR/bin/python"
   "starlette[full]>=1.2,<2" \
   "pytest>=8" \
   "pytest-asyncio>=0.23" \
-  "cachetools>=5"
+  "cachetools>=5" \
+  "cryptography>=44.0.0"
 
 "$VENV_PY" -m pip check
 "$VENV_PY" - <<'PY'
