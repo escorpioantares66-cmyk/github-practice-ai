@@ -297,3 +297,47 @@ def test_starlette_testclient_runs_without_legacy_httpx_deprecation() -> None:
         and "deprecated" in str(warning.message).lower()
     ]
     assert not legacy_httpx_warnings
+
+
+def test_sync_responses_websocket_manager_builds_expected_endpoint() -> None:
+    """Build the Responses WebSocket URL without opening a network connection."""
+    with OpenAI(api_key=API_KEY, base_url=BASE_URL) as client:
+        manager = client.responses.connect(
+            extra_query={"trace_id": "responses-ws-test"},
+            extra_headers={"X-Transport-Test": "responses"},
+        )
+        assert str(manager._prepare_url()) == "wss://api.openai-transport.test/v1/responses"
+
+
+@pytest.mark.asyncio
+async def test_async_responses_websocket_manager_builds_expected_endpoint() -> None:
+    """The async Responses client must use the same WebSocket endpoint contract."""
+    async with AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL) as client:
+        manager = client.responses.connect(
+            extra_query={"trace_id": "responses-ws-async-test"},
+            extra_headers={"X-Transport-Test": "responses-async"},
+        )
+        assert str(manager._prepare_url()) == "wss://api.openai-transport.test/v1/responses"
+
+
+def test_sync_beta_realtime_manager_builds_expected_endpoint() -> None:
+    """The retained beta Realtime API must target its WebSocket resource path."""
+    with OpenAI(api_key=API_KEY, base_url=BASE_URL) as client:
+        manager = client.beta.realtime.connect(
+            model="gpt-realtime",
+            extra_query={"trace_id": "realtime-ws-test"},
+            extra_headers={"X-Transport-Test": "realtime"},
+        )
+        assert str(manager._prepare_url()) == "wss://api.openai-transport.test/v1/realtime"
+
+
+@pytest.mark.asyncio
+async def test_async_beta_realtime_manager_builds_expected_endpoint() -> None:
+    """The async retained beta Realtime API must preserve the WebSocket path."""
+    async with AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL) as client:
+        manager = client.beta.realtime.connect(
+            model="gpt-realtime",
+            extra_query={"trace_id": "realtime-ws-async-test"},
+            extra_headers={"X-Transport-Test": "realtime-async"},
+        )
+        assert str(manager._prepare_url()) == "wss://api.openai-transport.test/v1/realtime"
