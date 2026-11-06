@@ -1,5 +1,6 @@
 name: ci-hardened-v1.1
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
