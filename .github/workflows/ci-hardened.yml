@@ -2,7 +2,7 @@ name: ci-hardened-v1.1
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, assessment/sdk-3.46.0-termux-source-pinned-rebuild]
   pull_request:
     branches: [main]
 
