@@ -100,6 +100,23 @@ jobs:
           bash -n scripts/check_termux_sdk_compat.sh
           bash -n scripts/run_termux_sdk_compat_with_evidence.sh
           python -m py_compile scripts/test_termux_sdk_live_tls.py
+          set -euo pipefail
+          safety_tmp="$(mktemp -d)"
+          trap 'rm -rf "$safety_tmp"' EXIT
+          existing_root="$safety_tmp/existing"
+          mkdir "$existing_root"
+          printf 'preserve me\\n' > "$existing_root/marker"
+          if SOURCE_BUILD_ROOT="$existing_root" bash scripts/build_termux_sdk_wheels_from_pinned_sources.sh; then
+            echo "Builder unexpectedly accepted an existing SOURCE_BUILD_ROOT" >&2
+            exit 1
+          fi
+          test -f "$existing_root/marker"
+          new_root="$safety_tmp/new-root"
+          if PREFIX="" SOURCE_BUILD_ROOT="$new_root" bash scripts/build_termux_sdk_wheels_from_pinned_sources.sh; then
+            echo "Builder unexpectedly passed the non-Termux preflight" >&2
+            exit 1
+          fi
+          test ! -e "$new_root"
       - name: Upload reproducible SDK assessment evidence
         if: always()
         uses: actions/upload-artifact@v6
