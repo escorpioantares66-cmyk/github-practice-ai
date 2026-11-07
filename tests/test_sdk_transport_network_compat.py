@@ -380,5 +380,8 @@ def test_sdk_maps_transport_connection_failure_to_api_connection_error() -> None
         max_retries=0,
         http_client=httpx2.Client(transport=transport),
     ) as client:
-        with pytest.raises(APIConnectionError):
+        with pytest.raises(APIConnectionError) as exc_info:
             client.models.list()
+
+    chain = tuple(_exception_chain(exc_info.value))
+    assert any(isinstance(error, httpx2.ConnectError) for error in chain)
