@@ -8,9 +8,38 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 MATURIN_BIN="${MATURIN_BIN:-maturin}"
 ORIGINAL_WHEELHOUSE_DIR="${ORIGINAL_WHEELHOUSE_DIR:-$HOME/pr41-api24-wheelhouse}"
 OUTPUT_DIR="${SOURCE_PINNED_WHEELHOUSE_DIR:-$HOME/pr41-api24-source-pinned-wheelhouse}"
+
+# Resolve paths before creating anything. The source build tree, historical
+# wheelhouse, and new output wheelhouse must be disjoint; otherwise a caller
+# could accidentally write build artifacts into data that must stay intact.
+command -v "$PYTHON_BIN" >/dev/null 2>&1 || {
+  echo "Missing Python: $PYTHON_BIN" >&2
+  exit 2
+}
+[[ -d "$ORIGINAL_WHEELHOUSE_DIR" ]] || {
+  echo "Original wheelhouse not found: $ORIGINAL_WHEELHOUSE_DIR" >&2
+  exit 2
+}
+if [[ -e "$OUTPUT_DIR" || -L "$OUTPUT_DIR" ]]; then
+  echo "Refusing to overwrite existing output: $OUTPUT_DIR" >&2
+  exit 2
+fi
+
+resolve_path() {
+  "$PYTHON_BIN" -c 'import os, sys; print(os.path.realpath(os.path.abspath(sys.argv[1])))' "$1"
+}
+path_overlaps() {
+  [[ "$1" == "$2" || "$1" == "$2/"* || "$2" == "$1/"* ]]
+}
+ORIGINAL_CANONICAL="$(resolve_path "$ORIGINAL_WHEELHOUSE_DIR")"
+OUTPUT_CANONICAL="$(resolve_path "$OUTPUT_DIR")"
+if path_overlaps "$ORIGINAL_CANONICAL" "$OUTPUT_CANONICAL"; then
+  echo "ERROR: output wheelhouse must be outside the original wheelhouse." >&2
+  exit 2
+fi
+
 # The builder owns only a directory it creates itself. An explicit override
-# must name a path that does not already exist; never recursively delete a
-# caller-owned directory during EXIT cleanup.
+# must name a new path outside both wheelhouses; never delete caller-owned data.
 BUILD_ROOT=""
 BUILD_ROOT_OWNED=0
 if [[ -n "${SOURCE_BUILD_ROOT:-}" ]]; then
@@ -19,9 +48,27 @@ if [[ -n "${SOURCE_BUILD_ROOT:-}" ]]; then
     echo "ERROR: refusing to use existing SOURCE_BUILD_ROOT: $BUILD_ROOT" >&2
     exit 2
   fi
+  BUILD_CANONICAL="$(resolve_path "$BUILD_ROOT")"
+  if path_overlaps "$BUILD_CANONICAL" "$ORIGINAL_CANONICAL" ||
+     path_overlaps "$BUILD_CANONICAL" "$OUTPUT_CANONICAL"; then
+    echo "ERROR: SOURCE_BUILD_ROOT must be outside both wheelhouses." >&2
+    exit 2
+  fi
   mkdir -m 700 -- "$BUILD_ROOT"
 else
-  BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/gh-ai-source-build.XXXXXX")"
+  BUILD_PARENT="${TMPDIR:-/tmp}"
+  BUILD_PARENT_CANONICAL="$(resolve_path "$BUILD_PARENT")"
+  if path_overlaps "$BUILD_PARENT_CANONICAL" "$ORIGINAL_CANONICAL"; then
+    echo "ERROR: TMPDIR must be outside the original wheelhouse." >&2
+    exit 2
+  fi
+  BUILD_ROOT="$(mktemp -d "$BUILD_PARENT/gh-ai-source-build.XXXXXX")"
+  BUILD_CANONICAL="$(resolve_path "$BUILD_ROOT")"
+  if path_overlaps "$BUILD_CANONICAL" "$OUTPUT_CANONICAL"; then
+    rmdir -- "$BUILD_ROOT"
+    echo "ERROR: temporary SOURCE_BUILD_ROOT overlaps the output wheelhouse." >&2
+    exit 2
+  fi
 fi
 BUILD_ROOT_OWNED=1
 KEEP_BUILD_ROOT="${KEEP_SOURCE_BUILD_ROOT:-0}"
@@ -56,8 +103,6 @@ for command_name in git rustc cargo sha256sum; do
 done
 command -v "$PYTHON_BIN" >/dev/null 2>&1 || { echo "Missing Python: $PYTHON_BIN" >&2; exit 2; }
 command -v "$MATURIN_BIN" >/dev/null 2>&1 || { echo "Missing maturin: $MATURIN_BIN" >&2; exit 2; }
-[[ -d "$ORIGINAL_WHEELHOUSE_DIR" ]] || { echo "Original wheelhouse not found: $ORIGINAL_WHEELHOUSE_DIR" >&2; exit 2; }
-[[ ! -e "$OUTPUT_DIR" ]] || { echo "Refusing to overwrite existing output: $OUTPUT_DIR" >&2; exit 2; }
 mkdir -p "$BUILD_ROOT"
 mkdir -p "$(dirname "$OUTPUT_DIR")"
 
