@@ -15,6 +15,16 @@ command -v "$PYTHON_BIN" >/dev/null 2>&1 || {
   exit 2
 }
 
+# The TLS test fixture uses the platform OpenSSL CLI, avoiding a second
+# platform-specific Python crypto extension in this temporary environment.
+OPENSSL_BIN="${OPENSSL_BIN:-openssl}"
+command -v "$OPENSSL_BIN" >/dev/null 2>&1 || {
+  echo "ERROR: OpenSSL CLI executable not found: $OPENSSL_BIN" >&2
+  exit 2
+}
+export OPENSSL_BIN
+echo "OpenSSL CLI: $(" $OPENSSL_BIN " version)"
+
 # This is an explicit authorization gate. The default path never installs
 # candidate packages, even into a temporary virtual environment.
 if [[ "${ALLOW_TERMUX_TEST_INSTALL:-}" != "1" ]]; then
@@ -159,8 +169,7 @@ VENV_PY="$VENV_DIR/bin/python"
   "starlette[full]>=1.2,<2" \
   "pytest>=8" \
   "pytest-asyncio>=0.23" \
-  "cachetools>=5" \
-  "cryptography>=44.0.0"
+  "cachetools>=5"
 
 "$VENV_PY" -m pip check
 "$VENV_PY" - <<'PY'
