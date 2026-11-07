@@ -51,7 +51,17 @@ The direct HTTPS probe defaults to `https://example.com/`; set `TERMUX_TLS_TEST_
 
 The wrapper and underlying installer both require `ALLOW_TERMUX_TEST_INSTALL=1`, and the installer requires an explicit `WHEELHOUSE_DIR`. The temporary venv is removed on exit. The global Termux Python environment and existing production `openai==1.40.0` installation are not modified. The retained native wheelhouse is read and verified but not modified.
 
-**Authorization status:** The user has authorized transferring the verified wheelhouse and running this isolated validation. The actual transfer and device run have not yet been completed; device results remain pending.
+**Execution status (2026-11-07): COMPLETED.** The source-pinned wheels were built on the user's Termux device and validated in a disposable virtual environment. The global Termux Python environment and both wheelhouses were left untouched.
+
+Recorded device environment and results:
+- Python 3.14.8; Android API 24, aarch64 (`android-24-arm64_v8a`).
+- OpenSSL 3.6.5; OpenAI SDK 3.46.0; HTTPX2 2.16.0; maturin 1.16.0.
+- Direct HTTPS using the Termux OpenSSL CA bundle: PASS (HTTP 200).
+- Direct HTTPS using the Certifi CA bundle: PASS (HTTP 200).
+- Isolated compatibility suite: **17 passed, 3 warnings**. The warnings are existing Pydantic class-based `Config` deprecations in request models; they are non-blocking and outside this assessment's scope.
+- Source-pinned wheel SHA-256: jiter `fa255ba28121eeb68a770bee7ded16111a8df2ec7eb683d2ed6d5086f35ac3a5`; pydantic-core `f2788d18ea8f5dd077148455a770770c42ba46417ce6ab5e2f46a3f4c9aee178`.
+
+These results establish the recorded tests on this Termux environment; they do not close the separate publisher-provenance limitation for pydantic-core 2.50.4 or prove the historical wheelhouse source identity. The production migration decision remains NO-GO.
 
 The authenticated proxy and SOCKS cases remain out of scope because no proxy is configured in the user's reported Termux environment.
 
