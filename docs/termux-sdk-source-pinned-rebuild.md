@@ -83,6 +83,19 @@ cat "$HOME/pr41-api24-source-pinned-wheelhouse/SHA256SUMS.txt"
 
 Record any failure as a failure; do not patch around it or silently rebuild with different dependencies. Preserve the failed evidence and stop for review.
 
+## Recorded Termux execution results (2026-11-07)
+
+The source-pinned build and isolated validation were completed on the user's Termux device. The environment and outcome were:
+
+- Python 3.14.8; Android API 24 aarch64 (`android-24-arm64_v8a`).
+- OpenSSL 3.6.5; maturin 1.16.0; OpenAI SDK 3.46.0; HTTPX2 2.16.0.
+- Termux OpenSSL CA direct HTTPS: PASS (HTTP 200).
+- Certifi CA direct HTTPS: PASS (HTTP 200).
+- Isolated compatibility suite: **17 passed, 3 warnings**. The warnings are existing Pydantic class-based `Config` deprecations in request models.
+- jiter 0.18.0 wheel SHA-256: `fa255ba28121eeb68a770bee7ded16111a8df2ec7eb683d2ed6d5086f35ac3a5`.
+- pydantic-core 2.50.4 wheel SHA-256: `f2788d18ea8f5dd077148455a770770c42ba46417ce6ab5e2f46a3f4c9aee178`.
+
+The candidate packages were confined to the temporary virtual environment; the global Termux Python installation and original wheelhouse were not modified. These results validate the tested device configuration only. They do not establish publisher provenance for pydantic-core 2.50.4 or resolve the historical wheelhouse source-identity gap. Production remains pinned to `openai==1.40.0`; SDK 3.46.0 migration remains **NO-GO**.
 ## Acceptance criteria
 
 - Both source commits and source tree hashes match the pins above.
