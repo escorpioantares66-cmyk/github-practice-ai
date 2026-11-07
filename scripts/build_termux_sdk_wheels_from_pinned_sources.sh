@@ -8,7 +8,22 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 MATURIN_BIN="${MATURIN_BIN:-maturin}"
 ORIGINAL_WHEELHOUSE_DIR="${ORIGINAL_WHEELHOUSE_DIR:-$HOME/pr41-api24-wheelhouse}"
 OUTPUT_DIR="${SOURCE_PINNED_WHEELHOUSE_DIR:-$HOME/pr41-api24-source-pinned-wheelhouse}"
-BUILD_ROOT="${SOURCE_BUILD_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/gh-ai-source-build.XXXXXX")}"
+# The builder owns only a directory it creates itself. An explicit override
+# must name a path that does not already exist; never recursively delete a
+# caller-owned directory during EXIT cleanup.
+BUILD_ROOT=""
+BUILD_ROOT_OWNED=0
+if [[ -n "${SOURCE_BUILD_ROOT:-}" ]]; then
+  BUILD_ROOT="$SOURCE_BUILD_ROOT"
+  if [[ -e "$BUILD_ROOT" || -L "$BUILD_ROOT" ]]; then
+    echo "ERROR: refusing to use existing SOURCE_BUILD_ROOT: $BUILD_ROOT" >&2
+    exit 2
+  fi
+  mkdir -m 700 -- "$BUILD_ROOT"
+else
+  BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/gh-ai-source-build.XXXXXX")"
+fi
+BUILD_ROOT_OWNED=1
 KEEP_BUILD_ROOT="${KEEP_SOURCE_BUILD_ROOT:-0}"
 
 if [[ "${PREFIX:-}" != *"/com.termux/files/usr" ]]; then
@@ -28,7 +43,11 @@ fi
 export ANDROID_API_LEVEL="$EXPECTED_ANDROID_API_LEVEL"
 
 cleanup() {
-  if [[ "$KEEP_BUILD_ROOT" != "1" ]]; then rm -rf "$BUILD_ROOT"; else echo "Source/build checkout retained: $BUILD_ROOT"; fi
+  if [[ "$BUILD_ROOT_OWNED" == "1" && -n "$BUILD_ROOT" && "$KEEP_BUILD_ROOT" != "1" ]]; then
+    rm -rf -- "$BUILD_ROOT"
+  elif [[ "$BUILD_ROOT_OWNED" == "1" && "$KEEP_BUILD_ROOT" == "1" ]]; then
+    echo "Source/build checkout retained: $BUILD_ROOT"
+  fi
 }
 trap cleanup EXIT
 
