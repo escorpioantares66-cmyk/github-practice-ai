@@ -23,7 +23,7 @@ command -v "$OPENSSL_BIN" >/dev/null 2>&1 || {
   exit 2
 }
 export OPENSSL_BIN
-echo "OpenSSL CLI: $(" $OPENSSL_BIN " version)"
+echo "OpenSSL CLI: $("$OPENSSL_BIN" version)"
 
 # This is an explicit authorization gate. The default path never installs
 # candidate packages, even into a temporary virtual environment.
