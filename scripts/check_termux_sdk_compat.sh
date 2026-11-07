@@ -168,6 +168,7 @@ VENV_PY="$VENV_DIR/bin/python"
   "openai==3.46.0" \
   "httpx2==2.16.0" \
   "starlette[full]>=1.2,<2" \
+  "fastapi>=0.115" \
   "pytest>=8" \
   "pytest-asyncio>=0.23" \
   "cachetools>=5"
