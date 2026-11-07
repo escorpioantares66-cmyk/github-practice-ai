@@ -76,7 +76,7 @@ Passing these tests will establish the tested HTTPX2 behaviors on GitHub-hosted 
 
 ## Acceptance gate
 
-This PR is a test-and-evidence milestone only. Require all candidate transport tests, regular project CI, Ruff, and dependency audit to pass. Review the complete Termux evidence transcript after the device run. Keep the production pin and the existing NO-GO migration recommendation unchanged until all migration gates in `docs/sdk-3.46.0-assessment.md` are satisfied and the user explicitly authorizes a production change.
+This PR is a test-and-evidence milestone only. Require all candidate transport tests, regular project CI, Ruff, and dependency audit to pass. Review the complete Termux evidence transcript recorded above and retain the source-provenance limitations. Keep the production pin and the existing NO-GO migration recommendation unchanged until all migration gates in `docs/sdk-3.46.0-assessment.md` are satisfied and the user explicitly authorizes a production change.
 
 
 ## Native wheel source-identity investigation (2026-11-07)
@@ -141,7 +141,7 @@ A wheelhouse manifest proves consistency with the recorded wheel hashes, not sou
 
 ### Updated decision and required next evidence
 
-**Decision remains NO-GO for installing the retained candidate wheels or migrating the production SDK.** The source archive comparison is pending because the exact source archives are unavailable locally. The pydantic-core PyPI sdist also lacks publisher provenance.
+**Decision remains NO-GO for installing the historical retained candidate wheels or migrating the production SDK.** At the time of this investigation, the exact source archives were unavailable locally. The later cache-recovery section below adds local archive evidence, but it still does not tie either cache body to the original wheel-build inputs. The pydantic-core PyPI sdist also lacks publisher provenance.
 
 To close the archive comparison without rebuilding or installing anything, recover the exact original source archives from an independently retained build artifact or trusted local backup, then calculate SHA-256 and compare them with the PyPI references above. Do not substitute newly downloaded archives as proof of what the earlier build consumed.
 
