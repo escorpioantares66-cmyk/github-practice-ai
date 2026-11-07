@@ -107,4 +107,4 @@ The candidate packages were confined to the temporary virtual environment; the g
 - Untrusted certificate, timeout and connection-error tests behave as expected.
 - The complete evidence report is retained.
 
-This stage supplies new source-pinned build evidence. It does not, by itself, resolve the separate pydantic-core publisher-attestation gap or authorize migration of the production SDK from 1.40.0. Production remains pinned to 1.40.0 and the migration recommendation remains **NO-GO** until the evidence is reviewed.
+This stage supplies new source-pinned build evidence. It does not, by itself, resolve the separate pydantic-core publisher-attestation gap or authorize migration of the production SDK from 1.40.0. Production remains pinned to 1.40.0 and the migration recommendation remains **NO-GO** until all migration gates are satisfied and the user explicitly authorizes a production change.
