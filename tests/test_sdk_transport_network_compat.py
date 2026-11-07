@@ -1,19 +1,20 @@
 """"Network-boundary tests for the isolated OpenAI SDK 3.46.0 transport stack.
 
 All servers bind to loopback. No public network, provider credential, or billable
-OpenAI request is used. The candidate CI job installs HTTPX2 and cryptography.
+OpenAI request is used. OpenSSL CLI generates the temporary test certificates.
 """
 from __future__ import annotations
 
-import ipaddress
 import json
+import os
 import select
+import shutil
 import socket
 import socketserver
 import ssl
+import subprocess
 import threading
 import time
-from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -23,15 +24,6 @@ httpx2 = pytest.importorskip(
     "httpx2",
     reason="candidate HTTPX2 stack is installed in its dedicated CI job",
 )
-cryptography = pytest.importorskip(
-    "cryptography",
-    reason="candidate transport job installs the project's cryptography dependency",
-)
-
-from cryptography import x509  # noqa: E402
-from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
-from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: E402
-from cryptography.x509.oid import NameOID  # noqa: E402
 from openai import APIConnectionError, DefaultHttpx2Client, OpenAI  # noqa: E402
 
 API_KEY = "sk-transport-network-test"
@@ -45,36 +37,45 @@ MODEL_LIST = {
 
 
 def _write_loopback_certificate(tmp_path) -> tuple[str, str]:
-    """Create a short-lived self-signed CA/server cert for 127.0.0.1."""
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
-    now = datetime.now(timezone.utc)
-    certificate = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(minutes=1))
-        .not_valid_after(now + timedelta(hours=1))
-        .add_extension(
-            x509.SubjectAlternativeName(
-                [x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
-            ),
-            critical=False,
+    """Create a short-lived self-signed CA/server cert using the OpenSSL CLI."""
+    openssl_name = os.environ.get("OPENSSL_BIN", "openssl")
+    openssl_bin = shutil.which(openssl_name)
+    if openssl_bin is None:
+        raise RuntimeError(
+            f"OpenSSL CLI executable {openssl_name!r} is required for TLS tests"
         )
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .sign(key, hashes.SHA256())
-    )
+
     cert_path = tmp_path / "transport-test-cert.pem"
     key_path = tmp_path / "transport-test-key.pem"
-    cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
-    key_path.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
+    subprocess.run(
+        [
+            openssl_bin,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-sha256",
+            "-days",
+            "1",
+            "-nodes",
+            "-keyout",
+            str(key_path),
+            "-out",
+            str(cert_path),
+            "-subj",
+            "/CN=127.0.0.1",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1",
+            "-addext",
+            "basicConstraints=critical,CA:TRUE",
+            "-addext",
+            "keyUsage=critical,digitalSignature,keyCertSign,cRLSign",
+            "-addext",
+            "extendedKeyUsage=serverAuth",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     )
     return str(cert_path), str(key_path)
 
