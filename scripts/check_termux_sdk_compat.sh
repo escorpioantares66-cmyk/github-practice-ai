@@ -15,6 +15,17 @@ command -v "$PYTHON_BIN" >/dev/null 2>&1 || {
   exit 2
 }
 
+# The TLS test fixture uses the platform OpenSSL CLI, avoiding a second
+# platform-specific Python crypto extension in this temporary environment.
+OPENSSL_BIN="${OPENSSL_BIN:-openssl}"
+command -v "$OPENSSL_BIN" >/dev/null 2>&1 || {
+  echo "ERROR: OpenSSL CLI executable not found: $OPENSSL_BIN" >&2
+  exit 2
+}
+export OPENSSL_BIN
+OPENSSL_VERSION="$("$OPENSSL_BIN" version)"
+echo "OpenSSL CLI: $OPENSSL_VERSION"
+
 # This is an explicit authorization gate. The default path never installs
 # candidate packages, even into a temporary virtual environment.
 if [[ "${ALLOW_TERMUX_TEST_INSTALL:-}" != "1" ]]; then
@@ -155,8 +166,9 @@ VENV_PY="$VENV_DIR/bin/python"
   "jiter==0.18.0" \
   "pydantic-core==2.50.4" \
   "openai==3.46.0" \
-  "httpx2>=2.15.1,<3" \
+  "httpx2==2.16.0" \
   "starlette[full]>=1.2,<2" \
+  "fastapi>=0.115" \
   "pytest>=8" \
   "pytest-asyncio>=0.23" \
   "cachetools>=5"
@@ -197,9 +209,19 @@ asyncio.run(main())
 print("Default synchronous and asynchronous SDK clients constructed successfully.")
 PY
 
+# Probe both real Termux trust sources with direct HTTPS. This uses no API key
+# and explicitly bypasses proxy environment variables.
+PYTHONPATH="$ROOT_DIR" "$VENV_PY" scripts/test_termux_sdk_live_tls.py
+
+# Run loopback TLS rejection, proxy, timeout, and SDK connection-error tests.
+PYTHONPATH="$ROOT_DIR" "$VENV_PY" -m pytest -q -o addopts="" \
+  tests/test_sdk_transport_network_compat.py
+
+# Retain the broader SDK/application integration checks.
 PYTHONPATH="$ROOT_DIR" "$VENV_PY" -m pytest -q -o addopts="" \
   tests/test_openai_sdk_transport_compat.py
 
 echo "Termux OpenAI SDK compatibility smoke test passed."
-echo "Only the temporary virtual environment was modified; it is removed on exit."
-echo "The verified wheelhouse was left untouched."
+echo "Candidate packages were installed only in the temporary virtual environment; it is removed on exit."
+echo "The Termux evidence report is retained in the working directory."
+echo "The verified wheelhouse and global Termux environment were left untouched."
