@@ -2,7 +2,7 @@ name: ci-hardened-v1.1
 on:
   workflow_dispatch:
   push:
-    branches: [main, assessment/sdk-3.46.0-termux-source-pinned-rebuild]
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -117,6 +117,27 @@ jobs:
             exit 1
           fi
           test ! -e "$new_root"
+
+          # Reject output paths nested in the historical wheelhouse before
+          # creating anything there, and reject build roots nested there too.
+          original_root="$safety_tmp/original-wheelhouse"
+          mkdir "$original_root"
+          printf 'preserve original\\n' > "$original_root/marker"
+          nested_output="$original_root/nested-output"
+          if PREFIX="" ORIGINAL_WHEELHOUSE_DIR="$original_root" SOURCE_PINNED_WHEELHOUSE_DIR="$nested_output" SOURCE_BUILD_ROOT="$safety_tmp/external-build" bash scripts/build_termux_sdk_wheels_from_pinned_sources.sh; then
+            echo "Builder unexpectedly accepted output nested in original wheelhouse" >&2
+            exit 1
+          fi
+          test -f "$original_root/marker"
+          test ! -e "$nested_output"
+          test ! -e "$safety_tmp/external-build"
+
+          if PREFIX="" ORIGINAL_WHEELHOUSE_DIR="$original_root" SOURCE_PINNED_WHEELHOUSE_DIR="$safety_tmp/external-output" SOURCE_BUILD_ROOT="$original_root/nested-build" bash scripts/build_termux_sdk_wheels_from_pinned_sources.sh; then
+            echo "Builder unexpectedly accepted SOURCE_BUILD_ROOT nested in original wheelhouse" >&2
+            exit 1
+          fi
+          test -f "$original_root/marker"
+          test ! -e "$original_root/nested-build"
       - name: Upload reproducible SDK assessment evidence
         if: always()
         uses: actions/upload-artifact@v6
