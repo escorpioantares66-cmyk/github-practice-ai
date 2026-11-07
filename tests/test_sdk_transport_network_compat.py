@@ -1,4 +1,4 @@
-""""Network-boundary tests for the isolated OpenAI SDK 3.46.0 transport stack.
+"""Network-boundary tests for the isolated OpenAI SDK 3.46.0 transport stack.
 
 All servers bind to loopback. No public network, provider credential, or billable
 OpenAI request is used. OpenSSL CLI generates the temporary test certificates.
