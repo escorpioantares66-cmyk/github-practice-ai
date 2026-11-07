@@ -26,6 +26,15 @@ fi
 BUILD_ROOT_OWNED=1
 KEEP_BUILD_ROOT="${KEEP_SOURCE_BUILD_ROOT:-0}"
 
+cleanup() {
+  if [[ "$BUILD_ROOT_OWNED" == "1" && -n "$BUILD_ROOT" && "$KEEP_BUILD_ROOT" != "1" ]]; then
+    rm -rf -- "$BUILD_ROOT"
+  elif [[ "$BUILD_ROOT_OWNED" == "1" && "$KEEP_BUILD_ROOT" == "1" ]]; then
+    echo "Source/build checkout retained: $BUILD_ROOT"
+  fi
+}
+trap cleanup EXIT
+
 if [[ "${PREFIX:-}" != *"/com.termux/files/usr" ]]; then
   echo "ERROR: run this build only inside Termux (PREFIX must end in /com.termux/files/usr)." >&2
   exit 2
@@ -41,15 +50,6 @@ if [[ -n "${ANDROID_API_LEVEL:-}" && "$ANDROID_API_LEVEL" != "$EXPECTED_ANDROID_
   exit 2
 fi
 export ANDROID_API_LEVEL="$EXPECTED_ANDROID_API_LEVEL"
-
-cleanup() {
-  if [[ "$BUILD_ROOT_OWNED" == "1" && -n "$BUILD_ROOT" && "$KEEP_BUILD_ROOT" != "1" ]]; then
-    rm -rf -- "$BUILD_ROOT"
-  elif [[ "$BUILD_ROOT_OWNED" == "1" && "$KEEP_BUILD_ROOT" == "1" ]]; then
-    echo "Source/build checkout retained: $BUILD_ROOT"
-  fi
-}
-trap cleanup EXIT
 
 for command_name in git rustc cargo sha256sum; do
   command -v "$command_name" >/dev/null 2>&1 || { echo "Missing required command: $command_name" >&2; exit 2; }
