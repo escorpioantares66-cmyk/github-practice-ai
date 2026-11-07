@@ -67,6 +67,8 @@ The validation covers:
 - Python, OpenSSL, SDK, HTTPX2 and platform version evidence.
 - The broader SDK transport compatibility tests.
 
+The loopback TLS fixtures are generated with the Termux OpenSSL CLI. The isolated validation environment does not install the Python `cryptography` extension, avoiding an unrelated Android native-extension build while preserving certificate trust and rejection coverage.
+
 The network tests use loopback test servers and synthetic credentials; they do not make OpenAI API calls or incur provider charges. The live HTTPS check uses the configured public test endpoint and no API key.
 
 ## Evidence to return
