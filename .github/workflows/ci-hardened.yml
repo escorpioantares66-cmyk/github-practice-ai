@@ -2,7 +2,7 @@ name: ci-hardened-v1.1
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, assessment/sdk-3.46.0-termux-source-pinned-rebuild]
   pull_request:
     branches: [main]
 
@@ -81,7 +81,8 @@ jobs:
       - name: Install candidate SDK transport stack
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          python -m pip install "openai==3.46.0" "httpx2==2.16.0" "starlette[full]>=1.2,<2" "fastapi>=0.115" "pytest>=8" "pytest-asyncio>=0.23" "cachetools>=5" "cryptography>=44.0.0"
+          python -m pip install "openai==3.46.0" "httpx2==2.16.0" "starlette[full]>=1.2,<2" "fastapi>=0.115" "pytest>=8" "pytest-asyncio>=0.23" "cachetools>=5"
+          openssl version
       - name: Verify resolved dependencies and capture security evidence
         run: |
           bash scripts/audit_sdk_candidate_env.sh
@@ -95,9 +96,27 @@ jobs:
       - name: Validate Termux build and smoke-test script syntax
         run: |
           bash -n scripts/build_termux_sdk_wheels.sh
+          bash -n scripts/build_termux_sdk_wheels_from_pinned_sources.sh
           bash -n scripts/check_termux_sdk_compat.sh
           bash -n scripts/run_termux_sdk_compat_with_evidence.sh
           python -m py_compile scripts/test_termux_sdk_live_tls.py
+          set -euo pipefail
+          safety_tmp="$(mktemp -d)"
+          trap 'rm -rf "$safety_tmp"' EXIT
+          existing_root="$safety_tmp/existing"
+          mkdir "$existing_root"
+          printf 'preserve me\\n' > "$existing_root/marker"
+          if SOURCE_BUILD_ROOT="$existing_root" bash scripts/build_termux_sdk_wheels_from_pinned_sources.sh; then
+            echo "Builder unexpectedly accepted an existing SOURCE_BUILD_ROOT" >&2
+            exit 1
+          fi
+          test -f "$existing_root/marker"
+          new_root="$safety_tmp/new-root"
+          if PREFIX="" SOURCE_BUILD_ROOT="$new_root" bash scripts/build_termux_sdk_wheels_from_pinned_sources.sh; then
+            echo "Builder unexpectedly passed the non-Termux preflight" >&2
+            exit 1
+          fi
+          test ! -e "$new_root"
       - name: Upload reproducible SDK assessment evidence
         if: always()
         uses: actions/upload-artifact@v6
