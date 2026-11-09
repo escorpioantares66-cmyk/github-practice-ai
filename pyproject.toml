@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = { text = " MIT" }
 dependencies = [
-    "openai==1.40.0",
+    "openai==3.46.0",
     "httpx==0.28.1",
     "cachetools>=5.0",
     "anyio>=4.0",
