@@ -1104,7 +1104,7 @@ def test_consumption_recovery_rejects_reversed_audit_event_order(
 
     audit_path.write_text(
         "".join(
-            json.dumps(event, sort_keys=True, separators=(",", ":")) + "\\n"
+            json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
             for event in rebuilt_events
         ),
         encoding="utf-8",
