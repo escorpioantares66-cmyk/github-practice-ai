@@ -10,6 +10,7 @@ import base64
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -543,7 +544,10 @@ def verify_receipt(
         return False
 
 
-def _receipt_matches_record(record: dict[str, Any]) -> bool:
+def _receipt_matches_record(
+    record: dict[str, Any], *, now: float | None = None
+) -> bool:
+    """Verify a stored receipt, optionally at its authoritative event time."""
     receipt = record.get("receipt")
     if not isinstance(receipt, dict):
         return False
@@ -551,6 +555,7 @@ def _receipt_matches_record(record: dict[str, Any]) -> bool:
         receipt,
         expected_issuer=record.get("issuer", ""),
         expected_audience=record.get("audience", ""),
+        now=now,
     ):
         return False
     return receipt.get("claims") == _claims(record)
@@ -801,19 +806,84 @@ def consume(
         if consumed_events:
             if len(consumed_events) != 1:
                 raise SandboxApprovalError("Duplicate consumption history requires operator review")
-            details = consumed_events[0].get("details", {})
+            consumed_event = consumed_events[0]
+            details = consumed_event.get("details", {})
             if (
                 details.get("request_id") != normalized_request_id
                 or details.get("payload_sha256") != fingerprint
-                or consumed_events[0].get("scope_sha256") != expected_scope_hash
-                or not isinstance(details.get("outcome"), dict)
+                or consumed_event.get("scope_sha256") != expected_scope_hash
             ):
                 raise SandboxApprovalConflict("Approval has already been consumed")
-            if not _receipt_matches_record(record):
+
+            # A retry is authorized by the durable consumption event, not by
+            # whether the original short-lived receipt is still current.
+            # Verify the receipt at the recorded consumption time and prove
+            # that both the decision and consumption occurred within its TTL.
+            decision_events = [
+                event
+                for event in events
+                if event.get("action") in {"approved", "denied", "expired"}
+            ]
+            if (
+                len(decision_events) != 1
+                or decision_events[0].get("action") != "approved"
+            ):
+                raise SandboxApprovalError(
+                    "Approval terminal decision history is ambiguous; operator review required"
+                )
+            decision_event = decision_events[0]
+            decision_sequence = decision_event.get("seq")
+            consumed_sequence = consumed_event.get("seq")
+            if (
+                isinstance(decision_sequence, bool)
+                or not isinstance(decision_sequence, int)
+                or isinstance(consumed_sequence, bool)
+                or not isinstance(consumed_sequence, int)
+                or decision_sequence >= consumed_sequence
+            ):
+                raise SandboxApprovalError(
+                    "Approval decision must precede consumption in the audit log"
+                )
+            decision_at = decision_event.get("time")
+            consumed_at = consumed_event.get("time")
+            created_at = record.get("created_at")
+            expires_at = record.get("expires_at")
+            timestamps = (created_at, decision_at, consumed_at, expires_at)
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                for value in timestamps
+            ) or not (
+                created_at <= decision_at <= consumed_at < expires_at
+            ):
+                raise SandboxApprovalError(
+                    "Consumption audit evidence is outside the approval validity window"
+                )
+            if (
+                decision_event.get("actor") != record.get("approver")
+                or consumed_event.get("actor") != requester
+                or decision_event.get("details", {}).get("receipt")
+                != record.get("receipt")
+            ):
+                raise SandboxApprovalError(
+                    "Consumption audit evidence does not match the approved record"
+                )
+            expected_outcome = {
+                "approval_id": approval_id,
+                "status": "consumed",
+                "request_id": normalized_request_id,
+                "payload_sha256": fingerprint,
+            }
+            if details.get("outcome") != expected_outcome:
+                raise SandboxApprovalError(
+                    "Consumption audit outcome does not match its request"
+                )
+            if not _receipt_matches_record(record, now=consumed_at):
                 raise SandboxApprovalError(
                     "Signed decision evidence does not match its record"
                 )
-            outcome = dict(details["outcome"])
+            outcome = dict(expected_outcome)
             record["status"] = "consumed"
             record["decision"] = "approved"
             record["audit_status"] = "written"
