@@ -1136,8 +1136,6 @@ def test_consumption_recovery_rejects_reversed_audit_event_order(
         )
 
 
-
-
 @pytest.mark.parametrize("conflicting_action", ["denied", "expired"])
 def test_consumption_recovery_rejects_conflicting_terminal_decision_event(
     authority, scope, monkeypatch, conflicting_action
@@ -1192,7 +1190,7 @@ def test_consumption_recovery_rejects_conflicting_terminal_decision_event(
 
     audit_path.write_text(
         "".join(
-            json.dumps(event, sort_keys=True, separators=(",", ":")) + "\\n"
+            json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
             for event in rebuilt_events
         ),
         encoding="utf-8",
