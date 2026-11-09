@@ -996,3 +996,62 @@ def test_http_create_audit_failure_returns_operator_review_not_success(
     )
     assert approval_attempt.status_code == 503
 
+def test_identical_consumption_retry_recovers_after_receipt_expiry(
+    authority, scope, monkeypatch
+):
+    created = _create(authority, scope)
+    receipt = _approve(created)["receipt"]
+    nonce = receipt["claims"]["nonce"]
+    expires_at = receipt["claims"]["exp"]
+    request_id = str(uuid.uuid4())
+
+    original = sandbox_approval.consume(
+        created["approval_id"],
+        requester="automation",
+        request_id=request_id,
+        nonce=nonce,
+        scope=scope,
+        now=expires_at - 1,
+    )
+
+    # Simulate a process interruption after the durable audit append but
+    # before the final approval-record save.
+    record_path = (
+        authority / "sandbox-approvals" / f"{created['approval_id']}.json"
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["status"] = "approved"
+    record["decision"] = "approved"
+    record["audit_status"] = "written"
+    record["consumption"] = None
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    # The receipt is now expired. Recovery must verify it at the durable
+    # consumption event timestamp, without making it valid for a new consume.
+    monkeypatch.setattr(sandbox_approval.time, "time", lambda: expires_at + 1)
+    assert not sandbox_approval.verify_receipt(
+        receipt,
+        expected_issuer=ISSUER,
+        expected_audience=AUDIENCE,
+    )
+
+    recovered = sandbox_approval.consume(
+        created["approval_id"],
+        requester="automation",
+        request_id=request_id,
+        nonce=nonce,
+        scope=scope,
+    )
+    assert recovered == original
+    assert sandbox_approval.inspect(
+        created["approval_id"], requester="automation"
+    )["status"] == "consumed"
+
+    with pytest.raises(sandbox_approval.SandboxApprovalConflict):
+        sandbox_approval.consume(
+            created["approval_id"],
+            requester="automation",
+            request_id=str(uuid.uuid4()),
+            nonce=nonce,
+            scope=scope,
+        )
