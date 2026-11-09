@@ -823,6 +823,18 @@ def consume(
                 event for event in events if event.get("action") == "approved"
             ]
             decision_event = decision_events[0] if len(decision_events) == 1 else {}
+            decision_sequence = decision_event.get("seq")
+            consumed_sequence = consumed_event.get("seq")
+            if (
+                isinstance(decision_sequence, bool)
+                or not isinstance(decision_sequence, int)
+                or isinstance(consumed_sequence, bool)
+                or not isinstance(consumed_sequence, int)
+                or decision_sequence >= consumed_sequence
+            ):
+                raise SandboxApprovalError(
+                    "Approval decision must precede consumption in the audit log"
+                )
             decision_at = decision_event.get("time")
             consumed_at = consumed_event.get("time")
             created_at = record.get("created_at")
