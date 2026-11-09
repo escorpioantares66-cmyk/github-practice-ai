@@ -996,6 +996,7 @@ def test_http_create_audit_failure_returns_operator_review_not_success(
     )
     assert approval_attempt.status_code == 503
 
+
 def test_identical_consumption_retry_recovers_after_receipt_expiry(
     authority, scope, monkeypatch
 ):
