@@ -1135,3 +1135,90 @@ def test_consumption_recovery_rejects_reversed_audit_event_order(
             scope=scope,
         )
 
+
+
+
+@pytest.mark.parametrize("conflicting_action", ["denied", "expired"])
+def test_consumption_recovery_rejects_conflicting_terminal_decision_event(
+    authority, scope, monkeypatch, conflicting_action
+):
+    created = _create(authority, scope)
+    receipt = _approve(created)["receipt"]
+    nonce = receipt["claims"]["nonce"]
+    expires_at = receipt["claims"]["exp"]
+    request_id = str(uuid.uuid4())
+
+    sandbox_approval.consume(
+        created["approval_id"],
+        requester="automation",
+        request_id=request_id,
+        nonce=nonce,
+        scope=scope,
+        now=expires_at - 1,
+    )
+
+    # Insert a conflicting terminal decision while preserving a valid global
+    # sequence and hash chain. Recovery must validate the complete lifecycle,
+    # not merely find one approved event among the terminal decisions.
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    original_events = [
+        json.loads(line)
+        for line in audit_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert [event["action"] for event in original_events] == [
+        "request_created", "approved", "consumed"
+    ]
+    conflicting_event = dict(original_events[1])
+    conflicting_event["action"] = conflicting_action
+    conflicting_event["details"] = {}
+    reordered_events = [
+        original_events[0],
+        original_events[1],
+        conflicting_event,
+        original_events[2],
+    ]
+
+    previous_hash = "0" * 64
+    rebuilt_events = []
+    for sequence, original_event in enumerate(reordered_events, start=1):
+        event = dict(original_event)
+        event.pop("hash")
+        event["seq"] = sequence
+        event["previous_hash"] = previous_hash
+        digest = hashlib.sha256(sandbox_approval._canonical(event)).hexdigest()
+        event["hash"] = digest
+        rebuilt_events.append(event)
+        previous_hash = digest
+
+    audit_path.write_text(
+        "".join(
+            json.dumps(event, sort_keys=True, separators=(",", ":")) + "\\n"
+            for event in rebuilt_events
+        ),
+        encoding="utf-8",
+    )
+    assert sandbox_approval.verify_audit_log()["valid"] is True
+
+    # Simulate the interrupted final record save after the consumption append.
+    record_path = (
+        authority / "sandbox-approvals" / f"{created['approval_id']}.json"
+    )
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["status"] = "approved"
+    record["decision"] = "approved"
+    record["audit_status"] = "written"
+    record["consumption"] = None
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    monkeypatch.setattr(sandbox_approval.time, "time", lambda: expires_at + 1)
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="terminal decision history is ambiguous",
+    ):
+        sandbox_approval.consume(
+            created["approval_id"],
+            requester="automation",
+            request_id=request_id,
+            nonce=nonce,
+            scope=scope,
+        )
