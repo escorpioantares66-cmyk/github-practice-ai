@@ -820,9 +820,18 @@ def consume(
             # Verify the receipt at the recorded consumption time and prove
             # that both the decision and consumption occurred within its TTL.
             decision_events = [
-                event for event in events if event.get("action") == "approved"
+                event
+                for event in events
+                if event.get("action") in {"approved", "denied", "expired"}
             ]
-            decision_event = decision_events[0] if len(decision_events) == 1 else {}
+            if (
+                len(decision_events) != 1
+                or decision_events[0].get("action") != "approved"
+            ):
+                raise SandboxApprovalError(
+                    "Approval terminal decision history is ambiguous; operator review required"
+                )
+            decision_event = decision_events[0]
             decision_sequence = decision_event.get("seq")
             consumed_sequence = consumed_event.get("seq")
             if (
