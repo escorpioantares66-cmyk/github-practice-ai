@@ -1,6 +1,9 @@
 """Security and recovery tests for the external sandbox approval authority."""
 import hashlib
 import json
+import os
+import subprocess
+import sys
 import uuid
 
 import pytest
@@ -576,6 +579,123 @@ def test_wrong_nonce_cannot_consume_approval(authority, scope):
             nonce="f" * 64,
             scope=scope,
         )
+
+
+
+@pytest.mark.parametrize("transition", ["decision", "consumption"])
+def test_real_process_exit_after_audit_commit_recovers_exact_outcome(
+    authority, scope, transition
+):
+    created = _create(authority, scope)
+    nonce = None
+    request_id = None
+    if transition == "consumption":
+        nonce = _approve(created)["receipt"]["claims"]["nonce"]
+        request_id = str(uuid.uuid4())
+
+    script = r"""
+import json
+import os
+import sys
+from stage2_sdk_ai import sandbox_approval
+
+real_append = sandbox_approval._append_audit
+
+def append_then_exit(*args, **kwargs):
+    real_append(*args, **kwargs)
+    os._exit(86)
+
+sandbox_approval._append_audit = append_then_exit
+approval_id, transition = sys.argv[1], sys.argv[2]
+if transition == "decision":
+    sandbox_approval.decide(
+        approval_id,
+        approver_key=os.environ["TEST_APPROVER_KEY"],
+        decision="approved",
+    )
+else:
+    sandbox_approval.consume(
+        approval_id,
+        requester="automation",
+        request_id=os.environ["TEST_REQUEST_ID"],
+        nonce=os.environ["TEST_APPROVAL_NONCE"],
+        scope=json.loads(os.environ["TEST_APPROVAL_SCOPE"]),
+    )
+"""
+    env = os.environ.copy()
+    env["TEST_APPROVER_KEY"] = APPROVER_KEY
+    env["TEST_REQUEST_ID"] = request_id or ""
+    env["TEST_APPROVAL_NONCE"] = nonce or ""
+    env["TEST_APPROVAL_SCOPE"] = json.dumps(scope)
+    result = subprocess.run(
+        [sys.executable, "-c", script, created["approval_id"], transition],
+        cwd=os.getcwd(),
+        env=env,
+        check=False,
+        timeout=20,
+    )
+    assert result.returncode == 86
+
+    if transition == "decision":
+        receipt = sandbox_approval.get_decision(
+            created["approval_id"], requester="automation"
+        )
+        assert receipt["claims"]["decision"] == "approved"
+        state = sandbox_approval.inspect(
+            created["approval_id"], requester="automation"
+        )
+        assert state["audit_status"] == "written"
+        assert state["status"] == "approved"
+    else:
+        outcome = sandbox_approval.consume(
+            created["approval_id"],
+            requester="automation",
+            request_id=request_id,
+            nonce=nonce,
+            scope=scope,
+        )
+        assert outcome["status"] == "consumed"
+        state = sandbox_approval.inspect(
+            created["approval_id"], requester="automation"
+        )
+        assert state["audit_status"] == "written"
+        assert state["status"] == "consumed"
+
+
+def test_audit_checkpoint_detects_rollback_to_an_earlier_valid_prefix(
+    authority, scope
+):
+    created = _create(authority, scope)
+    nonce = _approve(created)["receipt"]["claims"]["nonce"]
+    sandbox_approval.consume(
+        created["approval_id"],
+        requester="automation",
+        request_id=str(uuid.uuid4()),
+        nonce=nonce,
+        scope=scope,
+    )
+    checkpoint = sandbox_approval.verify_audit_log()
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    entries = audit_path.read_text(encoding="utf-8").splitlines()
+    audit_path.write_text("\n".join(entries[:2]) + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="truncated or diverges from checkpoint",
+    ):
+        sandbox_approval.verify_audit_log(expected_checkpoint=checkpoint)
+
+
+def test_audit_incomplete_final_record_fails_closed(authority, scope):
+    _create(authority, scope)
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    with audit_path.open("a", encoding="utf-8") as handle:
+        handle.write('{"partial":')
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="incomplete final record",
+    ):
+        sandbox_approval.verify_audit_log()
 
 
 def test_audit_chain_records_request_decision_and_consumption(authority, scope):
