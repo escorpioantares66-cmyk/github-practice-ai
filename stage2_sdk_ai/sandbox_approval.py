@@ -598,6 +598,7 @@ def verify_receipt(
             or not claims["requester"].strip()
             or not isinstance(claims["approver"], str)
             or not claims["approver"].strip()
+            or claims["requester"] == claims["approver"]
             or not _ID_RE.fullmatch(claims["approval_id"])
             or not _NONCE_RE.fullmatch(claims["nonce"])
         ):
