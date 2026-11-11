@@ -327,6 +327,20 @@ def _reconcile_pending_audit(
                 )
             else:
                 valid = event.get("actor") == record.get("approver")
+            if status in {"approved", "denied"}:
+                event_time = event.get("time")
+                created_at = record.get("created_at")
+                expires_at = record.get("expires_at")
+                valid = (
+                    valid
+                    and isinstance(event_time, (int, float))
+                    and math.isfinite(event_time)
+                    and isinstance(created_at, (int, float))
+                    and math.isfinite(created_at)
+                    and isinstance(expires_at, (int, float))
+                    and math.isfinite(expires_at)
+                    and created_at <= event_time < expires_at
+                )
             if status == "approved":
                 valid = valid and event.get("details", {}).get(
                     "receipt"
@@ -341,6 +355,16 @@ def _reconcile_pending_audit(
             decision_event, consumed_event = events[1], events[2]
             consumption = record.get("consumption") or {}
             details = consumed_event.get("details", {})
+            decision_time = decision_event.get("time")
+            consumed_time = consumed_event.get("time")
+            created_at = record.get("created_at")
+            expires_at = record.get("expires_at")
+            expected_outcome = {
+                "approval_id": approval_id,
+                "status": "consumed",
+                "request_id": consumption.get("request_id"),
+                "payload_sha256": consumption.get("payload_sha256"),
+            }
             valid = (
                 decision_event.get("actor") == record.get("approver")
                 and decision_event.get("details", {}).get("receipt")
@@ -349,11 +373,20 @@ def _reconcile_pending_audit(
                 and details.get("request_id") == consumption.get("request_id")
                 and details.get("payload_sha256")
                 == consumption.get("payload_sha256")
-                and details.get("outcome") == consumption.get("outcome")
-                and consumed_event.get("time") == consumption.get("consumed_at")
-                and _receipt_matches_record(
-                    record, now=consumed_event.get("time")
-                )
+                and details.get("outcome") == expected_outcome
+                and consumption.get("outcome") == expected_outcome
+                and consumed_time == consumption.get("consumed_at")
+                and isinstance(decision_time, (int, float))
+                and math.isfinite(decision_time)
+                and isinstance(consumed_time, (int, float))
+                and math.isfinite(consumed_time)
+                and isinstance(created_at, (int, float))
+                and math.isfinite(created_at)
+                and isinstance(expires_at, (int, float))
+                and math.isfinite(expires_at)
+                and created_at <= decision_time <= consumed_time < expires_at
+                and decision_event.get("seq") < consumed_event.get("seq")
+                and _receipt_matches_record(record, now=consumed_time)
             )
     else:
         valid = False
