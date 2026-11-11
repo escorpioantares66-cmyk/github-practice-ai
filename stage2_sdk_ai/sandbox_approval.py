@@ -293,7 +293,10 @@ def _reconcile_pending_audit(
     only an exact, complete lifecycle; missing, conflicting, or corrupt evidence
     remains fail-closed for operator review.
     """
-    if record.get("audit_status") not in {"pending", "failed"}:
+    # Explicit write failures remain operator-review states. Only a process
+    # interruption that left the marker pending may be reconciled from a
+    # complete durable event; a caught fsync/write error is never auto-cleared.
+    if record.get("audit_status") != "pending":
         return record
 
     events = _events_for(approval_id)
