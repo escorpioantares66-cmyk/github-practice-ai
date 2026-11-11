@@ -674,7 +674,11 @@ def test_audit_checkpoint_detects_rollback_to_an_earlier_valid_prefix(
         nonce=nonce,
         scope=scope,
     )
-    checkpoint = sandbox_approval.verify_audit_log()
+    audit_state = sandbox_approval.verify_audit_log()
+    checkpoint = {
+        "sequence": audit_state["events"],
+        "head_hash": audit_state["last_hash"],
+    }
     audit_path = authority / "sandbox-approvals" / "audit.jsonl"
     entries = audit_path.read_text(encoding="utf-8").splitlines()
     audit_path.write_text("\n".join(entries[:2]) + "\n", encoding="utf-8")
