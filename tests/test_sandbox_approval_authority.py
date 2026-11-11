@@ -105,7 +105,7 @@ def authority(monkeypatch, tmp_path):
 
     fake_s3 = FakeS3()
     monkeypatch.setitem(
-        sys.modules, "boto3", types.SimpleNamespace(client=lambda **_kwargs: fake_s3)
+        sys.modules, "boto3", types.SimpleNamespace(client=lambda *_args, **_kwargs: fake_s3)
     )
     monkeypatch.setattr(auth, "check_rate_limit", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(sandbox_approval, "_test_checkpoint_store", fake_s3, raising=False)
