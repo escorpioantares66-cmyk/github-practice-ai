@@ -224,6 +224,6 @@ def verify_sandbox_audit_log_from_s3(
 
 def create_sandbox_audit_checkpoint(store_id: str) -> dict[str, Any]:
     """Create an in-memory sandbox checkpoint for separate operator review/publication."""
-    from .audit_checkpoint_integrity import create_checkpoint_envelope, SANDBOX_AUTHORITY
+    from .audit_checkpoint_integrity import SANDBOX_AUTHORITY, create_checkpoint_envelope
 
     return create_checkpoint_envelope(SANDBOX_AUTHORITY, store_id)
