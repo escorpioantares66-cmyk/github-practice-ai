@@ -784,10 +784,10 @@ def decide(
     now: float | None = None,
 ) -> dict[str, Any]:
     """Record one decision after independently authenticating the approver."""
-    if not auth.verify_approver_key(approver_key):
+    if not auth.verify_sandbox_approver_key(approver_key):
         raise SandboxApprovalForbidden("Configured approver credentials are required")
     try:
-        approver = auth.approver_identity(approver_key)
+        approver = auth.sandbox_approver_identity(approver_key)
     except ValueError as exc:
         raise SandboxApprovalForbidden(
             "Configured approver identity is unavailable"
