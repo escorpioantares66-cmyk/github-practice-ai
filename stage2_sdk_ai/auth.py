@@ -51,7 +51,7 @@ def _parse_key_config(
                 secret.encode("utf-8")
             ).hexdigest()[:12]
 
-        # Approval credentials are provisioned as high-entropy secrets.
+        # Approval credentials require a minimum secret length.
         # Keep the legacy requester parser compatible, but require explicit
         # identities and at least 32 ASCII characters for approval principals.
         if (
