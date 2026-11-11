@@ -14,7 +14,12 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
-from stage2_sdk_ai import audit_checkpoint_integrity, audit_checkpoint_store, auth, sandbox_approval
+from stage2_sdk_ai import (
+    audit_checkpoint_integrity,
+    audit_checkpoint_store,
+    auth,
+    sandbox_approval,
+)
 from stage2_sdk_ai.api import app
 
 REQUESTER_KEY = "sandbox-requester-secret-for-tests-00000000000000000001"
@@ -62,8 +67,14 @@ def authority(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_API_KEYS", f"automation={REQUESTER_KEY}")
     monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={APPROVER_KEY}")
     monkeypatch.setenv("AGENT_AUDIT_CHECKPOINT_S3_BUCKET", "synthetic-audit-bucket")
-    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_CHECKPOINT_S3_KEY", "audit-checkpoints/sandbox/latest.json")
-    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_CHECKPOINT_FLOOR_S3_KEY", "audit-checkpoints/sandbox/trusted-floor.json")
+    monkeypatch.setenv(
+        "AGENT_SANDBOX_AUDIT_CHECKPOINT_S3_KEY",
+        "audit-checkpoints/sandbox/latest.json",
+    )
+    monkeypatch.setenv(
+        "AGENT_SANDBOX_AUDIT_CHECKPOINT_FLOOR_S3_KEY",
+        "audit-checkpoints/sandbox/trusted-floor.json",
+    )
     monkeypatch.setenv("AGENT_SANDBOX_AUDIT_STORE_ID", "sandbox-contract-test-store")
     monkeypatch.setenv("AGENT_SANDBOX_AUDIT_CHECKPOINT_MAX_AGE_SECONDS", "86400")
     monkeypatch.setenv("AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX", "1000")
