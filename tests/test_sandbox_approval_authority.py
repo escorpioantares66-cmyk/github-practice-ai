@@ -11,8 +11,8 @@ from fastapi.testclient import TestClient
 from stage2_sdk_ai import auth, sandbox_approval
 from stage2_sdk_ai.api import app
 
-REQUESTER_KEY = "sandbox-requester-secret"
-APPROVER_KEY = "sandbox-approver-secret"
+REQUESTER_KEY = "sandbox-requester-secret-for-tests-00000000000000000001"
+APPROVER_KEY = "sandbox-approver-secret-for-tests-00000000000000000002"
 ISSUER = "github-practice-ai"
 AUDIENCE = "second-brain"
 
@@ -79,6 +79,119 @@ def _approve(created):
     return sandbox_approval.decide(
         created["approval_id"], approver_key=APPROVER_KEY, decision="approved"
     )
+
+
+
+def test_sandbox_approval_credentials_require_named_high_entropy_principals(
+    authority, monkeypatch
+):
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=short-requester")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=short-approver")
+    assert auth.approval_requester_identity("short-requester") is None
+    assert not auth.verify_approver_key("short-approver")
+
+    requester_secret = "r" * 40
+    approver_secret = "a" * 40
+    monkeypatch.setenv("AGENT_API_KEYS", f"automation={requester_secret}")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={approver_secret}")
+    assert auth.approval_requester_identity(requester_secret) == "automation"
+    assert auth.verify_approver_key(approver_secret)
+    assert auth.approver_identity(approver_secret) == "reviewer"
+
+    # A secret duplicated across roles disables both approval principals.
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={requester_secret}")
+    assert not auth.verify_approver_key(requester_secret)
+    assert auth.approval_requester_identity(requester_secret) is None
+
+
+def test_request_record_reconciles_after_process_stops_after_audit_commit(
+    authority, scope, monkeypatch
+):
+    append = sandbox_approval._append_audit
+
+    def append_then_interrupt(*args, **kwargs):
+        append(*args, **kwargs)
+        raise SystemExit("simulated process termination after durable audit append")
+
+    monkeypatch.setattr(sandbox_approval, "_append_audit", append_then_interrupt)
+    with pytest.raises(SystemExit):
+        _create(authority, scope)
+    monkeypatch.setattr(sandbox_approval, "_append_audit", append)
+
+    approval_id = next(
+        path.stem for path in (authority / "sandbox-approvals").glob("*.json")
+    )
+    state = sandbox_approval.inspect(approval_id, requester="automation")
+    assert state["status"] == "pending"
+    assert state["audit_status"] == "written"
+    assert [event["action"] for event in state["audit_history"]] == [
+        "request_created"
+    ]
+
+
+def test_decision_record_reconciles_after_process_stops_after_audit_commit(
+    authority, scope, monkeypatch
+):
+    created = _create(authority, scope)
+    append = sandbox_approval._append_audit
+
+    def append_then_interrupt(*args, **kwargs):
+        append(*args, **kwargs)
+        raise SystemExit("simulated process termination after durable audit append")
+
+    monkeypatch.setattr(sandbox_approval, "_append_audit", append_then_interrupt)
+    with pytest.raises(SystemExit):
+        _approve(created)
+    monkeypatch.setattr(sandbox_approval, "_append_audit", append)
+
+    receipt = sandbox_approval.get_decision(
+        created["approval_id"], requester="automation"
+    )
+    assert receipt["claims"]["decision"] == "approved"
+    state = sandbox_approval.inspect(
+        created["approval_id"], requester="automation"
+    )
+    assert state["status"] == "approved"
+    assert state["audit_status"] == "written"
+
+
+def test_consumption_retry_recovers_after_process_stops_after_audit_commit(
+    authority, scope, monkeypatch
+):
+    created = _create(authority, scope)
+    nonce = _approve(created)["receipt"]["claims"]["nonce"]
+    request_id = str(uuid.uuid4())
+    append = sandbox_approval._append_audit
+
+    def append_then_interrupt(*args, **kwargs):
+        append(*args, **kwargs)
+        if args[1] == "consumed":
+            raise SystemExit("simulated process termination after durable audit append")
+
+    monkeypatch.setattr(sandbox_approval, "_append_audit", append_then_interrupt)
+    with pytest.raises(SystemExit):
+        sandbox_approval.consume(
+            created["approval_id"],
+            requester="automation",
+            request_id=request_id,
+            nonce=nonce,
+            scope=scope,
+        )
+    monkeypatch.setattr(sandbox_approval, "_append_audit", append)
+
+    outcome = sandbox_approval.consume(
+        created["approval_id"],
+        requester="automation",
+        request_id=request_id,
+        nonce=nonce,
+        scope=scope,
+    )
+    assert outcome["status"] == "consumed"
+    state = sandbox_approval.inspect(
+        created["approval_id"], requester="automation"
+    )
+    assert state["status"] == "consumed"
+    assert state["audit_status"] == "written"
 
 
 def test_signed_decision_is_bound_to_expected_issuer_audience_and_scope(
@@ -636,11 +749,11 @@ def test_audit_history_prevents_second_approval_after_record_rollback(
     with pytest.raises(sandbox_approval.SandboxApprovalConflict):
         monkeypatch.setenv(
             "AGENT_APPROVER_KEYS",
-            f"reviewer={APPROVER_KEY},second-reviewer=second-approver-secret",
+            f"reviewer={APPROVER_KEY},second-reviewer=sandbox-second-approver-secret-for-tests-0000000000000003",
         )
         sandbox_approval.decide(
             created["approval_id"],
-            approver_key="second-approver-secret",
+            approver_key="sandbox-second-approver-secret-for-tests-0000000000000003",
             decision="approved",
         )
 
