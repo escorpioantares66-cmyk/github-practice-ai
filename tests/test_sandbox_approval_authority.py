@@ -91,21 +91,21 @@ def test_sandbox_approval_credentials_require_named_minimum_length_principals(
 ):
     monkeypatch.setenv("AGENT_API_KEYS", "automation=short-requester")
     monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=short-approver")
-    assert auth.approval_requester_identity("short-requester") is None
-    assert not auth.verify_approver_key("short-approver")
+    assert auth.sandbox_requester_identity("short-requester") is None
+    assert not auth.verify_sandbox_approver_key("short-approver")
 
     requester_secret = "r" * 40
     approver_secret = "a" * 40
     monkeypatch.setenv("AGENT_API_KEYS", f"automation={requester_secret}")
     monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={approver_secret}")
-    assert auth.approval_requester_identity(requester_secret) == "automation"
-    assert auth.verify_approver_key(approver_secret)
-    assert auth.approver_identity(approver_secret) == "reviewer"
+    assert auth.sandbox_requester_identity(requester_secret) == "automation"
+    assert auth.verify_sandbox_approver_key(approver_secret)
+    assert auth.sandbox_approver_identity(approver_secret) == "reviewer"
 
     # A secret duplicated across roles disables both approval principals.
     monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={requester_secret}")
     assert not auth.verify_api_key(requester_secret)
-    assert not auth.verify_approver_key(requester_secret)
+    assert not auth.verify_sandbox_approver_key(requester_secret)
 
 
 
@@ -119,18 +119,18 @@ def test_requester_and_approver_rotation_revokes_previous_credentials(
 
     monkeypatch.setenv("AGENT_API_KEYS", f"automation={old_requester}")
     monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={old_approver}")
-    assert auth.approval_requester_identity(old_requester) == "automation"
-    assert auth.verify_approver_key(old_approver)
+    assert auth.sandbox_requester_identity(old_requester) == "automation"
+    assert auth.verify_sandbox_approver_key(old_approver)
 
     # The single-entry named configuration is a coordinated cutover: once the
     # replacement is active, the previous values no longer authenticate.
     monkeypatch.setenv("AGENT_API_KEYS", f"automation={new_requester}")
     monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={new_approver}")
-    assert auth.approval_requester_identity(old_requester) is None
+    assert auth.sandbox_requester_identity(old_requester) is None
     assert not auth.verify_api_key(old_requester)
-    assert not auth.verify_approver_key(old_approver)
-    assert auth.approval_requester_identity(new_requester) == "automation"
-    assert auth.verify_approver_key(new_approver)
+    assert not auth.verify_sandbox_approver_key(old_approver)
+    assert auth.sandbox_requester_identity(new_requester) == "automation"
+    assert auth.verify_sandbox_approver_key(new_approver)
 
 
 def test_request_record_reconciles_after_process_stops_after_audit_commit(
@@ -1097,11 +1097,11 @@ def test_http_read_and_consume_routes_enforce_requester_ownership(
 ):
     monkeypatch.setenv(
         "AGENT_API_KEYS",
-        f"automation={REQUESTER_KEY},intruder=other-requester-secret",
+        f"automation={REQUESTER_KEY},intruder=other-requester-secret-for-tests-00000000000000000003",
     )
     client = TestClient(app)
     owner_headers = {"X-API-Key": REQUESTER_KEY}
-    intruder_headers = {"X-API-Key": "other-requester-secret"}
+    intruder_headers = {"X-API-Key": "other-requester-secret-for-tests-00000000000000000003"}
     created = client.post(
         "/v1/sandbox/approvals",
         json={"scope": scope},
