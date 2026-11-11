@@ -57,7 +57,12 @@ def _parse_key_config(
         if (
             not secret.isascii()
             or len(secret) < minimum_secret_length
-            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}", identity)
+            or (
+                require_identity
+                and not re.fullmatch(
+                    r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}", identity
+                )
+            )
         ):
             return []
         if identity in identities or secret in secrets:
