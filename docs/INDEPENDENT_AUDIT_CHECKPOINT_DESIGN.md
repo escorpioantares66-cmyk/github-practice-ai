@@ -70,7 +70,7 @@ Use a strict, versioned envelope with exact fields:
 - `sequence`: the authority-specific sequence number;
 - `head_hash`: SHA-256 hash at that sequence;
 - `legacy_entries`: main approval legacy-prefix count; zero for the sandbox authority;
-- `created_at`: operator publication time in UTC epoch seconds;
+- `created_at`: checkpoint snapshot creation time in UTC epoch seconds;
 - `checkpoint_id`: unique publication identifier.
 
 Reject duplicate JSON keys, unknown or missing fields, booleans in integer fields, invalid hashes, non-finite timestamps, invalid authority/store identifiers, and files above a small fixed size limit. The two authorities must use separate checkpoint files or separately keyed envelopes and must never share sequence state.
