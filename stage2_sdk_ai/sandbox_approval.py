@@ -813,7 +813,6 @@ def decide(
     if decision not in {"approved", "denied"}:
         raise SandboxApprovalError("Invalid decision")
     _verify_independent_audit_checkpoint()
-    _verify_independent_audit_checkpoint()
     path = _record_path(approval_id)
     with _locked(path):
         record = _reconcile_pending_audit(
@@ -966,6 +965,7 @@ def consume(
             }
         )
     ).hexdigest()
+    _verify_independent_audit_checkpoint()
     path = _record_path(approval_id)
     with _locked(path):
         record = _reconcile_pending_audit(
