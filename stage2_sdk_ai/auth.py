@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import re
 import threading
 from collections import defaultdict
 
@@ -14,7 +15,11 @@ _rate_lock = threading.Lock()
 
 
 def _parse_key_config(
-    env_name: str, legacy_prefix: str, *, require_identity: bool = False
+    env_name: str,
+    legacy_prefix: str,
+    *,
+    require_identity: bool = False,
+    minimum_secret_length: int = 0,
 ) -> list[tuple[str, str]]:
     """Parse identity=secret pairs, rejecting the entire config if ambiguous.
 
@@ -46,8 +51,14 @@ def _parse_key_config(
                 secret.encode("utf-8")
             ).hexdigest()[:12]
 
-        # HTTP authentication headers and compare_digest require ASCII secrets.
-        if not secret.isascii():
+        # Approval credentials are provisioned as high-entropy secrets.
+        # Keep the legacy requester parser compatible, but require explicit
+        # identities and at least 32 ASCII characters for approval principals.
+        if (
+            not secret.isascii()
+            or len(secret) < minimum_secret_length
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}", identity)
+        ):
             return []
         if identity in identities or secret in secrets:
             return []
@@ -65,7 +76,10 @@ def _configured_requester_keys() -> list[tuple[str, str]]:
 def _configured_approval_requester_keys() -> list[tuple[str, str]]:
     """Return requester credentials with explicit principal identities only."""
     return _parse_key_config(
-        "AGENT_API_KEYS", "requester-", require_identity=True
+        "AGENT_API_KEYS",
+        "requester-",
+        require_identity=True,
+        minimum_secret_length=32,
     )
 
 def _allowed_keys() -> list[str]:
@@ -128,7 +142,10 @@ def check_rate_limit(api_key: str, role: str = "api") -> bool:
 def _configured_approver_keys() -> list[tuple[str, str]]:
     """Return approver credentials with explicit principal identities only."""
     return _parse_key_config(
-        "AGENT_APPROVER_KEYS", "approver-", require_identity=True
+        "AGENT_APPROVER_KEYS",
+        "approver-",
+        require_identity=True,
+        minimum_secret_length=32,
     )
 
 
