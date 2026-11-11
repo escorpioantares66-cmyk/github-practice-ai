@@ -81,10 +81,7 @@ def _configured_requester_keys() -> list[tuple[str, str]]:
 def _configured_approval_requester_keys() -> list[tuple[str, str]]:
     """Return requester credentials with explicit principal identities only."""
     return _parse_key_config(
-        "AGENT_API_KEYS",
-        "requester-",
-        require_identity=True,
-        minimum_secret_length=32,
+        "AGENT_API_KEYS", "requester-", require_identity=True
     )
 
 def _allowed_keys() -> list[str]:
@@ -147,10 +144,7 @@ def check_rate_limit(api_key: str, role: str = "api") -> bool:
 def _configured_approver_keys() -> list[tuple[str, str]]:
     """Return approver credentials with explicit principal identities only."""
     return _parse_key_config(
-        "AGENT_APPROVER_KEYS",
-        "approver-",
-        require_identity=True,
-        minimum_secret_length=32,
+        "AGENT_APPROVER_KEYS", "approver-", require_identity=True
     )
 
 
@@ -204,6 +198,62 @@ def approval_requester_identity(api_key: str | None) -> str | None:
         if hmac.compare_digest(api_key, secret):
             return identity
     return None
+
+
+def _configured_sandbox_requester_keys() -> list[tuple[str, str]]:
+    """Return strong, explicitly named requester credentials for sandbox approvals."""
+    return _parse_key_config(
+        "AGENT_API_KEYS",
+        "requester-",
+        require_identity=True,
+        minimum_secret_length=32,
+    )
+
+
+def _configured_sandbox_approver_keys() -> list[tuple[str, str]]:
+    """Return strong, explicitly named approver credentials for sandbox approvals."""
+    return _parse_key_config(
+        "AGENT_APPROVER_KEYS",
+        "approver-",
+        require_identity=True,
+        minimum_secret_length=32,
+    )
+
+
+def sandbox_requester_identity(api_key: str | None) -> str | None:
+    """Resolve only a strong, named requester credential for sandbox approvals."""
+    if not isinstance(api_key, str) or not api_key or not api_key.isascii():
+        return None
+    for identity, secret in _configured_sandbox_requester_keys():
+        if hmac.compare_digest(api_key, secret):
+            return identity
+    return None
+
+
+def verify_sandbox_approver_key(approver_key: str | None) -> bool:
+    """Authenticate a strong named sandbox approver, keeping the requester role separate."""
+    if not isinstance(approver_key, str) or not approver_key or not approver_key.isascii():
+        return False
+    requester_keys = _configured_sandbox_requester_keys()
+    approver_keys = _configured_sandbox_approver_keys()
+    if not requester_keys or not approver_keys:
+        return False
+    if any(hmac.compare_digest(approver_key, secret) for _, secret in requester_keys):
+        return False
+    return any(
+        hmac.compare_digest(approver_key, secret)
+        for _, secret in approver_keys
+    )
+
+
+def sandbox_approver_identity(approver_key: str) -> str:
+    """Resolve a strong, explicitly configured sandbox approver identity."""
+    if not verify_sandbox_approver_key(approver_key):
+        raise ValueError("Sandbox approver identity is not configured")
+    for identity, secret in _configured_sandbox_approver_keys():
+        if hmac.compare_digest(approver_key, secret):
+            return identity
+    raise ValueError("Sandbox approver identity is not configured")
 
 
 def requester_rate_limit_identity(api_key: str | None) -> str | None:
