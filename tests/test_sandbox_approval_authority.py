@@ -100,8 +100,8 @@ def test_sandbox_approval_credentials_require_named_high_entropy_principals(
 
     # A secret duplicated across roles disables both approval principals.
     monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={requester_secret}")
+    assert not auth.verify_api_key(requester_secret)
     assert not auth.verify_approver_key(requester_secret)
-    assert auth.approval_requester_identity(requester_secret) is None
 
 
 def test_request_record_reconciles_after_process_stops_after_audit_commit(
