@@ -694,6 +694,9 @@ import os
 import sys
 from stage2_sdk_ai import sandbox_approval
 
+# This subprocess test isolates process-crash recovery; the independent S3
+# checkpoint gate is exercised by the parent-process integration tests.
+sandbox_approval._verify_independent_audit_checkpoint = lambda: {}
 real_append = sandbox_approval._append_audit
 
 def append_then_exit(*args, **kwargs):
