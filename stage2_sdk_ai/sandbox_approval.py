@@ -61,6 +61,23 @@ class SandboxApprovalConfigurationError(SandboxApprovalError):
     pass
 
 
+def _verify_independent_audit_checkpoint() -> dict[str, Any]:
+    """Fail closed unless the sandbox audit matches independently retained custody."""
+    from .audit_checkpoint_store import (
+        AuditCheckpointStoreError,
+        verify_sandbox_audit_log_from_s3,
+    )
+
+    try:
+        return verify_sandbox_audit_log_from_s3()
+    except AuditCheckpointStoreError as exc:
+        raise SandboxApprovalError(
+            "Independent sandbox audit checkpoint verification failed; "
+            "approval operations are paused for operator review"
+        ) from exc
+
+
+
 def _canonical(value: dict[str, Any]) -> bytes:
     try:
         return json.dumps(
@@ -710,6 +727,7 @@ def create_request(
         raise SandboxApprovalConfigurationError("Invalid approval audience")
     validated_scope = _validate_scope(scope)
     _validate_signing_configuration()
+    _verify_independent_audit_checkpoint()
     _ensure_store()
     created = time.time() if now is None else now
     approval_id = None
@@ -794,6 +812,8 @@ def decide(
         ) from exc
     if decision not in {"approved", "denied"}:
         raise SandboxApprovalError("Invalid decision")
+    _verify_independent_audit_checkpoint()
+    _verify_independent_audit_checkpoint()
     path = _record_path(approval_id)
     with _locked(path):
         record = _reconcile_pending_audit(
@@ -875,6 +895,7 @@ def decide(
 
 
 def get_decision(approval_id: str, *, requester: str) -> dict[str, Any]:
+    _verify_independent_audit_checkpoint()
     with _locked(_record_path(approval_id)):
         record = _reconcile_pending_audit(
             approval_id, _load(approval_id)
@@ -894,6 +915,7 @@ def get_decision(approval_id: str, *, requester: str) -> dict[str, Any]:
 
 
 def inspect(approval_id: str, *, requester: str) -> dict[str, Any]:
+    _verify_independent_audit_checkpoint()
     with _locked(_record_path(approval_id)):
         record = _reconcile_pending_audit(
             approval_id, _load(approval_id)
