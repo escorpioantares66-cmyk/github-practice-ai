@@ -1004,7 +1004,8 @@ def test_audit_history_prevents_second_approval_after_record_rollback(
     with pytest.raises(sandbox_approval.SandboxApprovalConflict):
         monkeypatch.setenv(
             "AGENT_APPROVER_KEYS",
-            f"reviewer={APPROVER_KEY},second-reviewer=sandbox-second-approver-secret-for-tests-0000000000000003",
+            f"reviewer={APPROVER_KEY},"
+            "second-reviewer=sandbox-second-approver-secret-for-tests-0000000000000003",
         )
         sandbox_approval.decide(
             created["approval_id"],
@@ -1176,7 +1177,8 @@ def test_http_read_and_consume_routes_enforce_requester_ownership(
 ):
     monkeypatch.setenv(
         "AGENT_API_KEYS",
-        f"automation={REQUESTER_KEY},intruder=other-requester-secret-for-tests-00000000000000000003",
+        f"automation={REQUESTER_KEY},"
+        "intruder=other-requester-secret-for-tests-00000000000000000003",
     )
     client = TestClient(app)
     owner_headers = {"X-API-Key": REQUESTER_KEY}
