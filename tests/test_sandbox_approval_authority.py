@@ -634,11 +634,11 @@ def test_wrong_nonce_cannot_consume_approval(authority, scope):
 
 
 
-@pytest.mark.parametrize("transition", ["decision", "consumption"])
+@pytest.mark.parametrize("transition", ["request", "decision", "consumption"])
 def test_real_process_exit_after_audit_commit_recovers_exact_outcome(
     authority, scope, transition
 ):
-    created = _create(authority, scope)
+    created = None if transition == "request" else _create(authority, scope)
     nonce = None
     request_id = None
     if transition == "consumption":
@@ -659,7 +659,14 @@ def append_then_exit(*args, **kwargs):
 
 sandbox_approval._append_audit = append_then_exit
 approval_id, transition = sys.argv[1], sys.argv[2]
-if transition == "decision":
+if transition == "request":
+    sandbox_approval.create_request(
+        json.loads(os.environ["TEST_APPROVAL_SCOPE"]),
+        requester="automation",
+        issuer=os.environ["SANDBOX_APPROVAL_ISSUER"],
+        audience=os.environ["SANDBOX_APPROVAL_AUDIENCE"],
+    )
+elif transition == "decision":
     sandbox_approval.decide(
         approval_id,
         approver_key=os.environ["TEST_APPROVER_KEY"],
@@ -679,8 +686,9 @@ else:
     env["TEST_REQUEST_ID"] = request_id or ""
     env["TEST_APPROVAL_NONCE"] = nonce or ""
     env["TEST_APPROVAL_SCOPE"] = json.dumps(scope)
+    approval_id = created["approval_id"] if created else "created-in-child"
     result = subprocess.run(
-        [sys.executable, "-c", script, created["approval_id"], transition],
+        [sys.executable, "-c", script, approval_id, transition],
         cwd=os.getcwd(),
         env=env,
         check=False,
@@ -688,7 +696,21 @@ else:
     )
     assert result.returncode == 86
 
-    if transition == "decision":
+    if transition == "request":
+        approval_files = list(
+            (authority / "sandbox-approvals").glob("*.json")
+        )
+        assert len(approval_files) == 1
+        approval_id = approval_files[0].stem
+        state = sandbox_approval.inspect(
+            approval_id, requester="automation"
+        )
+        assert state["status"] == "pending"
+        assert state["audit_status"] == "written"
+        assert [event["action"] for event in state["audit_history"]] == [
+            "request_created"
+        ]
+    elif transition == "decision":
         receipt = sandbox_approval.get_decision(
             created["approval_id"], requester="automation"
         )
