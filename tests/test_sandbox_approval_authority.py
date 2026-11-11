@@ -108,6 +108,31 @@ def test_sandbox_approval_credentials_require_named_high_entropy_principals(
     assert not auth.verify_approver_key(requester_secret)
 
 
+
+def test_requester_and_approver_rotation_revokes_previous_credentials(
+    authority, monkeypatch
+):
+    old_requester = REQUESTER_KEY
+    old_approver = APPROVER_KEY
+    new_requester = "new-requester-secret-for-rotation-tests-000000000001"
+    new_approver = "new-approver-secret-for-rotation-tests-000000000002"
+
+    monkeypatch.setenv("AGENT_API_KEYS", f"automation={old_requester}")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={old_approver}")
+    assert auth.approval_requester_identity(old_requester) == "automation"
+    assert auth.verify_approver_key(old_approver)
+
+    # The single-entry named configuration is a coordinated cutover: once the
+    # replacement is active, the previous values no longer authenticate.
+    monkeypatch.setenv("AGENT_API_KEYS", f"automation={new_requester}")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={new_approver}")
+    assert auth.approval_requester_identity(old_requester) is None
+    assert not auth.verify_api_key(old_requester)
+    assert not auth.verify_approver_key(old_approver)
+    assert auth.approval_requester_identity(new_requester) == "automation"
+    assert auth.verify_approver_key(new_approver)
+
+
 def test_request_record_reconciles_after_process_stops_after_audit_commit(
     authority, scope, monkeypatch
 ):
