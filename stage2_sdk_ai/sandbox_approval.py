@@ -23,6 +23,7 @@ from uuid import UUID
 from . import auth
 from .secure_storage import (
     ensure_private_directory,
+    fsync_directory,
     open_private_file,
     write_text_atomically,
 )
@@ -282,6 +283,83 @@ def _events_for(approval_id: str) -> list[dict[str, Any]]:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def _reconcile_pending_audit(
+    approval_id: str, record: dict[str, Any]
+) -> dict[str, Any]:
+    """Complete a record marker only when the durable audit proves the transition.
+
+    The audit append is the commit evidence. A restart may observe the event
+    after the process stopped before saving audit_status="written". Reconcile
+    only an exact, complete lifecycle; missing, conflicting, or corrupt evidence
+    remains fail-closed for operator review.
+    """
+    if record.get("audit_status") not in {"pending", "failed"}:
+        return record
+
+    events = _events_for(approval_id)
+    if not events:
+        return record
+
+    scope_hash = hashlib.sha256(_canonical(record["scope"])).hexdigest()
+    if (
+        events[0].get("action") != "request_created"
+        or events[0].get("actor") != record.get("requester")
+        or any(event.get("scope_sha256") != scope_hash for event in events)
+    ):
+        return record
+
+    status = record.get("status")
+    actions = [event.get("action") for event in events]
+    if status == "pending":
+        valid = actions == ["request_created"]
+    elif status in {"approved", "denied", "expired"}:
+        valid = actions == ["request_created", status]
+        if valid:
+            event = events[1]
+            valid = (
+                event.get("actor")
+                == ("system" if status == "expired" else record.get("approver"))
+                and event.get("time") == record.get("expires_at")
+                if status == "expired"
+                else event.get("actor") == record.get("approver")
+            )
+            if status == "approved":
+                valid = valid and event.get("details", {}).get(
+                    "receipt"
+                ) == record.get("receipt") and _receipt_matches_record(
+                    record, now=event.get("time")
+                )
+            elif status == "denied":
+                valid = valid and record.get("receipt") is None
+    elif status == "consumed":
+        valid = actions == ["request_created", "approved", "consumed"]
+        if valid:
+            decision_event, consumed_event = events[1], events[2]
+            consumption = record.get("consumption") or {}
+            details = consumed_event.get("details", {})
+            valid = (
+                decision_event.get("actor") == record.get("approver")
+                and decision_event.get("details", {}).get("receipt")
+                == record.get("receipt")
+                and consumed_event.get("actor") == record.get("requester")
+                and details.get("request_id") == consumption.get("request_id")
+                and details.get("payload_sha256")
+                == consumption.get("payload_sha256")
+                and details.get("outcome") == consumption.get("outcome")
+                and consumed_event.get("time") == consumption.get("consumed_at")
+                and _receipt_matches_record(
+                    record, now=consumed_event.get("time")
+                )
+            )
+    else:
+        valid = False
+
+    if valid:
+        record["audit_status"] = "written"
+        _save(approval_id, record)
+    return record
+
+
 def verify_audit_log(
     expected_checkpoint: dict[str, Any] | None = None,
     *,
@@ -380,9 +458,15 @@ def _append_audit(
             encoded = (
                 json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n"
             ).encode("ascii")
-            fd = open_private_file(
-                audit_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND
-            )
+            created = False
+            try:
+                fd = open_private_file(audit_path, os.O_WRONLY | os.O_APPEND)
+            except FileNotFoundError:
+                fd = open_private_file(
+                    audit_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND,
+                )
+                created = True
             with os.fdopen(fd, "ab") as audit_handle:
                 view = memoryview(encoded)
                 while view:
@@ -391,6 +475,8 @@ def _append_audit(
                         raise OSError("sandbox audit append made no progress")
                     view = view[written:]
                 os.fsync(audit_handle.fileno())
+            if created:
+                fsync_directory(directory)
         finally:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
@@ -651,7 +737,9 @@ def decide(
         raise SandboxApprovalError("Invalid decision")
     path = _record_path(approval_id)
     with _locked(path):
-        record = _load(approval_id)
+        record = _reconcile_pending_audit(
+            approval_id, _load(approval_id)
+        )
         current = time.time() if now is None else now
         if record.get("audit_status") != "written":
             raise SandboxApprovalError("Request audit is incomplete; operator review required")
@@ -720,7 +808,10 @@ def decide(
 
 
 def get_decision(approval_id: str, *, requester: str) -> dict[str, Any]:
-    record = _load(approval_id)
+    with _locked(_record_path(approval_id)):
+        record = _reconcile_pending_audit(
+            approval_id, _load(approval_id)
+        )
     if record.get("requester") != requester:
         raise SandboxApprovalForbidden("Approval belongs to another requester")
     if (
@@ -736,7 +827,10 @@ def get_decision(approval_id: str, *, requester: str) -> dict[str, Any]:
 
 
 def inspect(approval_id: str, *, requester: str) -> dict[str, Any]:
-    record = _load(approval_id)
+    with _locked(_record_path(approval_id)):
+        record = _reconcile_pending_audit(
+            approval_id, _load(approval_id)
+        )
     if record.get("requester") != requester:
         raise SandboxApprovalForbidden("Approval belongs to another requester")
     events = _events_for(approval_id)
@@ -785,7 +879,9 @@ def consume(
     ).hexdigest()
     path = _record_path(approval_id)
     with _locked(path):
-        record = _load(approval_id)
+        record = _reconcile_pending_audit(
+            approval_id, _load(approval_id)
+        )
         if record.get("requester") != requester:
             raise SandboxApprovalForbidden("Approval belongs to another requester")
         if not secrets.compare_digest(record.get("nonce", ""), nonce):
