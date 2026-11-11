@@ -139,8 +139,26 @@ approval workflows. See `docs/sandbox-approval-authority.md`.
 The authority reconciles a record whose audit completion marker was not saved
 only when the durable hash-chained audit proves the exact expected lifecycle
 and matches the record's scope, actors, receipt and consumption details. Missing
-or conflicting evidence remains fail-closed. The local hash chain detects
-truncation or modification relative to its retained contents, but cannot detect
-rollback of the entire audit file to an earlier valid snapshot without an
-independently protected checkpoint or backup. This remains a single-host
-file-backed authority, not a multi-host transactional service.
+or conflicting evidence remains fail-closed.
+
+Sandbox approval lifecycle operations additionally require an independently
+retained S3 checkpoint and operator-accepted trusted floor. The application
+role retrieves both objects and verifies the sandbox authority, store identity,
+sequence, head hash, checkpoint age and maximum unanchored suffix before
+creating, deciding, inspecting, retrieving or consuming an approval. Missing
+configuration, unavailable S3 custody, a stale or conflicting checkpoint, or
+an audit rollback pauses approval operations for operator review. The
+application role must have only `s3:GetObject` access to the two exact
+checkpoint objects; checkpoint publication and floor advancement use separate
+operator credentials. The application never creates, advances, repairs or
+replaces these trust anchors.
+
+The checkpoint and floor are not provisioned by this code change. Operators
+must establish the bucket, read-only application IAM policy, independent
+operator custody, stable sandbox store ID, maximum checkpoint age, maximum
+unanchored suffix and initial reviewed checkpoint before enabling the service.
+The values are required configuration with no code defaults. See
+`docs/SANDBOX_AUDIT_CHECKPOINT_RUNBOOK.md`. Until this external custody and
+runtime configuration are verified, this is implementation evidence rather
+than proof of a live deployment. The authority remains single-host and
+file-backed, not a multi-host transactional service.
