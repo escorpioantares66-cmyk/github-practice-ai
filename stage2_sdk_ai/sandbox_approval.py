@@ -808,6 +808,14 @@ def decide(
             not events
             or events[0].get("action") != "request_created"
             or events[0].get("actor") != record["requester"]
+            or events[0].get("details")
+            != {
+                "nonce": record.get("nonce"),
+                "created_at": record.get("created_at"),
+                "expires_at": record.get("expires_at"),
+                "issuer": record.get("issuer"),
+                "audience": record.get("audience"),
+            }
             or events[0].get("scope_sha256") != expected_scope_hash
             or any(event.get("scope_sha256") != expected_scope_hash for event in events)
         ):
@@ -951,6 +959,14 @@ def consume(
             not events
             or events[0].get("action") != "request_created"
             or events[0].get("actor") != record["requester"]
+            or events[0].get("details")
+            != {
+                "nonce": record.get("nonce"),
+                "created_at": record.get("created_at"),
+                "expires_at": record.get("expires_at"),
+                "issuer": record.get("issuer"),
+                "audience": record.get("audience"),
+            }
             or events[0].get("scope_sha256") != expected_scope_hash
             or any(event.get("scope_sha256") != expected_scope_hash for event in events)
         ):
