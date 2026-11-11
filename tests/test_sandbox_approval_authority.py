@@ -86,7 +86,7 @@ def _approve(created):
 
 
 
-def test_sandbox_approval_credentials_require_named_high_entropy_principals(
+def test_sandbox_approval_credentials_require_named_minimum_length_principals(
     authority, monkeypatch
 ):
     monkeypatch.setenv("AGENT_API_KEYS", "automation=short-requester")
