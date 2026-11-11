@@ -1,4 +1,5 @@
 """Security and recovery tests for the external sandbox approval authority."""
+import base64
 import hashlib
 import json
 import os
@@ -217,6 +218,32 @@ def test_signed_decision_is_bound_to_expected_issuer_audience_and_scope(
     )
     assert not sandbox_approval.verify_receipt(
         receipt, expected_issuer=ISSUER, expected_audience="another-client"
+    )
+
+
+
+def test_receipt_verification_rejects_validly_signed_self_approval(
+    authority, scope
+):
+    receipt = _approve(_create(authority, scope))["receipt"]
+    claims = dict(receipt["claims"])
+    claims["approver"] = claims["requester"]
+    private_key = serialization.load_pem_private_key(
+        os.environ["SANDBOX_APPROVAL_SIGNING_PRIVATE_KEY"].encode("ascii"),
+        password=None,
+    )
+    signature = private_key.sign(sandbox_approval._canonical(claims))
+    self_approved = {
+        **receipt,
+        "claims": claims,
+        "signature": base64.urlsafe_b64encode(signature)
+        .decode("ascii")
+        .rstrip("="),
+    }
+    assert not sandbox_approval.verify_receipt(
+        self_approved,
+        expected_issuer=ISSUER,
+        expected_audience=AUDIENCE,
     )
 
 
