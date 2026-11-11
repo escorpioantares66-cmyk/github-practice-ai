@@ -2,9 +2,9 @@
 
 ## Decision status
 
-**Design and proof-of-boundary only. Not implemented as an operational dependency. Not enabled.**
+**Sandbox v1 integration implemented on the PR #54 feature branch; operational custody and deployment are not yet verified.**
 
-The current approval workflows continue to use their existing audit verification behavior. No approval, denial, consumption, execution, or sandbox lifecycle operation is changed by this design record.
+The sandbox approval lifecycle now requires read-only retrieval and verification of an independently retained S3 candidate checkpoint and operator-accepted trusted floor before create, decide, inspect, decision retrieval or consume operations. Missing configuration, unavailable custody, rollback or policy failure pauses the operation. The main approval audit's existing S3 helper remains optional and is not changed by this sandbox integration. No production S3 bucket, IAM policy, operator identity or runtime configuration is provisioned by this code change.
 
 The initial zero-cost candidate is a local checkpoint file controlled by a separate operator identity on a Linux host. It is not a second directory owned by the application account.
 
@@ -21,8 +21,9 @@ The initial zero-cost candidate is a local checkpoint file controlled by a separ
 ### Sandbox approval audit
 
 - `sandbox_approval.verify_audit_log()` verifies only the local sandbox audit hash chain.
-- Sandbox approval lifecycle operations have no independent checkpoint retrieval or comparison path.
-- Its chain has its own event sequence and last hash, so it needs a distinct authority identifier and checkpoint state. A main-approval checkpoint must never be accepted for the sandbox log, or vice versa.
+- The sandbox chain has its own event sequence and last hash, so it requires a distinct authority identifier and checkpoint state. A main-approval checkpoint must never be accepted for the sandbox log, or vice versa.
+- PR #54 wires the existing versioned checkpoint envelope and policy verifier to separate S3 candidate and trusted-floor objects for the sandbox authority. The application reads both objects; operator credentials publish them.
+- Runtime operation requires an operator-provisioned store ID, S3 bucket and object keys, explicit maximum checkpoint age and maximum unanchored suffix. These values have no code defaults and missing configuration fails closed.
 
 ### Storage boundary
 
@@ -142,13 +143,16 @@ For both audit authorities, test:
 
 ## Enforcement gate
 
-Mandatory checkpoint enforcement remains **disabled** until all of the following are true:
+For the sandbox approval API, checkpoint verification is now enforced in the PR #54 code path and missing/unavailable trust anchors fail closed. This is not evidence that the feature branch is deployed or that its external custody is provisioned. The main approval authority remains outside this enforcement change.
 
-1. The actual host provides a demonstrated application/operator UID separation.
-2. Both main and sandbox audit authorities have authority-specific checkpoint verification.
-3. The accepted freshness and unanchored-suffix policy is explicitly chosen.
-4. Rollback, tampering, stale/missing checkpoint, crash, and recovery tests pass.
-5. The full CI matrix and coverage gate pass.
-6. A human reviews the security boundary and approves a separate enforcement change.
+Before sandbox F-03 can be considered operationally closed, all of the following must be true:
+
+1. The actual deployment has a separately administered checkpoint bucket and operator identity.
+2. The application role is proven read-only for the exact candidate and trusted-floor objects.
+3. The stable store ID and explicit freshness/unanchored-suffix policy are selected and configured.
+4. The initial candidate and trusted floor are reviewed and independently published.
+5. Rollback, tampering, stale/missing checkpoint, S3 outage, crash and recovery tests pass against the intended storage boundary.
+6. The deployed runtime configuration is independently verified.
+7. A human reviews the security boundary and the owner accepts the remaining operational risks.
 
 This design record does not authorize a deployment, account provisioning, paid service, destructive rotation, audit truncation, or a change to the Cloudflare prototype.
