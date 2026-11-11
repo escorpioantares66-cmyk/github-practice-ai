@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -209,13 +210,13 @@ def verify_sandbox_audit_log_from_s3(
             authority=integrity.SANDBOX_AUTHORITY,
             store_id=trusted_store_id,
             trusted_floor=floor,
-            now=__import__("time").time() if now is None else now,
+            now=time.time() if now is None else now,
             max_age_seconds=max_age_seconds,
             max_unanchored_suffix=max_unanchored_suffix,
         )
     except AuditCheckpointStoreError:
         raise
-    except integrity.AuditCheckpointIntegrityError as exc:
+    except Exception as exc:
         raise AuditCheckpointStoreError(
             "Sandbox audit history does not match its independent trusted checkpoint"
         ) from exc
