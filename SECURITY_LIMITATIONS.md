@@ -121,3 +121,26 @@ single-host only; do not share the approval directory over NFS or across
 independent hosts. It is not a multi-host or highly available authorization
 service. See docs/sandbox-approval-authority.md for the full API, configuration
 and key-rotation contract.
+
+
+## Sandbox approval credential assurance and audit recovery
+
+The versioned sandbox approval API accepts only explicitly named requester and
+approver principals with independently generated secrets of at least 32 ASCII
+characters. The parser rejects malformed or duplicate entries and rejects a
+secret reused across requester and approver roles. These are machine-enforced
+credential requirements; the configured principal name remains an operator-
+assigned label and does not prove a natural person's identity or MFA status.
+
+Credential custody, independent human approver identity, step-up authentication,
+and verified revocation procedures must be established before production
+approval workflows. See `docs/sandbox-approval-authority.md`.
+
+The authority reconciles a record whose audit completion marker was not saved
+only when the durable hash-chained audit proves the exact expected lifecycle
+and matches the record's scope, actors, receipt and consumption details. Missing
+or conflicting evidence remains fail-closed. The local hash chain detects
+truncation or modification relative to its retained contents, but cannot detect
+rollback of the entire audit file to an earlier valid snapshot without an
+independently protected checkpoint or backup. This remains a single-host
+file-backed authority, not a multi-host transactional service.
