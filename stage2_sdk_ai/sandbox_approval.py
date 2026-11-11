@@ -63,14 +63,11 @@ class SandboxApprovalConfigurationError(SandboxApprovalError):
 
 def _verify_independent_audit_checkpoint() -> dict[str, Any]:
     """Fail closed unless the sandbox audit matches independently retained custody."""
-    from .audit_checkpoint_store import (
-        AuditCheckpointStoreError,
-        verify_sandbox_audit_log_from_s3,
-    )
+    from .audit_checkpoint_store import verify_sandbox_audit_log_from_s3
 
     try:
         return verify_sandbox_audit_log_from_s3()
-    except AuditCheckpointStoreError as exc:
+    except Exception as exc:
         raise SandboxApprovalError(
             "Independent sandbox audit checkpoint verification failed; "
             "approval operations are paused for operator review"
