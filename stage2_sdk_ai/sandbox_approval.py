@@ -316,13 +316,14 @@ def _reconcile_pending_audit(
         valid = actions == ["request_created", status]
         if valid:
             event = events[1]
-            valid = (
-                event.get("actor")
-                == ("system" if status == "expired" else record.get("approver"))
-                and event.get("time") == record.get("expires_at")
-                if status == "expired"
-                else event.get("actor") == record.get("approver")
-            )
+            if status == "expired":
+                valid = (
+                    event.get("actor") == "system"
+                    and isinstance(event.get("time"), (int, float))
+                    and event.get("time") >= record.get("expires_at", float("inf"))
+                )
+            else:
+                valid = event.get("actor") == record.get("approver")
             if status == "approved":
                 valid = valid and event.get("details", {}).get(
                     "receipt"
