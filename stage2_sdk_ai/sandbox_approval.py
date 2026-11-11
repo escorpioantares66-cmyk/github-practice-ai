@@ -307,6 +307,14 @@ def _reconcile_pending_audit(
     if (
         events[0].get("action") != "request_created"
         or events[0].get("actor") != record.get("requester")
+        or events[0].get("details")
+        != {
+            "nonce": record.get("nonce"),
+            "created_at": record.get("created_at"),
+            "expires_at": record.get("expires_at"),
+            "issuer": record.get("issuer"),
+            "audience": record.get("audience"),
+        }
         or any(event.get("scope_sha256") != scope_hash for event in events)
     ):
         return record
@@ -737,7 +745,20 @@ def create_request(
     with _locked(_record_path(approval_id)):
         _save(approval_id, record)
         try:
-            _append_audit(approval_id, "request_created", requester, validated_scope, created)
+            _append_audit(
+                approval_id,
+                "request_created",
+                requester,
+                validated_scope,
+                created,
+                details={
+                    "nonce": record["nonce"],
+                    "created_at": record["created_at"],
+                    "expires_at": record["expires_at"],
+                    "issuer": issuer,
+                    "audience": audience,
+                },
+            )
         except Exception:
             record["audit_status"] = "failed"
             try:
