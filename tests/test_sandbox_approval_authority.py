@@ -1,10 +1,12 @@
 """Security and recovery tests for the external sandbox approval authority."""
 import base64
 import hashlib
+import io
 import json
 import os
 import subprocess
 import sys
+import types
 import uuid
 
 import pytest
@@ -12,7 +14,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
-from stage2_sdk_ai import auth, sandbox_approval
+from stage2_sdk_ai import audit_checkpoint_integrity, audit_checkpoint_store, auth, sandbox_approval
 from stage2_sdk_ai.api import app
 
 REQUESTER_KEY = "sandbox-requester-secret-for-tests-00000000000000000001"
@@ -48,13 +50,54 @@ def _configure_keys(monkeypatch, active_kid="key-1"):
 
 @pytest.fixture
 def authority(monkeypatch, tmp_path):
-    monkeypatch.setenv("SANDBOX_APPROVALS_DIR", str(tmp_path / "sandbox-approvals"))
+    store_dir = tmp_path / "sandbox-approvals"
+    store_dir.mkdir(mode=0o700)
+    os.chmod(store_dir, 0o700)
+    audit_path = store_dir / "audit.jsonl"
+    audit_path.touch(mode=0o600)
+    os.chmod(audit_path, 0o600)
+    monkeypatch.setenv("SANDBOX_APPROVALS_DIR", str(store_dir))
     monkeypatch.setenv("SANDBOX_APPROVAL_ISSUER", ISSUER)
     monkeypatch.setenv("SANDBOX_APPROVAL_AUDIENCE", AUDIENCE)
     monkeypatch.setenv("AGENT_API_KEYS", f"automation={REQUESTER_KEY}")
     monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={APPROVER_KEY}")
+    monkeypatch.setenv("AGENT_AUDIT_CHECKPOINT_S3_BUCKET", "synthetic-audit-bucket")
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_CHECKPOINT_S3_KEY", "audit-checkpoints/sandbox/latest.json")
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_CHECKPOINT_FLOOR_S3_KEY", "audit-checkpoints/sandbox/trusted-floor.json")
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_STORE_ID", "sandbox-contract-test-store")
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_CHECKPOINT_MAX_AGE_SECONDS", "86400")
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX", "1000")
     _configure_keys(monkeypatch)
+
+    envelope = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+        "sandbox-contract-test-store",
+    )
+    floor_fields = {
+        "authority", "store_id", "sequence", "head_hash",
+        "legacy_entries", "created_at", "checkpoint_id",
+    }
+    floor = {key: envelope[key] for key in floor_fields}
+
+    class FakeS3:
+        def __init__(self):
+            self.objects = {
+                "audit-checkpoints/sandbox/latest.json": json.dumps(envelope).encode("utf-8"),
+                "audit-checkpoints/sandbox/trusted-floor.json": json.dumps(floor).encode("utf-8"),
+            }
+            self.unavailable = False
+
+        def get_object(self, *, Bucket, Key):
+            if self.unavailable or Bucket != "synthetic-audit-bucket" or Key not in self.objects:
+                raise OSError("synthetic checkpoint store unavailable")
+            return {"Body": io.BytesIO(self.objects[Key])}
+
+    fake_s3 = FakeS3()
+    monkeypatch.setitem(
+        sys.modules, "boto3", types.SimpleNamespace(client=lambda **_kwargs: fake_s3)
+    )
     monkeypatch.setattr(auth, "check_rate_limit", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(sandbox_approval, "_test_checkpoint_store", fake_s3, raising=False)
     return tmp_path
 
 
@@ -1531,3 +1574,47 @@ def test_consumption_recovery_rejects_conflicting_terminal_decision_event(
             nonce=nonce,
             scope=scope,
         )
+
+def test_sandbox_approval_fails_closed_when_independent_checkpoint_is_unavailable(
+    authority, scope
+):
+    sandbox_approval._test_checkpoint_store.unavailable = True
+    with pytest.raises(sandbox_approval.SandboxApprovalError, match="Independent sandbox audit"):
+        _create(authority, scope)
+
+
+def test_sandbox_approval_rejects_full_audit_rollback_behind_operator_checkpoint(
+    authority, scope
+):
+    created = _create(authority, scope)
+    checkpoint = audit_checkpoint_store.create_sandbox_audit_checkpoint(
+        "sandbox-contract-test-store"
+    )
+    floor_fields = {
+        "authority", "store_id", "sequence", "head_hash",
+        "legacy_entries", "created_at", "checkpoint_id",
+    }
+    floor = {key: checkpoint[key] for key in floor_fields}
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    fake_s3.objects["audit-checkpoints/sandbox/latest.json"] = json.dumps(
+        checkpoint
+    ).encode("utf-8")
+    fake_s3.objects["audit-checkpoints/sandbox/trusted-floor.json"] = json.dumps(
+        floor
+    ).encode("utf-8")
+
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    audit_path.write_bytes(b"")
+    os.chmod(audit_path, 0o600)
+
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="Independent sandbox audit checkpoint verification failed",
+    ):
+        sandbox_approval.inspect(created["approval_id"], requester="automation")
+
+
+def test_sandbox_approval_requires_explicit_checkpoint_policy(authority, scope, monkeypatch):
+    monkeypatch.delenv("AGENT_SANDBOX_AUDIT_CHECKPOINT_MAX_AGE_SECONDS")
+    with pytest.raises(sandbox_approval.SandboxApprovalError, match="Independent sandbox audit"):
+        _create(authority, scope)
