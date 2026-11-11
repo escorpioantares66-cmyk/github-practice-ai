@@ -22,6 +22,8 @@
 
 ## Security documentation
 
+- [Tenant-scoped approval authority architecture (proposed)](docs/adr/0001-tenant-scoped-approval-authority.md)
+
 - [Security policy](SECURITY.md)
 - [Security and operational limitations](SECURITY_LIMITATIONS.md)
 - [Approval authorization configuration](docs/approval-authorization.md)
