@@ -126,8 +126,8 @@ and key-rotation contract.
 ## Sandbox approval credential assurance and audit recovery
 
 The versioned sandbox approval API accepts only explicitly named requester and
-approver principals with independently generated secrets of at least 32 ASCII
-characters. The parser rejects malformed or duplicate entries and rejects a
+approver principals with secrets of at least 32 ASCII characters. Operators must generate
+independent random values and protect their custody. The parser rejects malformed or duplicate entries and rejects a
 secret reused across requester and approver roles. These are machine-enforced
 credential requirements; the configured principal name remains an operator-
 assigned label and does not prove a natural person's identity or MFA status.
