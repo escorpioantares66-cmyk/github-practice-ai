@@ -39,7 +39,7 @@ class ConsumeSandboxApproval(StrictModel):
 def _requester_identity(x_api_key: str | None) -> str:
     if not auth.verify_api_key(x_api_key or ""):
         raise HTTPException(status_code=401, detail="Invalid API key")
-    identity = auth.approval_requester_identity(x_api_key)
+    identity = auth.sandbox_requester_identity(x_api_key)
     if identity is None:
         raise HTTPException(status_code=401, detail="Requester identity unavailable")
     if not auth.check_rate_limit(identity, role="sandbox-requester"):
@@ -48,10 +48,10 @@ def _requester_identity(x_api_key: str | None) -> str:
 
 
 def _approver_identity(x_approver_key: str | None) -> str:
-    if not auth.verify_approver_key(x_approver_key):
+    if not auth.verify_sandbox_approver_key(x_approver_key):
         raise HTTPException(status_code=403, detail="Invalid or missing approver credentials")
     try:
-        identity = auth.approver_identity(x_approver_key or "")
+        identity = auth.sandbox_approver_identity(x_approver_key or "")
     except ValueError as exc:
         raise HTTPException(status_code=403, detail="Approver identity unavailable") from exc
     if not auth.check_rate_limit(identity, role="sandbox-approver"):
