@@ -127,10 +127,21 @@ event, incomplete final line, conflicting terminal event or corrupt chain
 blocks authorization and requires operator review. Terminal decision and
 consume events are checked against mutable records so restoring an old record
 cannot re-authorize a completed approval while the audit history remains
-intact. The local hash chain cannot detect rollback of the entire audit file to
-an earlier valid snapshot without an independently protected checkpoint or
-backup. It is not a substitute for independent protected backups or a remote
-immutable audit checkpoint.
+intact. The local hash chain alone cannot detect rollback of the entire
+audit file to an earlier valid snapshot. The sandbox approval lifecycle now
+requires a separately retained S3 candidate checkpoint and operator-accepted
+trusted floor before create, decision, inspection, decision retrieval and
+consumption. The application role has read-only access to the two exact objects;
+operator credentials publish and advance them. The verifier checks authority,
+stable store identity, both historical anchors, candidate age and the explicit
+maximum unanchored suffix. Missing configuration, unavailable S3 custody,
+rollback or policy failure pauses approval operations for operator review.
+See `docs/SANDBOX_AUDIT_CHECKPOINT_RUNBOOK.md`.
+
+This code path does not provision the S3 bucket, IAM policy, operator identity,
+stable store ID or policy values. The deployed runtime must be independently
+configured and verified. A checkpoint proves history only through its sequence;
+events after it remain an unanchored suffix bounded by the configured policy.
 
 
 ## Approver authorization boundary
