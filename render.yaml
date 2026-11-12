@@ -1,11 +1,57 @@
+# Deployment template only. Do not sync/create infrastructure until the release gates
+# in docs/RENDER_DEPLOYMENT_READINESS.md are reviewed and explicitly approved.
 services:
   - type: web
     name: github-practice-ai
-    env: docker
-    plan: free
+    runtime: docker
+    plan: starter # Paid plan required for a persistent disk; owner must approve cost.
+    region: frankfurt # Provisional; region is immutable after service creation.
+    autoDeployTrigger: off
+    numInstances: 1
     healthCheckPath: /healthz
+    dockerfilePath: ./Dockerfile
+    disk:
+      name: approval-data
+      mountPath: /var/data
+      sizeGB: 1 # Provisional minimum; increase only after sizing review.
     envVars:
+      - key: APP_DATA_DIR
+        value: /var/data
+      - key: APP_REQUIRE_MOUNTED_DATA_DIR
+        value: "true"
+      - key: AGENT_QUOTA_DB_PATH
+        value: /var/data/.agent_state/quotas.sqlite3
+      - key: SANDBOX_APPROVALS_DIR
+        value: /var/data/sandbox-approvals
       - key: AGENT_API_KEYS
         sync: false
+      - key: AGENT_APPROVER_KEYS
+        sync: false
       - key: OPENAI_API_KEY
+        sync: false
+      - key: SANDBOX_APPROVAL_ACTIVE_KID
+        sync: false
+      - key: SANDBOX_APPROVAL_SIGNING_PRIVATE_KEY
+        sync: false
+      - key: SANDBOX_APPROVAL_VERIFY_KEYS
+        sync: false
+      - key: SANDBOX_APPROVAL_ISSUER
+        sync: false
+      - key: SANDBOX_APPROVAL_AUDIENCE
+        sync: false
+      - key: AGENT_AUDIT_CHECKPOINT_S3_BUCKET
+        sync: false
+      - key: AGENT_AUDIT_CHECKPOINT_S3_KEY
+        sync: false
+      - key: AGENT_SANDBOX_AUDIT_CHECKPOINT_S3_KEY
+        sync: false
+      - key: AGENT_SANDBOX_AUDIT_CHECKPOINT_FLOOR_S3_KEY
+        sync: false
+      - key: AGENT_SANDBOX_AUDIT_STORE_ID
+        sync: false
+      - key: AGENT_SANDBOX_AUDIT_CHECKPOINT_MAX_AGE_SECONDS
+        sync: false
+      - key: AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX
+        sync: false
+      - key: AWS_REGION
         sync: false
