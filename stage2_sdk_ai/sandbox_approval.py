@@ -62,12 +62,20 @@ class SandboxApprovalConfigurationError(SandboxApprovalError):
     pass
 
 
-def _verify_independent_audit_checkpoint() -> dict[str, Any]:
-    """Fail closed unless the sandbox audit matches independently retained custody."""
+def _verify_independent_audit_checkpoint(
+    *, reserve_unanchored_events: int = 0
+) -> dict[str, Any]:
+    """Fail closed unless the sandbox audit matches independently retained custody.
+
+    Mutating lifecycle operations reserve one event before their append so the
+    configured suffix limit is never exceeded by the transition being checked.
+    """
     from .audit_checkpoint_store import verify_sandbox_audit_log_from_s3
 
     try:
-        return verify_sandbox_audit_log_from_s3()
+        return verify_sandbox_audit_log_from_s3(
+            reserve_unanchored_events=reserve_unanchored_events
+        )
     except Exception as exc:
         raise SandboxApprovalError(
             "Independent sandbox audit checkpoint verification failed; "
@@ -747,7 +755,7 @@ def create_request(
         raise SandboxApprovalConfigurationError("Invalid approval audience")
     validated_scope = _validate_scope(scope)
     _validate_signing_configuration()
-    _verify_independent_audit_checkpoint()
+    _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
     _ensure_store()
     created = time.time() if now is None else now
     approval_id = None
@@ -781,7 +789,7 @@ def create_request(
         "audit_status": "pending",
     }
     with _locked(_record_path(approval_id)):
-        _verify_independent_audit_checkpoint()
+        _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
         _save(approval_id, record)
         try:
             _append_audit(
@@ -836,7 +844,7 @@ def decide(
         raise SandboxApprovalError("Invalid decision")
     path = _record_path(approval_id)
     with _locked(path):
-        _verify_independent_audit_checkpoint()
+        _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
         record = _reconcile_pending_audit(
             approval_id, _load(approval_id)
         )
@@ -992,7 +1000,7 @@ def consume(
     ).hexdigest()
     path = _record_path(approval_id)
     with _locked(path):
-        _verify_independent_audit_checkpoint()
+        _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
         record = _reconcile_pending_audit(
             approval_id, _load(approval_id)
         )

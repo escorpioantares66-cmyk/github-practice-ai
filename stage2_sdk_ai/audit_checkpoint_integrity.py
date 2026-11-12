@@ -368,6 +368,7 @@ def verify_checkpoint_with_policy(
     now: float,
     max_age_seconds: float,
     max_unanchored_suffix: int,
+    reserve_unanchored_events: int = 0,
 ) -> dict[str, Any]:
     """Verify a checkpoint against audit history, freshness, and an operator floor.
 
@@ -392,6 +393,14 @@ def verify_checkpoint_with_policy(
     ):
         raise AuditCheckpointPolicyError(
             "maximum unanchored suffix must be a non-negative integer"
+        )
+    if (
+        isinstance(reserve_unanchored_events, bool)
+        or not isinstance(reserve_unanchored_events, int)
+        or reserve_unanchored_events < 0
+    ):
+        raise AuditCheckpointPolicyError(
+            "reserved unanchored event count must be a non-negative integer"
         )
 
     floor = validate_trusted_checkpoint_floor(
@@ -448,9 +457,13 @@ def verify_checkpoint_with_policy(
     age_seconds = now - envelope["created_at"]
     if age_seconds > max_age_seconds:
         raise AuditCheckpointPolicyError("checkpoint is older than the permitted age")
-    if verification["unanchored_suffix"] > max_unanchored_suffix:
+    if (
+        verification["unanchored_suffix"] + reserve_unanchored_events
+        > max_unanchored_suffix
+    ):
         raise AuditCheckpointPolicyError(
-            "unanchored audit suffix exceeds the permitted event limit"
+            "unanchored audit suffix plus reserved transition event "
+            "exceeds the permitted event limit"
         )
 
     return {
@@ -459,6 +472,7 @@ def verify_checkpoint_with_policy(
         "freshness_age_seconds": age_seconds,
         "max_age_seconds": max_age_seconds,
         "max_unanchored_suffix": max_unanchored_suffix,
+        "reserved_unanchored_events": reserve_unanchored_events,
         "trusted_floor_sequence": floor_sequence,
         "trusted_floor_verified": True,
         "trusted_floor_unanchored_suffix": floor_verification["unanchored_suffix"],

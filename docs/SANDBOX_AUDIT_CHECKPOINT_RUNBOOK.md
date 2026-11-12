@@ -168,15 +168,22 @@ remain part of the trusted computing base; independently verify those
 controls.
 
 The suffix is a deliberate risk budget, not a claim that unanchored events are
-tamper-proof. A configured maximum of N permits up to N audit events after the
-candidate checkpoint to remain outside the anchored prefix. Select N and the
-checkpoint age/cadence together based on the maximum rollback/replay window
-the owner will accept. For the strongest approval assurance, use a zero-event
-suffix and publish/accept a checkpoint after each audit append before another
-approval-sensitive operation; this can pause the service between operator
-publications. A larger suffix improves availability but increases unanchored
-history exposure. Do not choose a production value implicitly in code or
-infer that a low age limit removes the suffix risk.
+tamper-proof. A configured maximum of N permits at most N audit events after
+the candidate checkpoint to remain outside the anchored prefix. Each
+state-changing operation reserves one event before it begins, so a mutation
+that would take the suffix beyond N is rejected before the record changes.
+Read-only inspection and decision retrieval do not reserve an event and remain
+available at the configured cap.
+
+A maximum of zero is an explicit stop for state-changing approval operations:
+no mutation can append an event without creating an unanchored suffix. For the
+strongest usable assurance, choose a maximum of one and publish/accept a
+checkpoint after each successful audit append before permitting the next
+mutation. This can pause the service between operator publications. A larger
+suffix improves availability but increases unanchored history exposure.
+Select N and checkpoint age/cadence together based on the rollback/replay
+window the owner will accept. Do not choose a production value implicitly in
+code or infer that a low age limit removes the suffix risk.
 
 ## Interrupted record writes before audit append
 

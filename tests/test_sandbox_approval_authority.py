@@ -710,7 +710,7 @@ from stage2_sdk_ai import sandbox_approval
 
 # This subprocess test isolates process-crash recovery; the independent S3
 # checkpoint gate is exercised by the parent-process integration tests.
-sandbox_approval._verify_independent_audit_checkpoint = lambda: {}
+sandbox_approval._verify_independent_audit_checkpoint = lambda **_kwargs: {}
 real_append = sandbox_approval._append_audit
 
 def append_then_exit(*args, **kwargs):
@@ -1677,6 +1677,14 @@ def test_checkpoint_suffix_limit_is_enforced_across_concurrent_creates(
         sandbox_approval._load(item["approval_id"])["audit_status"] == "written"
         for item in created
     )
+    # Read-only inspection remains available at the cap; mutations reserve one
+    # additional audit event and are blocked until the operator advances a checkpoint.
+    assert (
+        sandbox_approval.inspect(created[0]["approval_id"], requester="automation")[
+            "status"
+        ]
+        == "pending"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1860,7 +1868,7 @@ import os
 import sys
 from stage2_sdk_ai import sandbox_approval
 
-sandbox_approval._verify_independent_audit_checkpoint = lambda: {}
+sandbox_approval._verify_independent_audit_checkpoint = lambda **_kwargs: {}
 sandbox_approval._append_audit = lambda *_args, **_kwargs: os._exit(87)
 approval_id, transition = sys.argv[1], sys.argv[2]
 scope = json.loads(os.environ["TEST_APPROVAL_SCOPE"])

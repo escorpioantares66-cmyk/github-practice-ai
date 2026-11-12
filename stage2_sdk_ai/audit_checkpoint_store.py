@@ -130,6 +130,7 @@ def verify_sandbox_audit_log_from_s3(
     now: float | None = None,
     max_age_seconds: float | None = None,
     max_unanchored_suffix: int | None = None,
+    reserve_unanchored_events: int = 0,
 ) -> dict[str, Any]:
     """Enforce the sandbox audit's independent S3 checkpoint and trusted floor.
 
@@ -213,6 +214,7 @@ def verify_sandbox_audit_log_from_s3(
             now=time.time() if now is None else now,
             max_age_seconds=max_age_seconds,
             max_unanchored_suffix=max_unanchored_suffix,
+            reserve_unanchored_events=reserve_unanchored_events,
         )
     except AuditCheckpointStoreError:
         raise
