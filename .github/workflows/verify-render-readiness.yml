@@ -49,24 +49,11 @@ jobs:
           printf 'TARGET_SHA=%s\n' "$actual" | tee "$RUNNER_TEMP/target-sha.txt"
           git show -s --format='commit=%H%nsubject=%s' HEAD
 
-      - name: Install pinned Render CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSL https://github.com/render-oss/cli/releases/download/v2.28.0/cli_2.28.0_linux_amd64.zip -o "$RUNNER_TEMP/render-cli.zip"
-          echo "00d1ca6f3c31b1f4bc7316837b8ee24acbeb11cf372b7593c7d2c3106a1987b4  $RUNNER_TEMP/render-cli.zip" | sha256sum --check
-          unzip -q "$RUNNER_TEMP/render-cli.zip" -d "$RUNNER_TEMP/render-cli"
-          cli_binary="$(find "$RUNNER_TEMP/render-cli" -type f -name render -print -quit)"
-          if [[ -z "$cli_binary" ]]; then
-            cli_binary="$(find "$RUNNER_TEMP/render-cli" -type f -name 'cli*' -print -quit)"
-          fi
-          test -n "$cli_binary"
-          chmod +x "$cli_binary"
-          sudo install "$cli_binary" /usr/local/bin/render
-          render --version
+      - name: Install pinned Render Blueprint schema validator
+        run: python -m pip install --disable-pip-version-check check-jsonschema==0.39.0
 
-      - name: Validate Render Blueprint without syncing infrastructure
-        run: render blueprints validate render.yaml
+      - name: Validate Render Blueprint against the public schema
+        run: check-jsonschema --schemafile https://render.com/schema/render.yaml.json render.yaml
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
