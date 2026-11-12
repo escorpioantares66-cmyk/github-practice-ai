@@ -88,7 +88,7 @@ No freshness duration or publication cadence is selected in this document. That 
 8. Recovery preserves all audit bytes, S3 object versions and external investigation evidence. An operator investigates from the last known trusted floor, verifies archived segments and active history, and records the recovery decision before publishing any new candidate/floor pair.
 9. If every trusted-floor copy is lost, the history cannot be silently re-established as trusted by exporting the current head. That would bless potentially rewritten history.
 
-The current integration pins candidate S3 object-version IDs in the trusted-floor manifest and requests the exact version on every verification. The manifest itself is not immutable by code; bucket versioning, retention, IAM, protection against manifest rollback and separate operator custody must therefore be independently verified. This remains an operational gate, not a code-level PASS.
+The current integration pins candidate S3 object-version IDs in the trusted-floor manifest and requests the exact version on every verification. The manifest itself is not immutable by code; bucket versioning, retention, IAM, protection against manifest rollback and separate operator custody must therefore be independently verified. This remains an operational gate, not a code-level PASS. A lifecycle operation uses the manifest version it read at the start of verification. A concurrent manifest update does not cancel an operation already in flight; strict cutover or emergency revocation requires pausing approval routes and draining in-flight operations before publishing the new manifest.
 
 ## Historical filesystem-candidate proof gates (superseded)
 
