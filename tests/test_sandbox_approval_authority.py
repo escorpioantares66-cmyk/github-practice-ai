@@ -108,16 +108,25 @@ def authority(monkeypatch, tmp_path):
                 candidate_key: json.dumps(envelope).encode("utf-8"),
                 "audit-checkpoints/sandbox/trusted-floor.json": json.dumps(floor).encode("utf-8"),
             }
+            candidate_payload = self.objects[candidate_key]
             self.version_ids = {candidate_key: candidate_version_id}
+            self.version_objects = {
+                candidate_key: {candidate_version_id: candidate_payload}
+            }
             self.unavailable = False
 
         def get_object(self, *, Bucket, Key, VersionId=None):
             if self.unavailable or Bucket != "synthetic-audit-bucket" or Key not in self.objects:
                 raise OSError("synthetic checkpoint store unavailable")
-            actual_version = self.version_ids.get(Key)
-            if VersionId is not None and VersionId != actual_version:
-                raise OSError("synthetic S3 object version is unavailable")
-            return {"Body": io.BytesIO(self.objects[Key]), "VersionId": actual_version}
+            if VersionId is not None:
+                payload = self.version_objects.get(Key, {}).get(VersionId)
+                if payload is None:
+                    raise OSError("synthetic S3 object version is unavailable")
+                actual_version = VersionId
+            else:
+                payload = self.objects[Key]
+                actual_version = self.version_ids.get(Key)
+            return {"Body": io.BytesIO(payload), "VersionId": actual_version}
 
     fake_s3 = FakeS3()
     monkeypatch.setitem(
@@ -1637,8 +1646,10 @@ def test_sandbox_approval_rejects_full_audit_rollback_behind_operator_checkpoint
         "candidate_head_hash": checkpoint["head_hash"],
         "candidate_created_at": checkpoint["created_at"],
     })
-    fake_s3.objects[candidate_key] = json.dumps(checkpoint).encode("utf-8")
+    candidate_payload = json.dumps(checkpoint).encode("utf-8")
+    fake_s3.objects[candidate_key] = candidate_payload
     fake_s3.version_ids[candidate_key] = candidate_version_id
+    fake_s3.version_objects[candidate_key][candidate_version_id] = candidate_payload
     fake_s3.objects["audit-checkpoints/sandbox/trusted-floor.json"] = json.dumps(
         floor
     ).encode("utf-8")
@@ -1653,6 +1664,42 @@ def test_sandbox_approval_rejects_full_audit_rollback_behind_operator_checkpoint
     ):
         sandbox_approval.inspect(created["approval_id"], requester="automation")
 
+
+
+def test_sandbox_checkpoint_reads_exact_operator_pinned_s3_version(
+    authority, scope
+):
+    created = _create(authority, scope)
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    candidate_key = "audit-checkpoints/sandbox/latest.json"
+    pinned_version = fake_s3.version_ids[candidate_key]
+
+    # Simulate the mutable latest key being pointed at an older version.
+    # The operator-pinned immutable version remains retrievable by VersionId.
+    fake_s3.objects[candidate_key] = b'{"sequence":0,"head_hash":"'
+    fake_s3.objects[candidate_key] += b'0' * 64 + b'"}'
+    fake_s3.version_ids[candidate_key] = "synthetic-older-current-version"
+
+    inspected = sandbox_approval.inspect(
+        created["approval_id"], requester="automation"
+    )
+    assert inspected["approval_id"] == created["approval_id"]
+    assert fake_s3.version_objects[candidate_key][pinned_version]
+
+
+def test_sandbox_checkpoint_fails_closed_when_pinned_s3_version_is_missing(
+    authority, scope
+):
+    _create(authority, scope)
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    candidate_key = "audit-checkpoints/sandbox/latest.json"
+    fake_s3.version_objects[candidate_key].clear()
+
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="Independent sandbox audit checkpoint verification failed",
+    ):
+        _create(authority, scope)
 
 def test_sandbox_approval_requires_explicit_checkpoint_policy(authority, scope, monkeypatch):
     monkeypatch.delenv("AGENT_SANDBOX_AUDIT_CHECKPOINT_MAX_AGE_SECONDS")
