@@ -6,7 +6,7 @@ services:
     runtime: docker
     plan: starter # Paid plan required for a persistent disk; owner must approve cost.
     region: frankfurt # Provisional; region is immutable after service creation.
-    autoDeployTrigger: off
+    autoDeployTrigger: "off"
     numInstances: 1
     healthCheckPath: /healthz
     dockerfilePath: ./Dockerfile
