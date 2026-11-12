@@ -13,10 +13,9 @@ from .secure_storage import (
     ensure_private_directory,
     write_text_atomically,
 )
+from .storage_paths import data_path
 
 logger = get_logger(__name__)
-
-from .storage_paths import data_path
 
 _notes_dir = data_path("notes")
 MAX_NOTE_CHARS = 5_000
