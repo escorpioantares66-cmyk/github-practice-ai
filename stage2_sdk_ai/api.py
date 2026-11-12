@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from stage2_sdk_ai import auth, cost_guard, input_guard, output_guard
+from stage2_sdk_ai.deployment_readiness import readiness_report
 from stage2_sdk_ai.agent_loop import UsageAccountingError, run_agent
 from stage2_sdk_ai.logging_setup import get_logger
 from stage2_sdk_ai.sandbox_approval_api import router as sandbox_approval_router
@@ -255,7 +256,17 @@ def _check_approver_auth(
 
 @app.get("/healthz")
 def healthz():
+    """Liveness endpoint: deliberately independent of external dependencies."""
     return {"status": "ok", "version": "v7.0-prod"}
+
+
+@app.get("/readyz")
+def readyz():
+    """Deployment readiness; never returns secret values or credential contents."""
+    report = readiness_report()
+    if report["status"] != "ready":
+        raise HTTPException(status_code=503, detail=report)
+    return report
 
 @app.get("/")
 def root():
