@@ -11,7 +11,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .secure_storage import ensure_private_directory
-
 from .storage_paths import data_path
 
 DEFAULT_DB_PATH = data_path(".agent_state", "quotas.sqlite3")
