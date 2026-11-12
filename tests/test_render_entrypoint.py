@@ -15,6 +15,9 @@ def test_root_bootstrap_chowns_only_mount_root_then_drops_privileges(
     monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("PORT", "10000")
     monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(Path, "stat", lambda self: type("Info", (), {
+        "st_uid": 10001, "st_mode": stat.S_IFDIR | stat.S_IRWXU
+    })())
     monkeypatch.setattr(os, "chown", lambda path, uid, gid: calls.append(("chown", uid, gid)))
     monkeypatch.setattr(os, "chmod", lambda path, mode: calls.append(("chmod", mode)))
     monkeypatch.setattr(os, "setgid", lambda gid: calls.append(("setgid", gid)))
