@@ -87,24 +87,37 @@ def authority(monkeypatch, tmp_path):
         audit_checkpoint_integrity.SANDBOX_AUTHORITY,
         "sandbox-contract-test-store",
     )
+    candidate_key = "audit-checkpoints/sandbox/latest.json"
+    candidate_version_id = "synthetic-candidate-version-1"
     floor_fields = {
         "authority", "store_id", "sequence", "head_hash",
         "legacy_entries", "created_at", "checkpoint_id",
     }
     floor = {key: envelope[key] for key in floor_fields}
+    floor.update({
+        "candidate_version_id": candidate_version_id,
+        "candidate_checkpoint_id": envelope["checkpoint_id"],
+        "candidate_sequence": envelope["sequence"],
+        "candidate_head_hash": envelope["head_hash"],
+        "candidate_created_at": envelope["created_at"],
+    })
 
     class FakeS3:
         def __init__(self):
             self.objects = {
-                "audit-checkpoints/sandbox/latest.json": json.dumps(envelope).encode("utf-8"),
+                candidate_key: json.dumps(envelope).encode("utf-8"),
                 "audit-checkpoints/sandbox/trusted-floor.json": json.dumps(floor).encode("utf-8"),
             }
+            self.version_ids = {candidate_key: candidate_version_id}
             self.unavailable = False
 
-        def get_object(self, *, Bucket, Key):
+        def get_object(self, *, Bucket, Key, VersionId=None):
             if self.unavailable or Bucket != "synthetic-audit-bucket" or Key not in self.objects:
                 raise OSError("synthetic checkpoint store unavailable")
-            return {"Body": io.BytesIO(self.objects[Key])}
+            actual_version = self.version_ids.get(Key)
+            if VersionId is not None and VersionId != actual_version:
+                raise OSError("synthetic S3 object version is unavailable")
+            return {"Body": io.BytesIO(self.objects[Key]), "VersionId": actual_version}
 
     fake_s3 = FakeS3()
     monkeypatch.setitem(
@@ -1609,15 +1622,23 @@ def test_sandbox_approval_rejects_full_audit_rollback_behind_operator_checkpoint
     checkpoint = audit_checkpoint_store.create_sandbox_audit_checkpoint(
         "sandbox-contract-test-store"
     )
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    candidate_key = "audit-checkpoints/sandbox/latest.json"
+    candidate_version_id = "synthetic-candidate-version-2"
     floor_fields = {
         "authority", "store_id", "sequence", "head_hash",
         "legacy_entries", "created_at", "checkpoint_id",
     }
     floor = {key: checkpoint[key] for key in floor_fields}
-    fake_s3 = sandbox_approval._test_checkpoint_store
-    fake_s3.objects["audit-checkpoints/sandbox/latest.json"] = json.dumps(
-        checkpoint
-    ).encode("utf-8")
+    floor.update({
+        "candidate_version_id": candidate_version_id,
+        "candidate_checkpoint_id": checkpoint["checkpoint_id"],
+        "candidate_sequence": checkpoint["sequence"],
+        "candidate_head_hash": checkpoint["head_hash"],
+        "candidate_created_at": checkpoint["created_at"],
+    })
+    fake_s3.objects[candidate_key] = json.dumps(checkpoint).encode("utf-8")
+    fake_s3.version_ids[candidate_key] = candidate_version_id
     fake_s3.objects["audit-checkpoints/sandbox/trusted-floor.json"] = json.dumps(
         floor
     ).encode("utf-8")
