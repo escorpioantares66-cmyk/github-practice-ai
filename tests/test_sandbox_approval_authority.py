@@ -1940,7 +1940,7 @@ def test_decision_reserves_suffix_capacity_before_changing_record(
     created = _create(authority, scope)
     with pytest.raises(
         sandbox_approval.SandboxApprovalError,
-        match="reserved transition event",
+        match="Independent sandbox audit checkpoint verification failed",
     ):
         _approve(created)
     record = sandbox_approval._load(created["approval_id"])
@@ -1957,7 +1957,7 @@ def test_consumption_reserves_suffix_capacity_before_changing_record(
     nonce = _approve(created)["receipt"]["claims"]["nonce"]
     with pytest.raises(
         sandbox_approval.SandboxApprovalError,
-        match="reserved transition event",
+        match="Independent sandbox audit checkpoint verification failed",
     ):
         sandbox_approval.consume(
             created["approval_id"],
