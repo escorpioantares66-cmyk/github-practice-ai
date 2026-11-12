@@ -6,7 +6,6 @@ import os
 import stat
 from pathlib import Path
 
-
 APP_UID = 10001
 APP_GID = 10001
 
