@@ -16,10 +16,11 @@ from typing import Any
 from . import approval, quota_store, write_tools
 from .retention import RETENTION_DAYS, plan_retention
 from .secure_storage import UnsafeStoragePathError, _open_directory_chain
+from .storage_paths import data_path
 
 MAX_SCAN_ENTRIES = 100_000
 MAX_SCAN_DEPTH = 8
-VECTOR_STORE_DEFAULT_PATH = Path(".test_rag")
+VECTOR_STORE_DEFAULT_PATH = data_path("data", "faiss_store")
 VECTOR_STORE_MAX_BYTES = 64 * 1024 * 1024
 _SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
 _DIRECTORY_FLAGS = (
