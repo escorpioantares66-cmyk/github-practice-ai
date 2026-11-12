@@ -104,7 +104,7 @@ jobs:
         shell: bash
         run: |
           {
-            printf '%s\\n' \
+            printf '%s\n' \
               "## Exact-SHA Render Readiness Evidence" \
               "" \
               "- Target source SHA: \`$TARGET_SHA\`" \
