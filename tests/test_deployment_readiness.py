@@ -24,6 +24,7 @@ def test_relative_data_root_is_rejected(monkeypatch):
 
 def test_readiness_fails_when_persistent_mount_is_missing(monkeypatch):
     monkeypatch.delenv("APP_DATA_DIR", raising=False)
+    monkeypatch.delenv("APP_REQUIRE_MOUNTED_DATA_DIR", raising=False)
 
     report = deployment_readiness.readiness_report()
 
@@ -68,3 +69,12 @@ def test_readiness_requires_actual_mount_when_configured(monkeypatch, tmp_path):
 
     assert report["status"] == "not_ready"
     assert report["checks"]["persistent_data_directory"] is False
+
+
+def test_configured_production_data_root_rejects_unmounted_directory(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("APP_REQUIRE_MOUNTED_DATA_DIR", "true")
+    monkeypatch.setattr("os.path.ismount", lambda _path: False)
+
+    with pytest.raises(RuntimeError, match="mounted persistent disk"):
+        data_root()
