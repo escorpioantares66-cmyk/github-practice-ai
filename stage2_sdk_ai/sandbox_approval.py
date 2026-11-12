@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import fcntl
+import functools
 import hashlib
 import json
 import math
@@ -120,6 +121,27 @@ def _locked(path: Path):
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _serialize_checkpoint_policy(operation):
+    """Serialize checkpoint verification and lifecycle transitions on this host.
+
+    The suffix policy is checked against the current audit head. Without one
+    shared lock, concurrent requests for different approval IDs can all pass
+    the same suffix check and collectively append beyond the configured cap.
+    """
+    @functools.wraps(operation)
+    def wrapped(*args, **kwargs):
+        directory = _ensure_store()
+        lock_path = directory / ".checkpoint-policy.lock"
+        fd = open_private_file(lock_path, os.O_RDWR | os.O_CREAT)
+        with os.fdopen(fd, "r+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                return operation(*args, **kwargs)
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    return wrapped
 
 
 def _read_private_text(path: Path) -> str:
@@ -707,6 +729,7 @@ def _receipt_matches_record(
     return receipt.get("claims") == _claims(record)
 
 
+@_serialize_checkpoint_policy
 def create_request(
     scope: dict[str, Any],
     *,
@@ -758,6 +781,7 @@ def create_request(
         "audit_status": "pending",
     }
     with _locked(_record_path(approval_id)):
+        _verify_independent_audit_checkpoint()
         _save(approval_id, record)
         try:
             _append_audit(
@@ -791,6 +815,7 @@ def create_request(
     }
 
 
+@_serialize_checkpoint_policy
 def decide(
     approval_id: str,
     *,
@@ -809,9 +834,9 @@ def decide(
         ) from exc
     if decision not in {"approved", "denied"}:
         raise SandboxApprovalError("Invalid decision")
-    _verify_independent_audit_checkpoint()
     path = _record_path(approval_id)
     with _locked(path):
+        _verify_independent_audit_checkpoint()
         record = _reconcile_pending_audit(
             approval_id, _load(approval_id)
         )
@@ -890,9 +915,10 @@ def decide(
         }
 
 
+@_serialize_checkpoint_policy
 def get_decision(approval_id: str, *, requester: str) -> dict[str, Any]:
-    _verify_independent_audit_checkpoint()
     with _locked(_record_path(approval_id)):
+        _verify_independent_audit_checkpoint()
         record = _reconcile_pending_audit(
             approval_id, _load(approval_id)
         )
@@ -910,9 +936,10 @@ def get_decision(approval_id: str, *, requester: str) -> dict[str, Any]:
     return record["receipt"]
 
 
+@_serialize_checkpoint_policy
 def inspect(approval_id: str, *, requester: str) -> dict[str, Any]:
-    _verify_independent_audit_checkpoint()
     with _locked(_record_path(approval_id)):
+        _verify_independent_audit_checkpoint()
         record = _reconcile_pending_audit(
             approval_id, _load(approval_id)
         )
@@ -935,6 +962,7 @@ def inspect(approval_id: str, *, requester: str) -> dict[str, Any]:
     }
 
 
+@_serialize_checkpoint_policy
 def consume(
     approval_id: str,
     *,
@@ -962,9 +990,9 @@ def consume(
             }
         )
     ).hexdigest()
-    _verify_independent_audit_checkpoint()
     path = _record_path(approval_id)
     with _locked(path):
+        _verify_independent_audit_checkpoint()
         record = _reconcile_pending_audit(
             approval_id, _load(approval_id)
         )

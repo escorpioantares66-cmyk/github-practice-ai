@@ -1,5 +1,6 @@
 """Security and recovery tests for the external sandbox approval authority."""
 import base64
+import errno
 import hashlib
 import io
 import json
@@ -8,6 +9,8 @@ import subprocess
 import sys
 import types
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -1634,3 +1637,171 @@ def test_sandbox_approval_requires_explicit_checkpoint_policy(authority, scope, 
     monkeypatch.delenv("AGENT_SANDBOX_AUDIT_CHECKPOINT_MAX_AGE_SECONDS")
     with pytest.raises(sandbox_approval.SandboxApprovalError, match="Independent sandbox audit"):
         _create(authority, scope)
+
+
+def test_legacy_approval_identity_labels_keep_existing_parser_compatibility(
+    authority, monkeypatch
+):
+    requester_secret = "legacy-requester-secret"
+    approver_secret = "legacy-approver-secret"
+    for identity in ("team reviewer", "-owner", "team/reviewer", "x" * 129):
+        monkeypatch.setenv("AGENT_API_KEYS", f"{identity}={requester_secret}")
+        monkeypatch.setenv("AGENT_APPROVER_KEYS", f"{identity}={approver_secret}")
+        assert auth._configured_approval_requester_keys() == [(identity, requester_secret)]
+        assert auth._configured_approver_keys() == [(identity, approver_secret)]
+        assert auth._configured_sandbox_requester_keys() == []
+        assert auth._configured_sandbox_approver_keys() == []
+
+
+def test_checkpoint_suffix_limit_is_enforced_across_concurrent_creates(
+    authority, scope, monkeypatch
+):
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX", "2")
+    def create_one(index):
+        try:
+            return _create(authority, dict(scope, sandbox_id=f"sbx-{index:016x}"))
+        except sandbox_approval.SandboxApprovalError as exc:
+            return exc
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        outcomes = list(executor.map(create_one, range(12)))
+    created = [item for item in outcomes if isinstance(item, dict)]
+    rejected = [item for item in outcomes if isinstance(item, sandbox_approval.SandboxApprovalError)]
+    assert len(created) == 2
+    assert len(rejected) == 10
+    assert sandbox_approval.verify_audit_log()["events"] == 2
+    assert all(sandbox_approval._load(item["approval_id"])["audit_status"] == "written" for item in created)
+
+
+@pytest.mark.parametrize("operation", ["create", "approve", "deny", "inspect", "decision", "consume"])
+def test_http_lifecycle_routes_fail_closed_without_checkpoint_and_do_not_transition(
+    authority, scope, operation
+):
+    client = TestClient(app)
+    requester_headers = {"X-API-Key": REQUESTER_KEY}
+    approver_headers = {"X-Approver-Key": APPROVER_KEY}
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    if operation == "create":
+        fake_s3.unavailable = True
+        response = client.post("/v1/sandbox/approvals", json={"scope": scope}, headers=requester_headers)
+        assert response.status_code == 503
+        assert list((authority / "sandbox-approvals").glob("*.json")) == []
+        assert sandbox_approval.verify_audit_log()["events"] == 0
+        return
+    created_response = client.post("/v1/sandbox/approvals", json={"scope": scope}, headers=requester_headers)
+    assert created_response.status_code == 200
+    approval_id = created_response.json()["approval_id"]
+    if operation in {"approve", "deny"}:
+        fake_s3.unavailable = True
+        response = client.post(f"/v1/sandbox/approvals/{approval_id}/{operation}", headers=approver_headers)
+        expected_status, expected_events = "pending", 1
+    else:
+        approved = client.post(f"/v1/sandbox/approvals/{approval_id}/approve", headers=approver_headers)
+        assert approved.status_code == 200
+        receipt = approved.json()["receipt"]
+        fake_s3.unavailable = True
+        expected_status, expected_events = "approved", 2
+        if operation == "inspect":
+            response = client.get(f"/v1/sandbox/approvals/{approval_id}", headers=requester_headers)
+        elif operation == "decision":
+            response = client.get(f"/v1/sandbox/approvals/{approval_id}/decision", headers=requester_headers)
+        else:
+            response = client.post(
+                f"/v1/sandbox/approvals/{approval_id}/consume",
+                json={"request_id": str(uuid.uuid4()), "nonce": receipt["claims"]["nonce"], "scope": scope},
+                headers=requester_headers,
+            )
+    assert response.status_code == 503
+    record = sandbox_approval._load(approval_id)
+    assert record["status"] == expected_status
+    assert record["audit_status"] == "written"
+    assert sandbox_approval.verify_audit_log()["events"] == expected_events
+
+
+def test_checkpoint_is_rechecked_after_per_approval_lock_is_acquired(
+    authority, scope, monkeypatch
+):
+    created = _create(authority, scope)
+    original_locked = sandbox_approval._locked
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    @contextmanager
+    def unavailable_after_lock(path):
+        with original_locked(path):
+            fake_s3.unavailable = True
+            yield
+    monkeypatch.setattr(sandbox_approval, "_locked", unavailable_after_lock)
+    with pytest.raises(sandbox_approval.SandboxApprovalError, match="Independent sandbox audit checkpoint verification failed"):
+        _approve(created)
+    record = sandbox_approval._load(created["approval_id"])
+    assert record["status"] == "pending"
+    assert record["audit_status"] == "written"
+    assert sandbox_approval.verify_audit_log()["events"] == 1
+
+
+def _is_audit_file_descriptor(fd, audit_path):
+    try:
+        return os.fstat(fd).st_ino == audit_path.stat().st_ino
+    except OSError:
+        return False
+
+
+def test_audit_fsync_failure_remains_operator_review_state(authority, scope, monkeypatch):
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    real_fsync = os.fsync
+    def fail_audit_fsync(fd):
+        if _is_audit_file_descriptor(fd, audit_path):
+            raise OSError(errno.EIO, "simulated audit fsync failure")
+        return real_fsync(fd)
+    monkeypatch.setattr(sandbox_approval.os, "fsync", fail_audit_fsync)
+    with pytest.raises(OSError, match="simulated audit fsync failure"):
+        _create(authority, scope)
+    monkeypatch.setattr(sandbox_approval.os, "fsync", real_fsync)
+    approval_id = next(path.stem for path in (authority / "sandbox-approvals").glob("*.json"))
+    record = sandbox_approval._load(approval_id)
+    assert record["status"] == "pending"
+    assert record["audit_status"] == "failed"
+    assert sandbox_approval.verify_audit_log()["events"] == 1
+    with pytest.raises(sandbox_approval.SandboxApprovalError, match="Request audit is incomplete"):
+        sandbox_approval.decide(approval_id, approver_key=APPROVER_KEY, decision="approved")
+
+
+def test_audit_enospc_before_append_remains_operator_review_state(authority, scope, monkeypatch):
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    real_write = os.write
+    def fail_audit_write(fd, data):
+        if _is_audit_file_descriptor(fd, audit_path):
+            raise OSError(errno.ENOSPC, "simulated audit disk full")
+        return real_write(fd, data)
+    monkeypatch.setattr(sandbox_approval.os, "write", fail_audit_write)
+    with pytest.raises(OSError, match="simulated audit disk full"):
+        _create(authority, scope)
+    monkeypatch.setattr(sandbox_approval.os, "write", real_write)
+    approval_id = next(path.stem for path in (authority / "sandbox-approvals").glob("*.json"))
+    record = sandbox_approval._load(approval_id)
+    assert record["audit_status"] == "failed"
+    assert sandbox_approval.verify_audit_log()["events"] == 0
+    with pytest.raises(sandbox_approval.SandboxApprovalError, match="Request audit is incomplete"):
+        sandbox_approval.decide(approval_id, approver_key=APPROVER_KEY, decision="approved")
+
+
+def test_torn_audit_append_is_detected_and_never_reconciled(authority, scope, monkeypatch):
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    real_write = os.write
+    interrupted = False
+    def write_half_then_enospc(fd, data):
+        nonlocal interrupted
+        if _is_audit_file_descriptor(fd, audit_path) and not interrupted:
+            interrupted = True
+            real_write(fd, data[: max(1, len(data) // 2)])
+            raise OSError(errno.ENOSPC, "simulated disk full during audit append")
+        return real_write(fd, data)
+    monkeypatch.setattr(sandbox_approval.os, "write", write_half_then_enospc)
+    with pytest.raises(OSError, match="simulated disk full during audit append"):
+        _create(authority, scope)
+    monkeypatch.setattr(sandbox_approval.os, "write", real_write)
+    approval_id = next(path.stem for path in (authority / "sandbox-approvals").glob("*.json"))
+    record = sandbox_approval._load(approval_id)
+    assert record["audit_status"] == "failed"
+    with pytest.raises(sandbox_approval.SandboxApprovalError, match="incomplete final record"):
+        sandbox_approval.verify_audit_log()
+    with pytest.raises(sandbox_approval.SandboxApprovalError):
+        sandbox_approval.inspect(approval_id, requester="automation")

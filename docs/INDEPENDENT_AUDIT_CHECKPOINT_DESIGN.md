@@ -6,7 +6,7 @@
 
 The sandbox approval lifecycle now requires read-only retrieval and verification of an independently retained S3 candidate checkpoint and operator-accepted trusted floor before create, decide, inspect, decision retrieval or consume operations. Missing configuration, unavailable custody, rollback or policy failure pauses the operation. The main approval audit's existing S3 helper remains optional and is not changed by this sandbox integration. No production S3 bucket, IAM policy, operator identity or runtime configuration is provisioned by this code change.
 
-The initial zero-cost candidate is a local checkpoint file controlled by a separate operator identity on a Linux host. It is not a second directory owned by the application account.
+The local operator-owned filesystem checkpoint described in the original proposal is superseded for the PR #54 sandbox integration by the S3 candidate/trusted-floor design. The Linux two-UID test remains evidence for that filesystem proof only; it is not evidence of S3 IAM or production custody.
 
 ## Current implementation findings
 
@@ -29,36 +29,20 @@ The initial zero-cost candidate is a local checkpoint file controlled by a separ
 
 The existing private-storage helpers require files and directories to be owned by the effective application UID and use owner-only permissions. They are appropriate for application-owned private data, but cannot directly read a checkpoint owned by a separate operator UID.
 
-The current Termux environment uses one Android application identity for both the application process and operator activity. A different local path under that identity does not provide a separate authorization boundary.
+The current implementation's trust boundary is an independently administered S3 bucket and operator identity. A separate object key or directory under the same application credentials is not an independent boundary.
 
-## Candidate threat model
+## Current S3 trust boundary
 
-The local candidate can protect against an attacker who has compromised the application process or application UID but has not compromised the operator UID or host root.
+The PR #54 sandbox integration reads two distinct S3 objects before every lifecycle operation:
 
-It does **not** protect against:
-- host root or kernel compromise;
-- compromise of the operator account or its credentials;
-- physical access that permits booting or modifying the host outside the operating system controls;
-- a malicious operator advancing the checkpoint after approving a rewritten history.
+- **Candidate checkpoint:** the latest operator-published statement of the sandbox audit head.
+- **Trusted floor:** the last checkpoint explicitly accepted by the operator and retained separately from application-writable state.
 
-The operator identity, its login path, and its ability to publish checkpoint updates are part of the trusted computing base. If the application and operator share a UID, the candidate is rejected as non-independent.
+The application role is restricted by design to reading the two exact object keys. Publication and floor advancement use separate operator credentials. The code does not provision the bucket, IAM policy, operator identity, version retention, backup process, or runtime policy values.
 
-## Candidate filesystem layout and permissions
+This boundary assumes the AWS account, operator identity, and host/runtime remain trusted. It does not protect against compromise of an administrator able to replace or delete both trust anchors, compromise of the operator credentials, host root/kernel compromise, or loss of every independent trusted-floor copy. S3 versioning alone is not immutable retention against an administrator with version-delete privileges.
 
-On a Linux host only, the proposed layout is:
-
-- a dedicated operator-owned checkpoint directory;
-- directory owner: operator UID; directory group: a read-only group containing the application UID; mode `0750`;
-- checkpoint file owner: operator UID; group: the same read-only application group; mode `0640`;
-- no group or other write permission on either directory or file;
-- application process receives read access only to the exact checkpoint file;
-- application process is not a member of any group with write access to the checkpoint path;
-- operator publishes updates through a same-directory temporary file, fsync, atomic rename, and directory fsync;
-- the application never creates, repairs, rotates, replaces, or deletes checkpoint files.
-
-The path must be provisioned by the operator before the application starts. Application startup must not create missing checkpoint directories or files. Symlinks, non-regular files, unexpected ownership, unexpected modes, extra hard links, and writable ancestors must be rejected.
-
-This permission model is only a candidate until a real two-UID integration test proves that the application UID can read but cannot create, replace, rename, chmod, or delete the checkpoint.
+The original local operator-owned filesystem proposal is retained only as historical design context; it is not the implemented PR #54 checkpoint transport. The Linux two-UID proof does not establish the S3/IAM boundary.
 
 ## Checkpoint envelope
 
@@ -108,9 +92,11 @@ No freshness duration or publication cadence is selected in this document. That 
 
 Crash tests must cover interruption before temporary-file fsync, after file fsync but before rename, after rename but before directory fsync, and after publication but before operator confirmation. Recovery must distinguish an old valid checkpoint from a newly published but durability-uncertain checkpoint. It must never infer success from a partially completed publication.
 
-## Proof gates before implementation can be considered independent
+## Historical filesystem-candidate proof gates (superseded)
 
-### Filesystem and identity proof
+The following UID and filesystem checks apply only to the earlier local-file candidate. They must not be presented as proof of the current S3 trust boundary.
+
+### Historical filesystem and identity proof
 
 - Run the application under a dedicated non-privileged UID.
 - Run checkpoint publication under a different operator UID.
@@ -120,7 +106,7 @@ Crash tests must cover interruption before temporary-file fsync, after file fsyn
 - Reject same-UID configurations and writable parent directories.
 - Repeat on the actual intended host filesystem; unit tests that run both roles as the same UID are not proof.
 
-### Integrity and policy proof
+### Integrity and policy proof for the current S3 integration
 
 For both audit authorities, test:
 - missing, malformed, duplicate-key, oversized, wrong-authority, wrong-store, and tampered checkpoints;

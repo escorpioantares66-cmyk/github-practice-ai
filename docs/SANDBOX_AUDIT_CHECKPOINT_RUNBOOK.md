@@ -147,6 +147,51 @@ The API role must never receive the operator publishing credentials. An
 application-generated checkpoint is only a candidate until the operator
 reviews and publishes it.
 
+
+## Concurrency, checkpoint freshness and residual windows
+
+All sandbox approval lifecycle operations on one host are serialized by a
+private application-owned policy lock. The lock covers S3 candidate/floor
+verification, the per-approval transition and its audit append. This prevents
+concurrent requests for different approval IDs from all passing the same
+unanchored-suffix check and collectively exceeding the configured suffix cap.
+The per-approval lock is then acquired, and candidate/floor verification is
+repeated while that lock is held, immediately before the record is read or
+changed.
+
+This is a single-host guarantee. Do not share the file-backed store across
+hosts or NFS. The policy lock does not serialize an independent operator
+changing S3 objects after the application has retrieved them. S3 object-version
+IDs are not pinned by this integration, and code does not make the trusted
+floor immutable. Operator publication, version retention and IAM custody
+remain part of the trusted computing base; independently verify those
+controls.
+
+The suffix is a deliberate risk budget, not a claim that unanchored events are
+tamper-proof. A configured maximum of N permits up to N audit events after the
+candidate checkpoint to remain outside the anchored prefix. Select N and the
+checkpoint age/cadence together based on the maximum rollback/replay window
+the owner will accept. For the strongest approval assurance, use a zero-event
+suffix and publish/accept a checkpoint after each audit append before another
+approval-sensitive operation; this can pause the service between operator
+publications. A larger suffix improves availability but increases unanchored
+history exposure. Do not choose a production value implicitly in code or
+infer that a low age limit removes the suffix risk.
+
+## Interrupted record writes before audit append
+
+A process can stop after the approval record is saved with
+`audit_status="pending"` but before the corresponding audit event is appended.
+That state is not equivalent to a successful transition. On restart, automatic
+reconciliation is allowed only if the audit contains the exact complete
+lifecycle and matches the record's scope, actor, receipt, timestamps and
+consumption details. If the event is missing, partial, conflicting or corrupt,
+the operation remains unavailable for operator review; do not reset the
+record to pending, delete the event, truncate the log, or generate a replacement
+checkpoint to make it pass. Preserve the record and audit bytes, compare them
+with the last trusted floor, and record an operator-controlled recovery
+decision outside application-writable storage.
+
 ## Failure and recovery
 
 Approval operations pause if either object is missing or unreadable, if S3 is
