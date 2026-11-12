@@ -26,7 +26,8 @@ preparation, not evidence that the current branch enforces them.
 - Instance plan: Starter (paid; owner cost approval required)
 - Instance count: exactly one
 - Auto deploy: off; deployment is manual after CI and human release approval
-- Health check: `/healthz` (persistent-disk mount gate; no external S3 probe)
+- Render health check: `/healthz` (local liveness and persistent-disk gate; no external S3 probe)
+- Security readiness: `/readyz` (operator/release gate; live candidate and trusted-floor verification)
 - Disk: one provisional 1 GB persistent disk mounted at `/var/data`
 - Preview environments: disabled by omission/default; no preview service is
   intended for the approval authority
@@ -62,7 +63,9 @@ All application-owned durable files must be under `APP_DATA_DIR`:
 The application must not silently fall back to its container filesystem when
 `APP_DATA_DIR` is set incorrectly. The Blueprint sets
 `APP_REQUIRE_MOUNTED_DATA_DIR=true`; `/readyz` verifies the configured path
-exists, is writable and is an actual mount point. `/readyz` also verifies the sandbox approval directory and quota database are beneath that root. The Render health check remains `/healthz` and verifies the local persistent data mount only; it does not probe S3. The application refuses to start/use configured persistent paths if the required mount is missing. `/readyz` separately reports non-secret configuration and dependency readiness.
+exists, is writable and is an actual mount point. `/readyz` also verifies the sandbox approval directory and quota database are beneath that root. The Render health check remains `/healthz` and verifies the local persistent data mount only; it does not probe S3. This is an intentional liveness design: Render periodically checks the endpoint and can remove an instance from routing or restart it after repeated failures. Making that probe depend on S3 would turn a transient audit-custody outage into an instance restart/deploy failure, without improving the approval security boundary. The application refuses to use configured persistent paths if the required mount is missing. `/readyz` is the separate security-readiness endpoint for operator monitoring and release decisions; it reports non-secret configuration and performs live candidate/trusted-floor verification.
+
+This split is safe only because the sandbox approval lifecycle independently runs the same fail-closed checkpoint verifier before each state-changing or evidence-retrieval operation. A green `/healthz` is not evidence that sandbox approvals are available or safe to process. During an S3/checkpoint outage, the process remains live for diagnosis, `/readyz` returns 503, and sandbox approval operations pause. Monitoring must alert on `/readyz` failures; do not configure Render's liveness probe to treat an external checkpoint outage as process death.
 
 The persistent disk is not a backup system. Keep independently retained,
 tested backups and checkpoint versions. Render disk snapshots are whole-disk
@@ -181,11 +184,11 @@ deployment, merge PR #54, modify `main`, or change production permissions.
 
 ## Adversarial review remediation plan and acceptance tests
 
-This section records the fresh review findings F-DEP-01 through F-DEP-06.
-F-DEP-01 has a code change prepared; F-DEP-06 and F-DEP-02 now have code
-changes and focused tests prepared on this branch. None of these changes has
-been executed in CI or independently runtime-verified. F-DEP-03 through
-F-DEP-05 remain open to the extent described below.
+This section records the fresh review findings F-DEP-01 through F-DEP-07.
+F-DEP-01, F-DEP-06, F-DEP-02 and F-DEP-07 have code/documentation changes
+and focused tests prepared on this branch. Test and runtime evidence must be
+read from the exact-head evidence record; F-DEP-03 through F-DEP-05 remain
+open to the extent described below.
 
 ### F-DEP-06 — Medium: fail closed when the required data root is absent
 
@@ -358,10 +361,56 @@ Acceptance tests:
 6. Resolve F-DEP-04 credential delivery, IAM least privilege and operator
    separation with owner approval.
 7. Complete F-DEP-05 mounted-volume persistence and recovery tests.
-8. Run the complete repository test suite, Ruff, Docker build and official
+8. Configure and test operator alerting for `/readyz` failures; retain evidence
+   that sandbox lifecycle operations fail closed independently of liveness.
+9. Run the complete repository test suite, Ruff, Docker build and official
    Render Blueprint validation on the exact final branch head.
-9. Obtain independent human security review and explicit owner release
+10. Obtain independent human security review and explicit owner release
    authorization before any service or cloud resource is created.
 
 No item in this plan authorizes a merge, PR creation, Render/AWS resource
 creation, credential entry, permission change or deployment.
+
+
+### F-DEP-07 — Medium: make Render liveness and security readiness semantics explicit
+
+**Disposition:** Resolved by an explicit two-endpoint design; runtime monitoring
+and alert delivery remain operational release gates.
+
+Render's configured health check intentionally remains `/healthz`. Render
+uses this endpoint for periodic instance health checks and can stop routing
+traffic to an instance or restart it after repeated failures. The endpoint
+therefore checks only local process/persistent-storage viability and does not
+call S3. A transient S3 checkpoint outage must not cause a liveness probe to
+restart an otherwise diagnosable instance or repeatedly fail deployment.
+
+`/readyz` is the separate security-readiness and release gate. It performs
+the live candidate/trusted-floor checkpoint policy verification and returns
+503 when the checkpoint, required configuration, or persistent-storage
+checks fail. Operators must monitor this endpoint and alert on non-2xx
+responses. A successful `/healthz` response must never be interpreted as
+sandbox approval readiness.
+
+This separation is safe only because the sandbox approval lifecycle itself
+runs the fail-closed checkpoint verifier before each relevant operation.
+Readiness is not a substitute for operation-time authorization or checkpoint
+verification. The current branch's lack of PR #54 enforcement still prevents
+production readiness; PR #54 must be independently reviewed and integrated
+before this branch can be reconciled and revalidated.
+
+Acceptance tests:
+
+1. The actual FastAPI `GET /healthz` route returns 200 when local persistent
+   storage is healthy, even when the checkpoint verifier would raise; the
+   verifier is not called.
+2. The actual FastAPI `GET /readyz` route returns 503 when readiness reports
+   a missing or failed checkpoint verifier.
+3. The actual FastAPI `GET /readyz` route returns 200 only when the complete
+   readiness report is ready.
+4. `render.yaml` keeps `healthCheckPath: /healthz` and documents that it is
+   a local liveness probe, not a security-readiness signal.
+5. Operator monitoring alerts on `/readyz` failures; no production alert
+   integration is claimed until configured and tested.
+6. Sandbox lifecycle routes continue to enforce checkpoint verification
+   independently, including during a period when `/healthz` is 200 and
+   `/readyz` is 503.
