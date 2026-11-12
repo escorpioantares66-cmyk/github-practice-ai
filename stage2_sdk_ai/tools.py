@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .secure_storage import ensure_private_directory, open_private_file
+from .storage_paths import data_path
 from .vector_store import MAX_QUERY_CHARS, RealVectorStore
 
 _store: RealVectorStore | None = None
-_notes_dir = Path("notes")
+_notes_dir = data_path("notes")
 MAX_SEARCH_TOP_K = 50
 
 
@@ -41,7 +42,7 @@ def _validate_search(query: str, top_k: int) -> None:
 def get_store() -> RealVectorStore:
     global _store
     if _store is None:
-        store_path = Path("data/faiss_store")
+        store_path = data_path("data", "faiss_store")
         candidate = RealVectorStore(persist_path=str(store_path))
         loaded = candidate.load()
         store_file = store_path / "store.json"
