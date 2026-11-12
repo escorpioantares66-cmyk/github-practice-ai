@@ -8,6 +8,9 @@ services:
     region: frankfurt # Provisional; region is immutable after service creation.
     autoDeployTrigger: "off"
     numInstances: 1
+    # Liveness only: local persistent storage, deliberately independent of S3.
+    # Sandbox approval routes enforce the checkpoint on every operation;
+    # /readyz is the separate operator/release security-readiness gate.
     healthCheckPath: /healthz
     dockerfilePath: ./Dockerfile
     disk:
