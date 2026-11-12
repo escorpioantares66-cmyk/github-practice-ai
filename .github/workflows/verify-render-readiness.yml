@@ -56,7 +56,13 @@ jobs:
           curl -fsSL https://github.com/render-oss/cli/releases/download/v2.28.0/cli_2.28.0_linux_amd64.zip -o "$RUNNER_TEMP/render-cli.zip"
           echo "00d1ca6f3c31b1f4bc7316837b8ee24acbeb11cf372b7593c7d2c3106a1987b4  $RUNNER_TEMP/render-cli.zip" | sha256sum --check
           unzip -q "$RUNNER_TEMP/render-cli.zip" -d "$RUNNER_TEMP/render-cli"
-          sudo install "$RUNNER_TEMP/render-cli/cli_2.28.0" /usr/local/bin/render
+          cli_binary="$(find "$RUNNER_TEMP/render-cli" -type f -name render -print -quit)"
+          if [[ -z "$cli_binary" ]]; then
+            cli_binary="$(find "$RUNNER_TEMP/render-cli" -type f -name 'cli*' -print -quit)"
+          fi
+          test -n "$cli_binary"
+          chmod +x "$cli_binary"
+          sudo install "$cli_binary" /usr/local/bin/render
           render --version
 
       - name: Validate Render Blueprint without syncing infrastructure
