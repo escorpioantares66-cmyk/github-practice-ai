@@ -100,10 +100,19 @@ def verify_audit_log_from_s3(s3_client: Any | None = None) -> dict[str, Any]:
     checkpoint = load_s3_checkpoint(s3_client)
     return approval.verify_audit_log(checkpoint)
 
-def _read_s3_checkpoint_payload(s3_client: Any, bucket: str, key: str) -> bytes:
-    """Read one bounded checkpoint object without granting application write access."""
+def _read_s3_checkpoint_payload(
+    s3_client: Any,
+    bucket: str,
+    key: str,
+    *,
+    version_id: str | None = None,
+) -> tuple[bytes, str | None]:
+    """Read one bounded checkpoint object, optionally at an exact S3 version."""
     try:
-        response = s3_client.get_object(Bucket=bucket, Key=key)
+        request = {"Bucket": bucket, "Key": key}
+        if version_id is not None:
+            request["VersionId"] = version_id
+        response = s3_client.get_object(**request)
         body = response["Body"]
         try:
             raw = body.read(MAX_CHECKPOINT_BYTES + 1)
@@ -117,7 +126,7 @@ def _read_s3_checkpoint_payload(s3_client: Any, bucket: str, key: str) -> bytes:
         ) from exc
     if not isinstance(raw, bytes) or len(raw) > MAX_CHECKPOINT_BYTES:
         raise AuditCheckpointStoreError("Independent audit checkpoint is invalid or oversized")
-    return raw
+    return raw, response.get("VersionId")
 
 
 def verify_sandbox_audit_log_from_s3(
@@ -185,13 +194,8 @@ def verify_sandbox_audit_log_from_s3(
         s3_client = boto3.client("s3", region_name=region)
 
     try:
-        candidate_raw = _read_s3_checkpoint_payload(
-            s3_client, bucket_name, candidate_key
-        )
-        floor_raw = _read_s3_checkpoint_payload(s3_client, bucket_name, floor_key)
-        candidate = integrity.parse_checkpoint(
-            candidate_raw, authority=integrity.SANDBOX_AUTHORITY,
-            store_id=trusted_store_id,
+        floor_raw, _floor_version_id = _read_s3_checkpoint_payload(
+            s3_client, bucket_name, floor_key
         )
         try:
             floor_value = json.loads(
@@ -206,6 +210,23 @@ def verify_sandbox_audit_log_from_s3(
             authority=integrity.SANDBOX_AUTHORITY,
             store_id=trusted_store_id,
         )
+        candidate_version_id = floor.get("candidate_version_id")
+        if not isinstance(candidate_version_id, str) or not candidate_version_id:
+            raise AuditCheckpointStoreError(
+                "Trusted floor does not pin an S3 candidate object version"
+            )
+        candidate_raw, actual_version_id = _read_s3_checkpoint_payload(
+            s3_client, bucket_name, candidate_key,
+            version_id=candidate_version_id,
+        )
+        if actual_version_id != candidate_version_id:
+            raise AuditCheckpointStoreError(
+                "S3 returned a candidate version different from the trusted pin"
+            )
+        candidate = integrity.parse_checkpoint(
+            candidate_raw, authority=integrity.SANDBOX_AUTHORITY,
+            store_id=trusted_store_id,
+        )
         return integrity.verify_checkpoint_with_policy(
             candidate,
             authority=integrity.SANDBOX_AUTHORITY,
@@ -215,6 +236,7 @@ def verify_sandbox_audit_log_from_s3(
             max_age_seconds=max_age_seconds,
             max_unanchored_suffix=max_unanchored_suffix,
             reserve_unanchored_events=reserve_unanchored_events,
+            candidate_version_id=actual_version_id,
         )
     except AuditCheckpointStoreError:
         raise
