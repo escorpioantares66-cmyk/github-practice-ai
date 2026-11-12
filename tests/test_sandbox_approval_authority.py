@@ -1665,14 +1665,23 @@ def test_checkpoint_suffix_limit_is_enforced_across_concurrent_creates(
     with ThreadPoolExecutor(max_workers=12) as executor:
         outcomes = list(executor.map(create_one, range(12)))
     created = [item for item in outcomes if isinstance(item, dict)]
-    rejected = [item for item in outcomes if isinstance(item, sandbox_approval.SandboxApprovalError)]
+    rejected = [
+        item
+        for item in outcomes
+        if isinstance(item, sandbox_approval.SandboxApprovalError)
+    ]
     assert len(created) == 2
     assert len(rejected) == 10
     assert sandbox_approval.verify_audit_log()["events"] == 2
-    assert all(sandbox_approval._load(item["approval_id"])["audit_status"] == "written" for item in created)
+    assert all(
+        sandbox_approval._load(item["approval_id"])["audit_status"] == "written"
+        for item in created
+    )
 
 
-@pytest.mark.parametrize("operation", ["create", "approve", "deny", "inspect", "decision", "consume"])
+@pytest.mark.parametrize(
+    "operation", ["create", "approve", "deny", "inspect", "decision", "consume"]
+)
 def test_http_lifecycle_routes_fail_closed_without_checkpoint_and_do_not_transition(
     authority, scope, operation
 ):
@@ -1682,32 +1691,56 @@ def test_http_lifecycle_routes_fail_closed_without_checkpoint_and_do_not_transit
     fake_s3 = sandbox_approval._test_checkpoint_store
     if operation == "create":
         fake_s3.unavailable = True
-        response = client.post("/v1/sandbox/approvals", json={"scope": scope}, headers=requester_headers)
+        response = client.post(
+            "/v1/sandbox/approvals",
+            json={"scope": scope},
+            headers=requester_headers,
+        )
         assert response.status_code == 503
         assert list((authority / "sandbox-approvals").glob("*.json")) == []
         assert sandbox_approval.verify_audit_log()["events"] == 0
         return
-    created_response = client.post("/v1/sandbox/approvals", json={"scope": scope}, headers=requester_headers)
+    created_response = client.post(
+        "/v1/sandbox/approvals",
+        json={"scope": scope},
+        headers=requester_headers,
+    )
     assert created_response.status_code == 200
     approval_id = created_response.json()["approval_id"]
     if operation in {"approve", "deny"}:
         fake_s3.unavailable = True
-        response = client.post(f"/v1/sandbox/approvals/{approval_id}/{operation}", headers=approver_headers)
+        response = client.post(
+            f"/v1/sandbox/approvals/{approval_id}/{operation}",
+            headers=approver_headers,
+        )
         expected_status, expected_events = "pending", 1
     else:
-        approved = client.post(f"/v1/sandbox/approvals/{approval_id}/approve", headers=approver_headers)
+        approved = client.post(
+            f"/v1/sandbox/approvals/{approval_id}/approve",
+            headers=approver_headers,
+        )
         assert approved.status_code == 200
         receipt = approved.json()["receipt"]
         fake_s3.unavailable = True
         expected_status, expected_events = "approved", 2
         if operation == "inspect":
-            response = client.get(f"/v1/sandbox/approvals/{approval_id}", headers=requester_headers)
+            response = client.get(
+                f"/v1/sandbox/approvals/{approval_id}",
+                headers=requester_headers,
+            )
         elif operation == "decision":
-            response = client.get(f"/v1/sandbox/approvals/{approval_id}/decision", headers=requester_headers)
+            response = client.get(
+                f"/v1/sandbox/approvals/{approval_id}/decision",
+                headers=requester_headers,
+            )
         else:
             response = client.post(
                 f"/v1/sandbox/approvals/{approval_id}/consume",
-                json={"request_id": str(uuid.uuid4()), "nonce": receipt["claims"]["nonce"], "scope": scope},
+                json={
+                    "request_id": str(uuid.uuid4()),
+                    "nonce": receipt["claims"]["nonce"],
+                    "scope": scope,
+                },
                 headers=requester_headers,
             )
     assert response.status_code == 503
@@ -1729,7 +1762,10 @@ def test_checkpoint_is_rechecked_after_per_approval_lock_is_acquired(
             fake_s3.unavailable = True
             yield
     monkeypatch.setattr(sandbox_approval, "_locked", unavailable_after_lock)
-    with pytest.raises(sandbox_approval.SandboxApprovalError, match="Independent sandbox audit checkpoint verification failed"):
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="Independent sandbox audit checkpoint verification failed",
+    ):
         _approve(created)
     record = sandbox_approval._load(created["approval_id"])
     assert record["status"] == "pending"
@@ -1805,3 +1841,85 @@ def test_torn_audit_append_is_detected_and_never_reconciled(authority, scope, mo
         sandbox_approval.verify_audit_log()
     with pytest.raises(sandbox_approval.SandboxApprovalError):
         sandbox_approval.inspect(approval_id, requester="automation")
+
+
+@pytest.mark.parametrize("transition", ["request", "decision", "consumption"])
+def test_process_exit_before_audit_append_never_reconciles_unproven_state(
+    authority, scope, transition
+):
+    created = None if transition == "request" else _create(authority, scope)
+    nonce = None
+    request_id = None
+    if transition == "consumption":
+        nonce = _approve(created)["receipt"]["claims"]["nonce"]
+        request_id = str(uuid.uuid4())
+
+    script = r"""
+import json
+import os
+import sys
+from stage2_sdk_ai import sandbox_approval
+
+sandbox_approval._verify_independent_audit_checkpoint = lambda: {}
+sandbox_approval._append_audit = lambda *_args, **_kwargs: os._exit(87)
+approval_id, transition = sys.argv[1], sys.argv[2]
+scope = json.loads(os.environ["TEST_APPROVAL_SCOPE"])
+if transition == "request":
+    sandbox_approval.create_request(
+        scope,
+        requester="automation",
+        issuer=os.environ["SANDBOX_APPROVAL_ISSUER"],
+        audience=os.environ["SANDBOX_APPROVAL_AUDIENCE"],
+    )
+elif transition == "decision":
+    sandbox_approval.decide(
+        approval_id,
+        approver_key=os.environ["TEST_APPROVER_KEY"],
+        decision="approved",
+    )
+else:
+    sandbox_approval.consume(
+        approval_id,
+        requester="automation",
+        request_id=os.environ["TEST_REQUEST_ID"],
+        nonce=os.environ["TEST_APPROVAL_NONCE"],
+        scope=scope,
+    )
+"""
+    env = os.environ.copy()
+    env["TEST_APPROVER_KEY"] = APPROVER_KEY
+    env["TEST_REQUEST_ID"] = request_id or ""
+    env["TEST_APPROVAL_NONCE"] = nonce or ""
+    env["TEST_APPROVAL_SCOPE"] = json.dumps(scope)
+    approval_id = created["approval_id"] if created else "created-in-child"
+    result = subprocess.run(
+        [sys.executable, "-c", script, approval_id, transition],
+        cwd=os.getcwd(),
+        env=env,
+        check=False,
+        timeout=20,
+    )
+    assert result.returncode == 87
+
+    if transition == "request":
+        approval_files = list(
+            (authority / "sandbox-approvals").glob("*.json")
+        )
+        assert len(approval_files) == 1
+        approval_id = approval_files[0].stem
+        expected_status = "pending"
+        expected_events = 0
+    elif transition == "decision":
+        expected_status = "approved"
+        expected_events = 1
+    else:
+        expected_status = "consumed"
+        expected_events = 2
+
+    record = sandbox_approval._load(approval_id)
+    assert record["status"] == expected_status
+    assert record["audit_status"] == "pending"
+    reconciled = sandbox_approval._reconcile_pending_audit(approval_id, record)
+    assert reconciled["status"] == expected_status
+    assert reconciled["audit_status"] == "pending"
+    assert sandbox_approval.verify_audit_log()["events"] == expected_events

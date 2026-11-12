@@ -1,4 +1,4 @@
-# Independent audit checkpoint: local candidate design
+# Independent audit checkpoint design: S3 sandbox enforcement
 
 ## Decision status
 
@@ -27,9 +27,7 @@ The local operator-owned filesystem checkpoint described in the original proposa
 
 ### Storage boundary
 
-The existing private-storage helpers require files and directories to be owned by the effective application UID and use owner-only permissions. They are appropriate for application-owned private data, but cannot directly read a checkpoint owned by a separate operator UID.
-
-The current implementation's trust boundary is an independently administered S3 bucket and operator identity. A separate object key or directory under the same application credentials is not an independent boundary.
+The existing private-storage helpers protect the local file-backed audit store. They do not establish the independent checkpoint boundary. For PR #54, that boundary is a separately administered S3 bucket and operator identity; a separate object key or directory under the same application credentials is not independent custody.
 
 ## Current S3 trust boundary
 
@@ -74,23 +72,23 @@ Therefore:
 3. The operational policy must define a maximum unanchored suffix and publication cadence before any enforcement decision.
 4. If exact current-head anchoring is required for every approval-sensitive operation, the checkpoint must match the current head. A manual operator publication process cannot provide this continuously without blocking operations between publications.
 5. A stale or lower-sequence checkpoint must not be replaced automatically. Checkpoint rollback or unexplained sequence regression requires operator investigation.
-6. A local file alone cannot prove its own monotonic history against an operator/root attacker who can restore an older file. The trust claim is limited to the application-UID threat model.
+6. An S3 object read does not itself prove monotonic publication if an administrator can restore an older object version or replace both candidate and floor. The trust claim depends on separate operator custody, IAM restrictions, version retention and recovery evidence.
 
 No freshness duration or publication cadence is selected in this document. That requires an explicit operational decision based on the expected approval volume and acceptable unanchored suffix.
 
-## Publication and recovery protocol
+## S3 publication and recovery protocol
 
-1. The operator reads and verifies the complete relevant audit history using the authority-specific verifier.
+1. The operator reads and verifies the complete sandbox audit history using the authority-specific verifier.
 2. The operator reviews the current head and any unresolved integrity/recovery findings.
-3. The operator exports a checkpoint for that exact authority, store, sequence, and head hash.
-4. The operator validates the exported envelope and publishes it atomically to the operator-owned read-only path.
-5. The operator confirms ownership, group, modes, file identity, and the published content after replacement.
-6. The application reads the checkpoint without write capability and compares it with the correct audit history.
-7. If the checkpoint is missing, unreadable, malformed, stale under the eventual policy, rolled back, or inconsistent, the system reports an integrity failure. It does not generate a replacement.
-8. Recovery preserves all audit bytes and checkpoint artifacts. An operator investigates from the last known trusted checkpoint, verifies archived segments and active history, and records the recovery decision before publishing any new checkpoint.
-9. If the trusted checkpoint is lost and no independently retained copy exists, the history cannot be silently re-established as trusted by exporting the current head. That would bless potentially rewritten history.
+3. The application identity emits an in-memory candidate for the exact authority, store, sequence and head hash.
+4. The operator independently reviews the candidate and publishes the candidate object using the separate operator AWS identity.
+5. The operator validates the S3 object contents, version ID, bucket policy and access boundary. The trusted floor is advanced only after explicit operator acceptance.
+6. The application role retrieves the candidate and floor by their configured exact object keys and compares both with the local audit history. The application cannot publish or advance either object.
+7. If either object is missing, unreadable, malformed, stale, rolled back or inconsistent, the system reports an integrity failure. It does not generate a replacement.
+8. Recovery preserves all audit bytes, S3 object versions and external investigation evidence. An operator investigates from the last known trusted floor, verifies archived segments and active history, and records the recovery decision before publishing any new candidate/floor pair.
+9. If every trusted-floor copy is lost, the history cannot be silently re-established as trusted by exporting the current head. That would bless potentially rewritten history.
 
-Crash tests must cover interruption before temporary-file fsync, after file fsync but before rename, after rename but before directory fsync, and after publication but before operator confirmation. Recovery must distinguish an old valid checkpoint from a newly published but durability-uncertain checkpoint. It must never infer success from a partially completed publication.
+The current integration does not pin S3 object-version IDs during reads and does not enforce immutable floor storage in code. Bucket versioning, retention, IAM and separate operator custody must therefore be independently verified. This is an explicit operational gate, not a code-level PASS.
 
 ## Historical filesystem-candidate proof gates (superseded)
 
@@ -115,10 +113,10 @@ For both audit authorities, test:
 - altered history before the checkpoint;
 - rewritten unanchored suffix after the checkpoint, demonstrating the known detection gap;
 - stale checkpoint, sequence regression, and restoration of an older checkpoint;
-- checkpoint path symlink, hard link, ownership, group, and mode violations;
+- S3 candidate/floor object missing, malformed, wrong-version, unreadable and cross-store substitution;
 - independent checkpoint substitution between main and sandbox logs.
 
-### Recovery proof
+### Historical filesystem publication recovery proof (superseded)
 
 - Simulate each publication interruption point.
 - Preserve the prior checkpoint when publication fails.
