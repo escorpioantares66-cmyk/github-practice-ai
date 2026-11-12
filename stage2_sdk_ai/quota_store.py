@@ -12,7 +12,9 @@ from pathlib import Path
 
 from .secure_storage import ensure_private_directory
 
-DEFAULT_DB_PATH = Path(".agent_state/quotas.sqlite3")
+from .storage_paths import data_path
+
+DEFAULT_DB_PATH = data_path(".agent_state", "quotas.sqlite3")
 
 
 class QuotaStoreError(RuntimeError):
