@@ -53,6 +53,40 @@ def test_relative_data_root_is_rejected(monkeypatch):
         data_root()
 
 
+def test_required_mount_rejects_missing_data_root(monkeypatch):
+    monkeypatch.delenv("APP_DATA_DIR", raising=False)
+    monkeypatch.setenv("APP_REQUIRE_MOUNTED_DATA_DIR", "true")
+
+    with pytest.raises(RuntimeError, match="APP_DATA_DIR is required"):
+        data_root()
+
+
+def test_data_path_rejects_parent_traversal(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+
+    with pytest.raises(ValueError, match="beneath APP_DATA_DIR"):
+        data_path("..", "outside.txt")
+
+
+def test_data_path_rejects_absolute_component(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+
+    with pytest.raises(ValueError, match="beneath APP_DATA_DIR"):
+        data_path("/tmp/outside.txt")
+
+
+def test_data_path_rejects_existing_symlink_escape(monkeypatch, tmp_path):
+    data_dir = tmp_path / "data"
+    outside_dir = tmp_path / "outside"
+    data_dir.mkdir()
+    outside_dir.mkdir()
+    (data_dir / "escape").symlink_to(outside_dir, target_is_directory=True)
+    monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
+
+    with pytest.raises(ValueError, match="beneath APP_DATA_DIR"):
+        data_path("escape", "secret.txt")
+
+
 def test_readiness_fails_when_persistent_mount_is_missing(monkeypatch):
     monkeypatch.delenv("APP_DATA_DIR", raising=False)
     monkeypatch.delenv("APP_REQUIRE_MOUNTED_DATA_DIR", raising=False)
