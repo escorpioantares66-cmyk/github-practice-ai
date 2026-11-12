@@ -3,8 +3,8 @@ from __future__ import annotations
 import importlib.util
 import os
 
-from fastapi.testclient import TestClient
 import pytest
+from fastapi.testclient import TestClient
 
 from stage2_sdk_ai import api, deployment_readiness, sandbox_approval
 from stage2_sdk_ai.storage_paths import data_path, data_root
