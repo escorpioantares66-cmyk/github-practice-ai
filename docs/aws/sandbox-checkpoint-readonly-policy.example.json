@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadOnlySandboxAuditCandidateAndTrustedFloor",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": [
+        "arn:aws:s3:::REPLACE_WITH_PRIVATE_BUCKET/audit-checkpoints/sandbox/latest.json",
+        "arn:aws:s3:::REPLACE_WITH_PRIVATE_BUCKET/audit-checkpoints/sandbox/trusted-floor.json"
+      ]
+    }
+  ]
+}
