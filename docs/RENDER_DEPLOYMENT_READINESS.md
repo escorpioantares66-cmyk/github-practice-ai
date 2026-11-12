@@ -335,10 +335,12 @@ Acceptance tests:
 
 ### F-DEP-10 — Medium: validate Blueprint changes in exact-source CI
 
-**Status:** Exact-SHA workflow path coverage and public Blueprint JSON Schema
-validation added; exact-head result pending. Render CLI/API semantic validation
-is not run in CI because it requires a configured workspace/API context that
-has not been authorized or connected.
+**Status:** Code-level CI coverage and public Blueprint JSON Schema
+validation PASS on exact branch head
+`1949e2acbcf5067f35912bebf84fd60cb0c88465` (run
+[ #12 ](https://github.com/escorpioantares66-cmyk/github-practice-ai/actions/runs/43221885168)).
+Render CLI/API semantic validation is not run in CI because it requires a
+configured workspace/API context that has not been authorized or connected.
 
 The exact-SHA readiness workflow now runs when `render.yaml`, `docs/**`,
 `SECURITY_LIMITATIONS.md`, source, tests, or the workflow itself changes. It
