@@ -59,7 +59,7 @@ All application-owned durable files must be under `APP_DATA_DIR`:
 The application must not silently fall back to its container filesystem when
 `APP_DATA_DIR` is set incorrectly. The Blueprint sets
 `APP_REQUIRE_MOUNTED_DATA_DIR=true`; `/readyz` verifies the configured path
-exists, is writable and is an actual mount point. The Render health check remains `/healthz` and verifies the local persistent data mount only; it does not probe S3. The application refuses to start/use configured persistent paths if the required mount is missing. `/readyz` separately reports non-secret configuration and dependency readiness.
+exists, is writable and is an actual mount point. `/readyz` also verifies the sandbox approval directory and quota database are beneath that root. The Render health check remains `/healthz` and verifies the local persistent data mount only; it does not probe S3. The application refuses to start/use configured persistent paths if the required mount is missing. `/readyz` separately reports non-secret configuration and dependency readiness.
 
 The persistent disk is not a backup system. Keep independently retained,
 tested backups and checkpoint versions. Render disk snapshots are whole-disk
