@@ -29,7 +29,7 @@ def persistent_storage_ready() -> bool:
     """Check that the configured persistent data root is safe and available."""
     raw_root = os.getenv("APP_DATA_DIR", "").strip()
     if not raw_root:
-        return False
+        return os.getenv("APP_REQUIRE_MOUNTED_DATA_DIR", "").lower() != "true"
     try:
         root = data_root()
     except (OSError, RuntimeError, ValueError):
@@ -49,7 +49,8 @@ def readiness_report() -> dict[str, Any]:
     boto3_available = importlib.util.find_spec("boto3") is not None
 
     checks = {
-        "persistent_data_directory": persistent_storage_ready(),
+        "persistent_data_directory": bool(os.getenv("APP_DATA_DIR", "").strip())
+        and persistent_storage_ready(),
         "approval_configuration": not missing,
         "s3_client_dependency": boto3_available,
     }
