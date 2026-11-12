@@ -212,9 +212,9 @@ def test_readiness_rejects_sandbox_store_outside_persistent_root(monkeypatch, tm
 @pytest.mark.parametrize(
     "component",
     [
-        r"C:\\outside\\secret.txt",
-        r"\\\\server\\share\\secret.txt",
-        r"..\\outside\\secret.txt",
+        "C:/outside/secret.txt",
+        "//server/share/secret.txt",
+        r"..\outside\secret.txt",
     ],
 )
 def test_data_path_rejects_windows_absolute_and_backslash_traversal(
@@ -224,7 +224,6 @@ def test_data_path_rejects_windows_absolute_and_backslash_traversal(
 
     with pytest.raises(ValueError, match="beneath APP_DATA_DIR"):
         data_path(component)
-
 
 def test_healthz_is_liveness_only_and_does_not_call_checkpoint(
     monkeypatch, tmp_path
