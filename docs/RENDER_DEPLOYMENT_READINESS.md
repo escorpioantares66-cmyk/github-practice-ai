@@ -53,6 +53,7 @@ All application-owned durable files must be under `APP_DATA_DIR`:
 | Legacy append-only audit | `/var/data/logs/audit.jsonl` |
 | Notes | `/var/data/notes` |
 | Quota/rate-limit SQLite | `/var/data/.agent_state/quotas.sqlite3` |
+| RAG vector index | `/var/data/data/faiss_store` |
 | Sandbox approval records and audit | `/var/data/sandbox-approvals` |
 
 The application must not silently fall back to its container filesystem when
