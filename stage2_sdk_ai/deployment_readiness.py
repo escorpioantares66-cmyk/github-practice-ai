@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from stage2_sdk_ai import sandbox_approval
 from stage2_sdk_ai.storage_paths import data_root
 
 REQUIRED_APPROVAL_ENV = (
@@ -26,7 +27,6 @@ REQUIRED_APPROVAL_ENV = (
     "AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX",
 )
 
-
 def persistent_storage_ready() -> bool:
     """Check that the configured persistent data root is safe and available."""
     raw_root = os.getenv("APP_DATA_DIR", "").strip()
@@ -41,7 +41,6 @@ def persistent_storage_ready() -> bool:
         and not root.is_symlink()
         and os.access(root, os.W_OK | os.X_OK)
     )
-
 
 def _path_is_within_data_root(raw_path: str) -> bool:
     """Require configured durable stores to resolve beneath the persistent root."""
@@ -58,9 +57,27 @@ def _path_is_within_data_root(raw_path: str) -> bool:
         return False
     return resolved != root and root in resolved.parents
 
+def sandbox_checkpoint_enforcement_ready() -> bool:
+    """Exercise the production checkpoint verifier; never infer enforcement from config."""
+    verifier = getattr(
+        sandbox_approval, "_verify_independent_audit_checkpoint", None
+    )
+    if not callable(verifier):
+        return False
+    try:
+        result = verifier()
+    except Exception:
+        # Do not leak SDK, bucket, object-key, or credential details to /readyz.
+        return False
+    return (
+        isinstance(result, dict)
+        and result.get("valid") is True
+        and result.get("policy_accepted") is True
+        and result.get("trusted_floor_verified") is True
+    )
 
 def readiness_report() -> dict[str, Any]:
-    """Report missing deployment prerequisites without exposing secret values."""
+    """Report deployment prerequisites without exposing secret values."""
     missing = [key for key in REQUIRED_APPROVAL_ENV if not os.getenv(key, "").strip()]
     if not (os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")):
         missing.append("AWS_REGION")
@@ -77,6 +94,7 @@ def readiness_report() -> dict[str, Any]:
             os.getenv("AGENT_QUOTA_DB_PATH", "")
         ),
         "s3_client_dependency": boto3_available,
+        "sandbox_checkpoint_enforcement": sandbox_checkpoint_enforcement_ready(),
     }
     ready = all(checks.values())
     return {
