@@ -184,6 +184,13 @@ The API role must never receive the operator publishing credentials. The
 manifest is the operator-controlled pointer to the exact immutable candidate
 version; the application cannot change that pointer.
 
+A lifecycle operation uses the manifest version it read at the start of its
+verification. If an operator updates the manifest concurrently, an already
+in-flight operation may finish using the previously pinned candidate. For a
+strict checkpoint cutover or emergency revocation, pause approval routes and
+drain in-flight operations before publishing the new manifest. Do not treat a
+manifest update as instantaneous cancellation of work already in progress.
+
 
 ## Concurrency, checkpoint freshness and residual windows
 
