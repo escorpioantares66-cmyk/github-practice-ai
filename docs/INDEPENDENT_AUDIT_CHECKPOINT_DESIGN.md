@@ -33,10 +33,10 @@ The existing private-storage helpers protect the local file-backed audit store. 
 
 The PR #54 sandbox integration reads two distinct S3 objects before every lifecycle operation:
 
-- **Candidate checkpoint:** the latest operator-published statement of the sandbox audit head.
-- **Trusted floor:** the last checkpoint explicitly accepted by the operator and retained separately from application-writable state.
+- **Candidate checkpoint:** an immutable S3 object version containing the operator-published statement of the sandbox audit head.
+- **Trusted-floor manifest:** the last checkpoint explicitly accepted by the operator, plus the exact candidate S3 VersionId and its checkpoint ID, sequence, head hash and creation time.
 
-The application role is restricted by design to reading the two exact object keys. Publication and floor advancement use separate operator credentials. The code does not provision the bucket, IAM policy, operator identity, version retention, backup process, or runtime policy values.
+The application retrieves the candidate using the exact VersionId pinned in the manifest; it does not trust the mutable latest-object pointer. The application role needs s3:GetObject on the manifest and s3:GetObjectVersion on the candidate object, with no write, delete, list or IAM administration permissions. Publication and manifest/floor advancement use separate operator credentials. The code does not provision the bucket, IAM policy, operator identity, version retention, backup process, or runtime policy values.
 
 This boundary assumes the AWS account, operator identity, and host/runtime remain trusted. It does not protect against compromise of an administrator able to replace or delete both trust anchors, compromise of the operator credentials, host root/kernel compromise, or loss of every independent trusted-floor copy. S3 versioning alone is not immutable retention against an administrator with version-delete privileges.
 
@@ -72,7 +72,7 @@ Therefore:
 3. The operational policy must define a maximum unanchored suffix and publication cadence before any enforcement decision.
 4. If exact current-head anchoring is required for every approval-sensitive operation, the checkpoint must match the current head. A manual operator publication process cannot provide this continuously without blocking operations between publications.
 5. A stale or lower-sequence checkpoint must not be replaced automatically. Checkpoint rollback or unexplained sequence regression requires operator investigation.
-6. An S3 object read does not itself prove monotonic publication if an administrator can restore an older object version or replace both candidate and floor. The trust claim depends on separate operator custody, IAM restrictions, version retention and recovery evidence.
+6. The trusted-floor manifest pins the candidate's exact S3 VersionId and content identity. The application requests that exact version, so changing the mutable latest pointer or replacing the latest candidate cannot silently substitute an older candidate. The manifest itself remains an operator-controlled trust anchor; rollback or replacement of the manifest is outside the application's authority and must be addressed through operator IAM, version retention, Object Lock/retention policy where appropriate, and external recovery evidence.
 
 No freshness duration or publication cadence is selected in this document. That requires an explicit operational decision based on the expected approval volume and acceptable unanchored suffix.
 
@@ -81,14 +81,14 @@ No freshness duration or publication cadence is selected in this document. That 
 1. The operator reads and verifies the complete sandbox audit history using the authority-specific verifier.
 2. The operator reviews the current head and any unresolved integrity/recovery findings.
 3. The application identity emits an in-memory candidate for the exact authority, store, sequence and head hash.
-4. The operator independently reviews the candidate and publishes the candidate object using the separate operator AWS identity.
-5. The operator validates the S3 object contents, version ID, bucket policy and access boundary. The trusted floor is advanced only after explicit operator acceptance.
-6. The application role retrieves the candidate and floor by their configured exact object keys and compares both with the local audit history. The application cannot publish or advance either object.
+4. The operator independently reviews the candidate and publishes it as a new version of the candidate S3 object using the separate operator AWS identity.
+5. The operator captures the returned VersionId and updates the trusted-floor manifest with that exact VersionId and the candidate's checkpoint ID, sequence, head hash and creation time. The application retrieves that exact version with s3:GetObjectVersion. Until the manifest update succeeds, the application continues using the previous pinned version and the suffix/freshness policy may pause operations.
+6. The trusted-floor checkpoint fields are advanced only after explicit operator acceptance. The application role retrieves the manifest and pinned candidate version and compares both with the local audit history. The application cannot publish or advance either object.
 7. If either object is missing, unreadable, malformed, stale, rolled back or inconsistent, the system reports an integrity failure. It does not generate a replacement.
 8. Recovery preserves all audit bytes, S3 object versions and external investigation evidence. An operator investigates from the last known trusted floor, verifies archived segments and active history, and records the recovery decision before publishing any new candidate/floor pair.
 9. If every trusted-floor copy is lost, the history cannot be silently re-established as trusted by exporting the current head. That would bless potentially rewritten history.
 
-The current integration does not pin S3 object-version IDs during reads and does not enforce immutable floor storage in code. Bucket versioning, retention, IAM and separate operator custody must therefore be independently verified. This is an explicit operational gate, not a code-level PASS.
+The current integration pins candidate S3 object-version IDs in the trusted-floor manifest and requests the exact version on every verification. The manifest itself is not immutable by code; bucket versioning, retention, IAM, protection against manifest rollback and separate operator custody must therefore be independently verified. This remains an operational gate, not a code-level PASS.
 
 ## Historical filesystem-candidate proof gates (superseded)
 
