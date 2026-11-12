@@ -97,8 +97,11 @@ Required approval configuration includes:
 
 The S3 object keys, stable store ID, freshness limit and maximum unanchored
 suffix must be explicitly reviewed. Do not use guessed or default policy
-values. The readiness endpoint checks presence, not correctness, authenticity
-or successful use of these values.
+values. The readiness endpoint checks configuration presence and performs a live
+candidate/trusted-floor policy verification against the local sandbox audit.
+This proves the current checkpoint policy check succeeded; it does not prove
+the AWS identity is limited to the intended IAM permissions or that operator
+custody and credential rotation are correct. Those remain separate release gates.
 
 ### AWS credential delivery — unresolved release blocker
 
