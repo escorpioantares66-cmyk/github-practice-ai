@@ -391,12 +391,15 @@ checks fail. Operators must monitor this endpoint and alert on non-2xx
 responses. A successful `/healthz` response must never be interpreted as
 sandbox approval readiness.
 
-This separation is safe only because the sandbox approval lifecycle itself
-runs the fail-closed checkpoint verifier before each relevant operation.
-Readiness is not a substitute for operation-time authorization or checkpoint
-verification. The current branch's lack of PR #54 enforcement still prevents
-production readiness; PR #54 must be independently reviewed and integrated
-before this branch can be reconciled and revalidated.
+This separation is safe for production only after the sandbox approval
+lifecycle runs the fail-closed checkpoint verifier before each relevant
+operation. Readiness is not a substitute for operation-time authorization or
+checkpoint verification. **The current branch does not yet contain that
+operation-time enforcement** because PR #54 remains separate; therefore
+`/readyz` must remain 503 and this branch must not be deployed or receive
+approval traffic until PR #54 is independently reviewed and integrated, then
+this branch is reconciled and revalidated. A green `/healthz` during this
+preparation phase proves only local liveness, not approval safety.
 
 Acceptance tests:
 
