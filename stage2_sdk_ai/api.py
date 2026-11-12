@@ -270,6 +270,7 @@ def readyz():
         raise HTTPException(status_code=503, detail=report)
     return report
 
+
 @app.get("/")
 def root():
     return {"message": "github-practice-ai v7.0-prod ready", "docs": "/docs"}
