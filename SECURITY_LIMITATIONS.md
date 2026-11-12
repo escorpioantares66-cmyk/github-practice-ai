@@ -148,10 +148,14 @@ sequence, head hash, checkpoint age and maximum unanchored suffix before
 creating, deciding, inspecting, retrieving or consuming an approval. Missing
 configuration, unavailable S3 custody, a stale or conflicting checkpoint, or
 an audit rollback pauses approval operations for operator review. The
-application role must have only `s3:GetObject` access to the two exact
-checkpoint objects; checkpoint publication and floor advancement use separate
-operator credentials. The application never creates, advances, repairs or
-replaces these trust anchors.
+application role must have `s3:GetObject` access to the exact trusted-floor
+manifest and `s3:GetObjectVersion` access to the exact candidate object ARN;
+it must not have write, delete, list or IAM administration permissions. The
+manifest pins the candidate VersionId and checkpoint content identity, so the
+application retrieves that exact version rather than trusting the mutable
+latest-object pointer. Checkpoint publication and manifest/floor advancement
+use separate operator credentials. The application never creates, advances,
+repairs or replaces these trust anchors.
 
 The checkpoint and floor are not provisioned by this code change. Operators
 must establish the bucket, read-only application IAM policy, independent
