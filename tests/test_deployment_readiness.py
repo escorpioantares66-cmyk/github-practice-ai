@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 
 import pytest
 
@@ -41,6 +42,8 @@ def test_readiness_passes_synthetic_configuration_and_existing_data_dir(
     monkeypatch.setenv("AWS_REGION", "eu-central-1")
     for key in deployment_readiness.REQUIRED_APPROVAL_ENV:
         monkeypatch.setenv(key, "synthetic-test-value")
+    monkeypatch.setenv("SANDBOX_APPROVALS_DIR", str(tmp_path / "sandbox-approvals"))
+    monkeypatch.setenv("AGENT_QUOTA_DB_PATH", str(tmp_path / ".agent_state" / "quotas.sqlite3"))
     monkeypatch.setattr(
         importlib.util, "find_spec",
         lambda name: object() if name == "boto3" else None,
@@ -60,6 +63,8 @@ def test_readiness_requires_actual_mount_when_configured(monkeypatch, tmp_path):
     monkeypatch.setenv("AWS_REGION", "eu-central-1")
     for key in deployment_readiness.REQUIRED_APPROVAL_ENV:
         monkeypatch.setenv(key, "synthetic-test-value")
+    monkeypatch.setenv("SANDBOX_APPROVALS_DIR", str(tmp_path / "sandbox-approvals"))
+    monkeypatch.setenv("AGENT_QUOTA_DB_PATH", str(tmp_path / ".agent_state" / "quotas.sqlite3"))
     monkeypatch.setattr(
         importlib.util, "find_spec",
         lambda name: object() if name == "boto3" else None,
@@ -78,3 +83,14 @@ def test_configured_production_data_root_rejects_unmounted_directory(monkeypatch
 
     with pytest.raises(RuntimeError, match="mounted persistent disk"):
         data_root()
+
+
+def test_readiness_rejects_sandbox_store_outside_persistent_root(monkeypatch, tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("SANDBOX_APPROVALS_DIR", str(tmp_path / "outside-store"))
+
+    assert deployment_readiness._path_is_within_data_root(
+        os.getenv("SANDBOX_APPROVALS_DIR", "")
+    ) is False
