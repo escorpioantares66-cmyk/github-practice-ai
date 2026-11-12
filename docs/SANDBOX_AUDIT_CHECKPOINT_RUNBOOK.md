@@ -5,13 +5,16 @@
 The sandbox approval authority now verifies its local audit history against two
 independently retained S3 objects before every approval lifecycle operation:
 
-1. **Candidate checkpoint** — the latest operator-published audit head.
-2. **Trusted floor** — the last checkpoint explicitly accepted by the operator.
+1. **Candidate checkpoint** — an immutable S3 object version containing the
+   latest operator-published audit head.
+2. **Trusted-floor manifest** — the last checkpoint explicitly accepted by the
+   operator, plus the exact S3 VersionId and content identity of the candidate.
 
-The API application role has read-only access. It cannot create, advance,
-replace, delete or restore either object. Missing configuration, unavailable
-S3 access, invalid objects, rollback, excessive checkpoint age or an excessive
-unanchored suffix fail closed and pause approval operations.
+The API application role has read-only access. It retrieves the candidate by
+the exact version ID pinned in the manifest; it never trusts the mutable
+latest pointer. A missing pin, missing object version, version mismatch,
+unavailable S3 access, invalid object, rollback, excessive checkpoint age or
+an excessive unanchored suffix fails closed and pauses approval operations.
 
 This is a single-host v1 control. It does not provide protection against
 compromise of the AWS account administrator, operator credentials, host root,
@@ -48,14 +51,18 @@ code deliberately selects neither limit.
    owner enforced object ownership, default encryption and versioning.
 2. Store the candidate and trusted floor at the two configured object keys.
    Keep version history and backup/recovery procedures under operator control.
-3. Give the API application role only `s3:GetObject` on those two exact object
-   ARNs. It must not have `s3:PutObject`, `s3:DeleteObject`,
+3. Give the API application role `s3:GetObject` on the exact trusted-floor
+   manifest ARN and `s3:GetObjectVersion` on the exact candidate checkpoint
+   object ARN. It must not have `s3:PutObject`, `s3:DeleteObject`,
    `s3:DeleteObjectVersion`, `s3:ListBucket`, bucket-policy administration
    or IAM administration permissions.
-4. Use a separate operator identity/profile to publish checkpoint objects.
-   Its credentials must not be available to the API process or stored in the
-   application environment.
-5. Consider S3 Object Lock only after reviewing retention, cost and recovery
+4. Enable S3 versioning and reject the unversioned `null` version. Retain
+   candidate object versions for at least the audit-retention period. The
+   application reads the candidate using the manifest's exact VersionId.
+5. Use a separate operator identity/profile to publish checkpoint objects
+   and update the trusted-floor manifest. Its credentials must not be
+   available to the API process or stored in the application environment.
+6. Consider S3 Object Lock only after reviewing retention, cost and recovery
    requirements. Versioning alone is not immutable retention against an
    administrator who can delete object versions.
 
@@ -101,24 +108,49 @@ PY
 4. Have the operator inspect the generated checkpoint and confirm that it
    identifies authority `sandbox`, the intended store ID, sequence zero and
    the all-zero head hash for the empty audit log.
-5. Split the bundle into the two JSON objects and publish them using the
-   separate operator AWS profile:
+5. Split the bundle into the candidate and base trusted-floor JSON objects.
+   Publish the candidate with S3 versioning enabled and capture the returned
+   VersionId:
 
 ```bash
 jq -c .checkpoint sandbox-checkpoint-bundle.json > latest.json
 jq -c .trusted_floor sandbox-checkpoint-bundle.json > trusted-floor.json
-aws s3 cp latest.json s3://YOUR_BUCKET/audit-checkpoints/sandbox/latest.json \
-  --profile audit-checkpoint-admin
-aws s3 cp trusted-floor.json s3://YOUR_BUCKET/audit-checkpoints/sandbox/trusted-floor.json \
+CANDIDATE_VERSION_ID=$(aws s3api put-object \
+  --bucket YOUR_BUCKET \
+  --key audit-checkpoints/sandbox/latest.json \
+  --body latest.json \
+  --profile audit-checkpoint-admin \
+  --query VersionId --output text)
+```
+
+6. Add the exact candidate version and content identity to the trusted-floor
+   manifest, then publish that manifest:
+
+```bash
+jq --arg version "$CANDIDATE_VERSION_ID" \
+   --arg checkpoint_id "$(jq -r .checkpoint_id latest.json)" \
+   --argjson sequence "$(jq -r .sequence latest.json)" \
+   --arg head_hash "$(jq -r .head_hash latest.json)" \
+   --argjson created_at "$(jq -r .created_at latest.json)" \
+   '. + {candidate_version_id:$version,
+         candidate_checkpoint_id:$checkpoint_id,
+         candidate_sequence:$sequence,
+         candidate_head_hash:$head_hash,
+         candidate_created_at:$created_at}' \
+   trusted-floor.json > trusted-floor-pinned.json
+aws s3api put-object \
+  --bucket YOUR_BUCKET \
+  --key audit-checkpoints/sandbox/trusted-floor.json \
+  --body trusted-floor-pinned.json \
   --profile audit-checkpoint-admin
 ```
 
-6. Verify both object contents and their versions using the operator identity.
-   Confirm that the API role can retrieve both objects but cannot write,
-   replace, delete or list them.
-7. Start with synthetic requests and verify that approval operations succeed
-   only while the external checkpoint service is available and the local
-   history matches the trusted anchors.
+7. Verify the candidate VersionId and manifest contents using the operator
+   identity. Confirm that the API role can retrieve the manifest and exact
+   candidate version but cannot write, replace, delete or list objects.
+8. Start with synthetic requests and verify that approval operations succeed
+   only while the pinned version is retrievable and the local history matches
+   both the trusted floor and candidate checkpoint.
 
 The bootstrap command assumes the operator has supplied the configured
 environment to the application process. Do not run it against an existing
@@ -128,24 +160,29 @@ store after an integrity failure to create a replacement trust anchor.
 
 Checkpoint advancement is a human-controlled operation:
 
-1. Preserve the current audit file and existing S3 objects.
-2. Verify the current audit chain and compare it with the existing candidate
-   and trusted floor.
-3. Investigate any mismatch, stale checkpoint, rollback, missing object or
-   unanchored suffix policy failure. Do not publish a replacement to clear an
-   integrity error.
+1. Preserve the current audit file, candidate versions and trusted-floor
+   manifest version.
+2. Verify the current audit chain and compare it with the pinned candidate and
+   accepted trusted floor.
+3. Investigate any mismatch, stale checkpoint, missing pinned version, rollback
+   or unanchored-suffix policy failure. Do not publish a replacement to clear
+   an integrity error.
 4. Under the application identity, emit a new candidate checkpoint for the
    current sandbox audit head.
 5. The operator independently reviews the candidate, event sequence and
    reason for advancement.
-6. Publish the new candidate object. Advance the trusted floor only after the
-   operator explicitly accepts that checkpoint. Preserve prior S3 versions and
+6. Publish the candidate as a new S3 object version and capture its VersionId.
+   Update the manifest's candidate pin fields to that exact version. Until the
+   manifest update succeeds, the API continues reading the previously pinned
+   version; the suffix/age policy may pause operations.
+7. Advance the trusted-floor checkpoint fields only after the operator
+   explicitly accepts the new checkpoint. Preserve prior S3 versions and
    record the operator, timestamp, checkpoint ID and review evidence outside
    the application-writable store.
 
-The API role must never receive the operator publishing credentials. An
-application-generated checkpoint is only a candidate until the operator
-reviews and publishes it.
+The API role must never receive the operator publishing credentials. The
+manifest is the operator-controlled pointer to the exact immutable candidate
+version; the application cannot change that pointer.
 
 
 ## Concurrency, checkpoint freshness and residual windows
@@ -160,12 +197,13 @@ repeated while that lock is held, immediately before the record is read or
 changed.
 
 This is a single-host guarantee. Do not share the file-backed store across
-hosts or NFS. The policy lock does not serialize an independent operator
-changing S3 objects after the application has retrieved them. S3 object-version
-IDs are not pinned by this integration, and code does not make the trusted
-floor immutable. Operator publication, version retention and IAM custody
-remain part of the trusted computing base; independently verify those
-controls.
+hosts or NFS. The trusted-floor manifest pins the candidate's exact S3
+VersionId, checkpoint ID, sequence, head hash and publication time. The API
+retrieves that exact version rather than the mutable latest object. Candidate
+rollback or replacement therefore fails closed unless the operator-controlled
+manifest is also changed. The manifest itself remains part of the trusted
+computing base: operator IAM, version retention and protection against
+manifest rollback must be independently verified.
 
 The suffix is a deliberate risk budget, not a claim that unanchored events are
 tamper-proof. A configured maximum of N permits at most N audit events after
@@ -203,7 +241,8 @@ decision outside application-writable storage.
 
 ## Failure and recovery
 
-Approval operations pause if either object is missing or unreadable, if S3 is
+Approval operations pause if either object is missing or unreadable, if the
+pinned candidate VersionId is missing or does not match its manifest, if S3 is
 unavailable, if the candidate or floor has the wrong authority/store ID, if
 the candidate regresses behind the floor, if the local log no longer contains
 the trusted floor, or if freshness/suffix policy is exceeded.
