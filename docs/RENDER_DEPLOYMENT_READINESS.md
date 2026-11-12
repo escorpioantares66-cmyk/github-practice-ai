@@ -71,7 +71,7 @@ recovery or independent S3 audit custody.
 
 ## Container requirements
 
-The Docker image installs the `audit-s3` extra and declares Uvicorn as a runtime dependency. It binds to Render's `PORT` environment variable, falling back to 10000 for local use. A small root bootstrap adjusts ownership of only the mounted data-root directory, then drops to UID/GID 10001 and uses `exec` to make Uvicorn PID 1. It never recursively changes existing data ownership. Verify the actual mounted-disk ownership and unprivileged process identity in a non-production service before release.
+The Docker image installs the `audit-s3` extra and declares Uvicorn as a runtime dependency. It binds to Render's `PORT` environment variable, falling back to 10000 for local use. A small root bootstrap clears supplementary groups, adjusts ownership of only the mounted data-root directory, sets GID/UID 10001, verifies the effective UID/GID and empty supplementary-group list, then uses `exec` to make Uvicorn PID 1. It never recursively changes existing data ownership. The code-level checks and mocked syscall tests do not replace a container-level process-identity proof; verify the actual mounted-disk ownership and Uvicorn credentials in a non-production service before release.
 
 ## Environment variables
 
@@ -181,9 +181,41 @@ deployment, merge PR #54, modify `main`, or change production permissions.
 
 ## Adversarial review remediation plan and acceptance tests
 
-This section records the fresh review findings F-DEP-01 through F-DEP-05.
-Only F-DEP-01 is addressed by the current readiness change. The remaining
-items are planned work, not claims of implementation or verification.
+This section records the fresh review findings F-DEP-01 through F-DEP-06.
+F-DEP-01 has a code change prepared; F-DEP-06 and F-DEP-02 now have code
+changes and focused tests prepared on this branch. None of these changes has
+been executed in CI or independently runtime-verified. F-DEP-03 through
+F-DEP-05 remain open to the extent described below.
+
+### F-DEP-06 — Medium: fail closed when the required data root is absent
+
+**Status:** Code change and focused tests prepared on this branch; test
+execution and full storage-call-site validation remain pending.
+
+When `APP_REQUIRE_MOUNTED_DATA_DIR=true`, `data_root()` now raises if
+`APP_DATA_DIR` is absent or blank instead of silently returning the current
+working directory. Legacy local fallback to `Path(".")` remains available
+only when the mounted-disk requirement is not enabled.
+
+`data_path()` now rejects empty components, POSIX/Windows absolute
+components, parent-directory traversal and paths that resolve outside the
+configured root through an existing symlink. This is a path-resolution
+defense-in-depth check, not a race-free substitute for safe file-opening
+primitives such as `O_NOFOLLOW` at the final file boundary.
+
+Acceptance tests:
+
+1. With `APP_REQUIRE_MOUNTED_DATA_DIR=true` and `APP_DATA_DIR` unset or
+   blank, `data_root()` raises; it never returns `Path(".")`.
+2. With the requirement disabled and `APP_DATA_DIR` absent, legacy local
+   behavior remains available.
+3. Relative configured roots are rejected.
+4. `data_path()` rejects absolute components, Windows drive/UNC components,
+   empty components and any `..` traversal.
+5. An existing symlink beneath the root that resolves outside the root is
+   rejected.
+6. All existing storage call sites continue to resolve beneath the intended
+   data root in unit and integration tests.
 
 ### F-DEP-01 — High: readiness must prove checkpoint enforcement
 
@@ -226,7 +258,15 @@ Acceptance tests:
 
 ### F-DEP-02 — Medium: complete privilege dropping
 
-**Status:** Planned; not implemented by this change.
+**Status:** Code change and focused mocked tests prepared on this branch;
+container-level identity proof and test execution remain pending.
+
+The root entrypoint now calls `os.setgroups([])` while privileged and before
+`setgid(10001)` and `setuid(10001)`. It then verifies effective UID 10001,
+effective GID 10001 and an empty supplementary-group list immediately before
+exec. Non-root startup is accepted only when it already has that exact
+identity. Failure to clear groups or satisfy identity checks prevents server
+startup. Ownership changes remain limited to the mount root.
 
 Acceptance tests:
 
@@ -307,18 +347,20 @@ Acceptance tests:
 
 ### Execution order and release gates
 
-1. Integrate PR #54 only after its separate review and explicit merge
+1. Complete F-DEP-06 data-root fail-closed and containment tests.
+2. Complete F-DEP-02 privilege hardening tests and container-level identity
+   proof.
+3. Integrate PR #54 only after its separate review and explicit merge
    authorization; reconcile this branch against the resulting main commit.
-2. Run F-DEP-01 tests against the real integrated verifier and prove all
+4. Run F-DEP-01 tests against the real integrated verifier and prove all
    lifecycle operations invoke it at operation time.
-3. Complete F-DEP-02 privilege hardening and container-level identity tests.
-4. Complete F-DEP-03 FastAPI route and failure-mode tests.
-5. Resolve F-DEP-04 credential delivery, IAM least privilege and operator
+5. Complete F-DEP-03 FastAPI route and failure-mode tests.
+6. Resolve F-DEP-04 credential delivery, IAM least privilege and operator
    separation with owner approval.
-6. Complete F-DEP-05 mounted-volume persistence and recovery tests.
-7. Run the complete repository test suite, Ruff, Docker build and official
+7. Complete F-DEP-05 mounted-volume persistence and recovery tests.
+8. Run the complete repository test suite, Ruff, Docker build and official
    Render Blueprint validation on the exact final branch head.
-8. Obtain independent human security review and explicit owner release
+9. Obtain independent human security review and explicit owner release
    authorization before any service or cloud resource is created.
 
 No item in this plan authorizes a merge, PR creation, Render/AWS resource
