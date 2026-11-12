@@ -174,3 +174,149 @@ results, and human reviewer disposition. Do not record secret values.
 This preparation does not create a Render service or Blueprint, attach a disk,
 create an S3 bucket, create IAM identities/policies, enter credentials, run a
 deployment, merge PR #54, modify `main`, or change production permissions.
+
+
+## Adversarial review remediation plan and acceptance tests
+
+This section records the fresh review findings F-DEP-01 through F-DEP-05.
+Only F-DEP-01 is addressed by the current readiness change. The remaining
+items are planned work, not claims of implementation or verification.
+
+### F-DEP-01 — High: readiness must prove checkpoint enforcement
+
+**Status:** Code change prepared on this branch; full verification remains
+pending PR #54 integration and exact-head CI.
+
+The /readyz endpoint now requires the sandbox approval module's production
+_independent audit checkpoint verifier and executes it. Readiness accepts
+only a result that explicitly reports valid, policy_accepted and
+trusted_floor_verified as true. Missing verifier, S3 errors, malformed
+evidence, stale/rollback policy failures and invalid results make the
+endpoint report not_ready. The endpoint does not expose exception text or
+credential details.
+
+The current branch intentionally does not contain PR #54's enforcement
+implementation. Therefore its readiness result must remain not_ready until
+PR #54 is independently reviewed/integrated and this branch is reconciled
+with that code. A synthetic verifier is used only in unit tests.
+
+Acceptance tests:
+
+1. With all environment variables and boto3 present but no verifier function,
+   /readyz returns 503 and the enforcement check is false.
+2. If the verifier raises for missing S3 objects, S3 outage, malformed
+   checkpoint, wrong store ID, rollback, stale candidate or excessive
+   unanchored suffix, /readyz returns 503.
+3. A result missing any of valid, policy_accepted or trusted_floor_verified,
+   or setting any to false, is rejected.
+4. Only a successful live verification of candidate and trusted floor against
+   the local audit history can make the enforcement check true.
+5. The report contains no exception text, secret values, AWS credentials or
+   checkpoint object contents.
+6. After PR #54 integration, verify that every sandbox lifecycle operation
+   (create, approve/deny, inspect, decision retrieval and consume) independently
+   invokes the same fail-closed verifier; readiness success must not replace
+   operation-time verification.
+7. /healthz remains a local liveness/persistent-mount check and does not
+   become dependent on S3 availability. /readyz is the explicit external
+   security-readiness check.
+
+### F-DEP-02 — Medium: complete privilege dropping
+
+**Status:** Planned; not implemented by this change.
+
+Acceptance tests:
+
+1. When starting as root, the entrypoint clears supplementary groups before
+   setting the target GID and UID.
+2. The process verifies effective UID 10001, effective GID 10001 and an empty
+   supplementary group list immediately before exec.
+3. The order is supplementary-group clearing, setgid, then setuid; failure
+   at any step prevents server startup.
+4. Non-root startup is rejected unless effective UID/GID and supplementary
+   groups satisfy the documented policy.
+5. Tests prove no recursive ownership changes occur and only the mount root
+   is changed.
+6. A container-level test inspects the actual Uvicorn process credentials,
+   not only mocked syscall order.
+
+### F-DEP-03 — Medium: separate liveness from security readiness
+
+**Status:** Partially addressed by F-DEP-01; runtime behavior remains unverified.
+
+Acceptance tests:
+
+1. /healthz returns success only when the required local persistent mount is
+   present, writable and safe.
+2. /healthz does not make S3 calls; a simulated S3 outage does not cause a
+   liveness failure when local storage remains healthy.
+3. /readyz returns 503 when checkpoint verification fails, required
+   configuration is absent, the mounted storage is unsafe, or configured
+   durable paths escape the data root.
+4. /readyz returns 200 only after a successful candidate-and-floor policy
+   verification and all other readiness checks pass.
+5. Responses never expose secrets, AWS SDK exception text, credentials or
+   checkpoint payloads.
+6. Tests exercise the actual FastAPI routes and status codes, not only the
+   helper function.
+
+### F-DEP-04 — High: prove AWS credential delivery and custody
+
+**Status:** Operational blocker; no AWS resources or permissions are
+authorized or provisioned.
+
+Acceptance tests:
+
+1. The application obtains credentials through the owner-approved,
+   rotatable delivery mechanism; no operator publishing credentials are
+   available to the API process.
+2. The application identity can perform s3:GetObject on the exact candidate
+   and trusted-floor object ARNs.
+3. The application identity is denied s3:ListBucket, s3:PutObject,
+   s3:DeleteObject, version deletion, bucket-policy changes and IAM
+   administration.
+4. The separate operator identity can perform only the documented checkpoint
+   publication/advancement workflow and is not present in application
+   environment variables or process credentials.
+5. Rotation, expiry, revocation and outage recovery are exercised in a
+   non-production environment.
+6. Evidence includes the effective IAM policy, identity, exact object ARNs,
+   positive and negative API tests, rotation result and operator review record.
+
+### F-DEP-05 — Medium: prove complete persistent-storage coverage
+
+**Status:** Code-path review completed; integration proof pending.
+
+Acceptance tests:
+
+1. Exercise approval records, audit append, audit rotation state and segments,
+   retention archives, notes, quota SQLite database and sidecars, vector
+   index, and sandbox approval records/audit.
+2. Trace every durable write and assert its resolved path is beneath the
+   mounted APP_DATA_DIR; reject symlink escapes and unexpected relative paths.
+3. Restart the container and verify all records, indexes, counters and audit
+   sequence/hash state survive unchanged.
+4. Exercise disk-full, read-only mount, missing mount, permission failure and
+   interrupted write scenarios; security-sensitive operations fail closed.
+5. Verify the actual mounted volume and Uvicorn process in a non-production
+   Render service before release.
+6. Retain a path inventory and test evidence tied to the exact deployed commit.
+
+### Execution order and release gates
+
+1. Integrate PR #54 only after its separate review and explicit merge
+   authorization; reconcile this branch against the resulting main commit.
+2. Run F-DEP-01 tests against the real integrated verifier and prove all
+   lifecycle operations invoke it at operation time.
+3. Complete F-DEP-02 privilege hardening and container-level identity tests.
+4. Complete F-DEP-03 FastAPI route and failure-mode tests.
+5. Resolve F-DEP-04 credential delivery, IAM least privilege and operator
+   separation with owner approval.
+6. Complete F-DEP-05 mounted-volume persistence and recovery tests.
+7. Run the complete repository test suite, Ruff, Docker build and official
+   Render Blueprint validation on the exact final branch head.
+8. Obtain independent human security review and explicit owner release
+   authorization before any service or cloud resource is created.
+
+No item in this plan authorizes a merge, PR creation, Render/AWS resource
+creation, credential entry, permission change or deployment.
