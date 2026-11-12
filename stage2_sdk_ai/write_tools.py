@@ -16,7 +16,9 @@ from .secure_storage import (
 
 logger = get_logger(__name__)
 
-_notes_dir = Path("notes")
+from .storage_paths import data_path
+
+_notes_dir = data_path("notes")
 MAX_NOTE_CHARS = 5_000
 
 
