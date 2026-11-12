@@ -24,8 +24,10 @@ from .secure_storage import (
     write_text_atomically,
 )
 
-_approvals_dir = Path("approvals")
-_audit_file = Path("logs/audit.jsonl")
+from .storage_paths import data_path
+
+_approvals_dir = data_path("approvals")
+_audit_file = data_path("logs", "audit.jsonl")
 logger = logging.getLogger(__name__)
 
 # Pending/approved write requests are valid for 15 minutes from creation.
