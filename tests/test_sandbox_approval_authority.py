@@ -1687,6 +1687,23 @@ def test_sandbox_checkpoint_reads_exact_operator_pinned_s3_version(
     assert fake_s3.version_objects[candidate_key][pinned_version]
 
 
+
+def test_sandbox_checkpoint_rejects_manifest_candidate_content_mismatch(
+    authority, scope
+):
+    created = _create(authority, scope)
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    floor_key = "audit-checkpoints/sandbox/trusted-floor.json"
+    floor = json.loads(fake_s3.objects[floor_key].decode("utf-8"))
+    floor["candidate_head_hash"] = "f" * 64
+    fake_s3.objects[floor_key] = json.dumps(floor).encode("utf-8")
+
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="Independent sandbox audit checkpoint verification failed",
+    ):
+        sandbox_approval.inspect(created["approval_id"], requester="automation")
+
 def test_sandbox_checkpoint_fails_closed_when_pinned_s3_version_is_missing(
     authority, scope
 ):
