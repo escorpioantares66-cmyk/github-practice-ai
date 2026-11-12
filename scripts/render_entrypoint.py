@@ -10,22 +10,36 @@ APP_UID = 10001
 APP_GID = 10001
 
 
+def _verify_unprivileged_identity() -> None:
+    """Require the exact application identity and no supplementary groups."""
+    if os.geteuid() != APP_UID:
+        raise RuntimeError("API process must run as the configured unprivileged UID")
+    if os.getegid() != APP_GID:
+        raise RuntimeError("API process must run as the configured unprivileged GID")
+    if os.getgroups():
+        raise RuntimeError("API process must not retain supplementary groups")
+
+
 def drop_privileges_and_exec() -> None:
-    """Chown only the mount root, then run the application as an unprivileged UID."""
+    """Chown only the mount root, clear groups, drop IDs, verify, then exec."""
     raw_root = os.getenv("APP_DATA_DIR", "/var/data").strip()
     root = Path(raw_root).expanduser()
     if not root.is_absolute() or root.is_symlink() or not root.is_dir():
         raise RuntimeError("APP_DATA_DIR must be an existing absolute directory")
 
     if os.geteuid() == 0:
-        # A fresh Render disk may be root-owned. Only the mount root is adjusted;
-        # existing application records are never recursively rewritten.
+        # Clear inherited groups while still privileged, before changing GID/UID.
+        # Only the mount root is adjusted; existing application records are
+        # never recursively rewritten.
+        os.setgroups([])
         os.chown(root, APP_UID, APP_GID)
         os.chmod(root, stat.S_IRWXU)
         os.setgid(APP_GID)
         os.setuid(APP_UID)
-    elif os.geteuid() != APP_UID:
-        raise RuntimeError("API process must run as the configured unprivileged UID")
+
+    # Non-root startup is permitted only when the process already has the
+    # exact target identity and no supplementary groups.
+    _verify_unprivileged_identity()
 
     info = root.stat()
     if info.st_uid != APP_UID or stat.S_IMODE(info.st_mode) & 0o077:
