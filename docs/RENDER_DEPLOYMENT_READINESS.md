@@ -51,6 +51,9 @@ All application-owned durable files must be under `APP_DATA_DIR`:
 |---|---|
 | Legacy approval records | `/var/data/approvals` |
 | Legacy append-only audit | `/var/data/logs/audit.jsonl` |
+| Audit rotation anchor, journal and state | `/var/data/logs/audit.anchor.json`, `/var/data/logs/audit.rotation.json`, `/var/data/logs/audit.rotation-state.json` |
+| Rotated audit segments | `/var/data/logs/audit-segments` |
+| Approval retention archives | `/var/data/archive` |
 | Notes | `/var/data/notes` |
 | Quota/rate-limit SQLite | `/var/data/.agent_state/quotas.sqlite3` |
 | RAG vector index | `/var/data/data/faiss_store` |
