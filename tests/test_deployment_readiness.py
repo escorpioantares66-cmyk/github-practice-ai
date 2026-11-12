@@ -53,8 +53,14 @@ def test_relative_data_root_is_rejected(monkeypatch):
         data_root()
 
 
-def test_required_mount_rejects_missing_data_root(monkeypatch):
-    monkeypatch.delenv("APP_DATA_DIR", raising=False)
+@pytest.mark.parametrize("configured_root", [None, ""])
+def test_required_mount_rejects_missing_or_blank_data_root(
+    monkeypatch, configured_root
+):
+    if configured_root is None:
+        monkeypatch.delenv("APP_DATA_DIR", raising=False)
+    else:
+        monkeypatch.setenv("APP_DATA_DIR", configured_root)
     monkeypatch.setenv("APP_REQUIRE_MOUNTED_DATA_DIR", "true")
 
     with pytest.raises(RuntimeError, match="APP_DATA_DIR is required"):
