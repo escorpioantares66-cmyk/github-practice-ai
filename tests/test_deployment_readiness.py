@@ -5,7 +5,9 @@ import os
 
 import pytest
 
-from stage2_sdk_ai import deployment_readiness, sandbox_approval
+from fastapi.testclient import TestClient
+
+from stage2_sdk_ai import api, deployment_readiness, sandbox_approval
 from stage2_sdk_ai.storage_paths import data_path, data_root
 
 
@@ -204,3 +206,76 @@ def test_readiness_rejects_sandbox_store_outside_persistent_root(monkeypatch, tm
     assert deployment_readiness._path_is_within_data_root(
         os.getenv("SANDBOX_APPROVALS_DIR", "")
     ) is False
+
+
+
+@pytest.mark.parametrize(
+    "component",
+    [
+        r"C:\\outside\\secret.txt",
+        r"\\\\server\\share\\secret.txt",
+        r"..\\outside\\secret.txt",
+    ],
+)
+def test_data_path_rejects_windows_absolute_and_backslash_traversal(
+    monkeypatch, tmp_path, component
+):
+    monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
+
+    with pytest.raises(ValueError, match="beneath APP_DATA_DIR"):
+        data_path(component)
+
+
+def test_healthz_is_liveness_only_and_does_not_call_checkpoint(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(api, "persistent_storage_ready", lambda: True)
+
+    def checkpoint_must_not_run():
+        raise AssertionError("liveness must not call external checkpoint custody")
+
+    monkeypatch.setattr(
+        sandbox_approval,
+        "_verify_independent_audit_checkpoint",
+        checkpoint_must_not_run,
+        raising=False,
+    )
+    client = TestClient(api.app)
+
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
+def test_readyz_is_the_explicit_security_readiness_gate(monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "readiness_report",
+        lambda: {
+            "status": "not_ready",
+            "checks": {"sandbox_checkpoint_enforcement": False},
+            "missing_configuration": [],
+        },
+    )
+    client = TestClient(api.app)
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["status"] == "not_ready"
+
+
+def test_readyz_returns_success_only_for_ready_report(monkeypatch):
+    expected = {
+        "status": "ready",
+        "checks": {"sandbox_checkpoint_enforcement": True},
+        "missing_configuration": [],
+    }
+    monkeypatch.setattr(api, "readiness_report", lambda: expected)
+    client = TestClient(api.app)
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 200
+    assert response.json() == expected
