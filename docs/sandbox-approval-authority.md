@@ -130,11 +130,14 @@ cannot re-authorize a completed approval while the audit history remains
 intact. The local hash chain alone cannot detect rollback of the entire
 audit file to an earlier valid snapshot. The sandbox approval lifecycle now
 requires a separately retained S3 candidate checkpoint and operator-accepted
-trusted floor before create, decision, inspection, decision retrieval and
-consumption. The application role has read-only access to the two exact objects;
-operator credentials publish and advance them. The verifier checks authority,
-stable store identity, both historical anchors, candidate age and the explicit
-maximum unanchored suffix. Missing configuration, unavailable S3 custody,
+trusted-floor manifest before create, decision, inspection, decision retrieval
+and consumption. The manifest pins the candidate's exact S3 VersionId and
+checkpoint content identity. The application role has `s3:GetObject` access to
+the manifest and `s3:GetObjectVersion` access to the candidate object; operator
+credentials publish candidates and advance the manifest/floor. The verifier
+checks authority, stable store identity, both historical anchors, candidate
+version/content pin, candidate age and the explicit maximum unanchored suffix.
+Missing configuration, unavailable S3 custody, a missing pinned version,
 rollback or policy failure pauses approval operations for operator review.
 See `docs/SANDBOX_AUDIT_CHECKPOINT_RUNBOOK.md`.
 
