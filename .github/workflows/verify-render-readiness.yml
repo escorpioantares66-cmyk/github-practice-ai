@@ -97,7 +97,7 @@ jobs:
           PY
           chmod 0755 "$proof_dir/uvicorn"
 
-          docker image inspect "$IMAGE_NAME" --format 'IMAGE_ID={{.Id}} CONFIG_USER={{.Config.User}}'
+          docker image inspect "$IMAGE_NAME" --format 'IMAGE_ID={{.Id}}'
           docker run --rm \
             --mount "type=bind,src=$proof_dir,dst=/proof,readonly" \
             --mount "type=bind,src=$data_dir,dst=/var/data" \
