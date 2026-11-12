@@ -23,7 +23,6 @@ from .secure_storage import (
     read_private_text,
     write_text_atomically,
 )
-
 from .storage_paths import data_path
 
 _approvals_dir = data_path("approvals")
