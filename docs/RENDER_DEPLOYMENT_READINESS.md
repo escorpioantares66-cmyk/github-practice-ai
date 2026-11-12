@@ -8,7 +8,7 @@ or deployment has been created by this work.
 This preparation branch starts from API `main` at
 `4f5b5e6871fd10009a20f2d0c870a20adaa4c938`. It deliberately does not modify
 PR #54 (`security/approval-f01-f02-remediation`, head
-`6d9899d4abf3a9e49379af39da58eb60657e2a0b)).
+`6d9899d4abf3a9e49379af39da58eb60657e2a0b).
 
 **Do not deploy this branch as a production approval authority.** It does not
 contain PR #54's sandbox candidate/trusted-floor enforcement. PR #54 must first
@@ -67,10 +67,7 @@ recovery or independent S3 audit custody.
 
 ## Container requirements
 
-The Docker image installs the `audit-s3` extra so `boto3` is present. The
-server binds to Render's `PORT` environment variable, falling back to 10000
-for local use. The container runs Uvicorn as PID 1 through a shell command;
-graceful signal forwarding/shutdown must be tested before release.
+The Docker image installs the `audit-s3` extra and declares Uvicorn as a runtime dependency. It binds to Render's `PORT` environment variable, falling back to 10000 for local use. A small root bootstrap adjusts ownership of only the mounted data-root directory, then drops to UID/GID 10001 and uses `exec` to make Uvicorn PID 1. It never recursively changes existing data ownership. Verify the actual mounted-disk ownership and unprivileged process identity in a non-production service before release.
 
 ## Environment variables
 
@@ -140,7 +137,7 @@ All gates below are required before any live deployment:
    against the exact proposed deployment commit.
 3. Validate `render.yaml` using current Render Blueprint validation; this
    branch has not yet been applied or synced to Render.
-4. Verify `/healthz` liveness and `/readyz` fail-closed behavior using
+4. Verify `/healthz` persistent-mount gating and `/readyz` fail-closed behavior using
    synthetic configuration and temporary storage.
 5. Prove all legacy and sandbox records, logs, notes and SQLite state are
    written beneath the mounted disk; restart and redeploy in a non-production
