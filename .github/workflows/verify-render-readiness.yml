@@ -6,6 +6,11 @@ on:
       - deploy/github-practice-ai-render-readiness
     paths:
       - .github/workflows/verify-render-readiness.yml
+      - Dockerfile
+      - pyproject.toml
+      - scripts/**
+      - stage2_sdk_ai/**
+      - tests/**
 
 permissions:
   contents: read
