@@ -316,11 +316,14 @@ Acceptance tests:
 1. The application obtains credentials through the owner-approved,
    rotatable delivery mechanism; no operator publishing credentials are
    available to the API process.
-2. The application identity can perform s3:GetObject on the exact candidate
-   and trusted-floor object ARNs.
+2. The application identity can perform s3:GetObject on the exact
+   trusted-floor manifest ARN and s3:GetObjectVersion on the exact candidate
+   checkpoint object ARN.
 3. The application identity is denied s3:ListBucket, s3:PutObject,
-   s3:DeleteObject, version deletion, bucket-policy changes and IAM
-   administration.
+   s3:DeleteObject, s3:DeleteObjectVersion, bucket-policy changes and IAM
+   administration. The candidate VersionId and content identity are pinned in
+   the trusted-floor manifest; manifest rollback remains an operator-retention
+   and custody control.
 4. The separate operator identity can perform only the documented checkpoint
    publication/advancement workflow and is not present in application
    environment variables or process credentials.
@@ -329,6 +332,24 @@ Acceptance tests:
 6. Evidence includes the effective IAM policy, identity, exact object ARNs,
    positive and negative API tests, rotation result and operator review record.
 
+
+### F-DEP-10 — Medium: validate Blueprint changes in exact-source CI
+
+**Status:** Workflow coverage and official Render CLI validation added on this
+branch; exact-head workflow result pending.
+
+The exact-SHA readiness workflow now runs when `render.yaml`, `docs/**`,
+`SECURITY_LIMITATIONS.md`, source, tests, or the workflow itself changes. It
+installs a checksum-verified, pinned Render CLI release and runs
+`render blueprints validate render.yaml`. This validates Blueprint structure
+and platform semantics without syncing a Blueprint or creating resources.
+
+Acceptance evidence:
+
+1. A change to `render.yaml` or `docs/**` triggers the exact-SHA workflow.
+2. The pinned Render CLI archive passes its SHA-256 check.
+3. `render blueprints validate render.yaml` succeeds on the exact branch SHA.
+4. The workflow performs no Blueprint sync, resource creation or deployment.
 ### F-DEP-05 — Medium: prove complete persistent-storage coverage
 
 **Status:** Code-path review completed; integration proof pending.
