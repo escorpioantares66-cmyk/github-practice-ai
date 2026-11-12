@@ -789,7 +789,14 @@ def create_request(
         "audit_status": "pending",
     }
     with _locked(_record_path(approval_id)):
-        _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
+        try:
+            _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
+        except Exception:
+            try:
+                _record_path(approval_id).unlink()
+            except OSError:
+                pass
+            raise
         _save(approval_id, record)
         try:
             _append_audit(
@@ -844,7 +851,7 @@ def decide(
         raise SandboxApprovalError("Invalid decision")
     path = _record_path(approval_id)
     with _locked(path):
-        _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
+        _verify_independent_audit_checkpoint()
         record = _reconcile_pending_audit(
             approval_id, _load(approval_id)
         )
@@ -880,6 +887,7 @@ def decide(
             record["created_at"] > current + MAX_CLOCK_SKEW_SECONDS
             or record["expires_at"] <= current
         ):
+            _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
             record["status"] = "expired"
             record["decision"] = "expired"
             record["audit_status"] = "pending"
@@ -890,6 +898,7 @@ def decide(
             raise SandboxApprovalConflict("Approval request expired")
         if approver == record["requester"]:
             raise SandboxApprovalForbidden("Self-approval is forbidden")
+        _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
         record["approver"] = approver
         record["decision"] = decision
         record["status"] = decision
@@ -1000,7 +1009,7 @@ def consume(
     ).hexdigest()
     path = _record_path(approval_id)
     with _locked(path):
-        _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
+        _verify_independent_audit_checkpoint()
         record = _reconcile_pending_audit(
             approval_id, _load(approval_id)
         )
@@ -1151,6 +1160,7 @@ def consume(
             "request_id": normalized_request_id,
             "payload_sha256": fingerprint,
         }
+        _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
         record["status"] = "consumed"
         record["audit_status"] = "pending"
         record["consumption"] = {

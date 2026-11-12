@@ -169,11 +169,13 @@ controls.
 
 The suffix is a deliberate risk budget, not a claim that unanchored events are
 tamper-proof. A configured maximum of N permits at most N audit events after
-the candidate checkpoint to remain outside the anchored prefix. Each
-state-changing operation reserves one event before it begins, so a mutation
-that would take the suffix beyond N is rejected before the record changes.
-Read-only inspection and decision retrieval do not reserve an event and remain
-available at the configured cap.
+the candidate checkpoint to remain outside the anchored prefix. Each state-changing operation reserves one event immediately before its
+record transition and audit append, after authentication, state validation and
+idempotency checks. A mutation that would take the suffix beyond N is rejected
+before the record changes. An identical, already-proven consume retry does not
+append a new event and does not consume another suffix slot. Read-only
+inspection and decision retrieval do not reserve an event and remain available
+at the configured cap.
 
 A maximum of zero is an explicit stop for state-changing approval operations:
 no mutation can append an event without creating an unanchored suffix. For the

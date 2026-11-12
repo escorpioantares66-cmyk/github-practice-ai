@@ -1931,3 +1931,90 @@ else:
     assert reconciled["status"] == expected_status
     assert reconciled["audit_status"] == "pending"
     assert sandbox_approval.verify_audit_log()["events"] == expected_events
+
+
+def test_decision_reserves_suffix_capacity_before_changing_record(
+    authority, scope, monkeypatch
+):
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX", "1")
+    created = _create(authority, scope)
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="reserved transition event",
+    ):
+        _approve(created)
+    record = sandbox_approval._load(created["approval_id"])
+    assert record["status"] == "pending"
+    assert record["audit_status"] == "written"
+    assert sandbox_approval.verify_audit_log()["events"] == 1
+
+
+def test_consumption_reserves_suffix_capacity_before_changing_record(
+    authority, scope, monkeypatch
+):
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX", "2")
+    created = _create(authority, scope)
+    nonce = _approve(created)["receipt"]["claims"]["nonce"]
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="reserved transition event",
+    ):
+        sandbox_approval.consume(
+            created["approval_id"],
+            requester="automation",
+            request_id=str(uuid.uuid4()),
+            nonce=nonce,
+            scope=scope,
+        )
+    record = sandbox_approval._load(created["approval_id"])
+    assert record["status"] == "approved"
+    assert record["audit_status"] == "written"
+    assert sandbox_approval.verify_audit_log()["events"] == 2
+
+
+def test_consumption_idempotent_retry_succeeds_at_suffix_cap(
+    authority, scope, monkeypatch
+):
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX", "3")
+    created = _create(authority, scope)
+    nonce = _approve(created)["receipt"]["claims"]["nonce"]
+    request_id = str(uuid.uuid4())
+    original = sandbox_approval.consume(
+        created["approval_id"],
+        requester="automation",
+        request_id=request_id,
+        nonce=nonce,
+        scope=scope,
+    )
+    assert sandbox_approval.verify_audit_log()["events"] == 3
+    retried = sandbox_approval.consume(
+        created["approval_id"],
+        requester="automation",
+        request_id=request_id,
+        nonce=nonce,
+        scope=scope,
+    )
+    assert retried == original
+    assert sandbox_approval.verify_audit_log()["events"] == 3
+
+
+def test_create_checkpoint_loss_after_record_lock_leaves_no_empty_record(
+    authority, scope, monkeypatch
+):
+    original_locked = sandbox_approval._locked
+    fake_s3 = sandbox_approval._test_checkpoint_store
+
+    @contextmanager
+    def unavailable_after_lock(path):
+        with original_locked(path):
+            fake_s3.unavailable = True
+            yield
+
+    monkeypatch.setattr(sandbox_approval, "_locked", unavailable_after_lock)
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="Independent sandbox audit checkpoint verification failed",
+    ):
+        _create(authority, scope)
+    assert list((authority / "sandbox-approvals").glob("*.json")) == []
+    assert sandbox_approval.verify_audit_log()["events"] == 0
