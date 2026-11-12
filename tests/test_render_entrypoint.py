@@ -21,10 +21,11 @@ def _mock_data_root_stat(monkeypatch):
 
 def test_root_bootstrap_clears_groups_then_drops_privileges(monkeypatch, tmp_path):
     calls = []
+    effective_ids = {"uid": 0, "gid": 0}
     monkeypatch.setenv("APP_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("PORT", "10000")
-    monkeypatch.setattr(os, "geteuid", lambda: 0)
-    monkeypatch.setattr(os, "getegid", lambda: 10001)
+    monkeypatch.setattr(os, "geteuid", lambda: effective_ids["uid"])
+    monkeypatch.setattr(os, "getegid", lambda: effective_ids["gid"])
     monkeypatch.setattr(os, "getgroups", lambda: [])
     _mock_data_root_stat(monkeypatch)
     monkeypatch.setattr(
@@ -36,8 +37,17 @@ def test_root_bootstrap_clears_groups_then_drops_privileges(monkeypatch, tmp_pat
     monkeypatch.setattr(
         os, "chmod", lambda path, mode: calls.append(("chmod", mode))
     )
-    monkeypatch.setattr(os, "setgid", lambda gid: calls.append(("setgid", gid)))
-    monkeypatch.setattr(os, "setuid", lambda uid: calls.append(("setuid", uid)))
+
+    def setgid(gid):
+        calls.append(("setgid", gid))
+        effective_ids["gid"] = gid
+
+    def setuid(uid):
+        calls.append(("setuid", uid))
+        effective_ids["uid"] = uid
+
+    monkeypatch.setattr(os, "setgid", setgid)
+    monkeypatch.setattr(os, "setuid", setuid)
     monkeypatch.setattr(
         os, "execvpe", lambda *args: calls.append(("exec", args[0]))
     )
