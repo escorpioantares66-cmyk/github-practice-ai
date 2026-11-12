@@ -335,21 +335,25 @@ Acceptance tests:
 
 ### F-DEP-10 — Medium: validate Blueprint changes in exact-source CI
 
-**Status:** Workflow coverage and official Render CLI validation added on this
-branch; exact-head workflow result pending.
+**Status:** Exact-SHA workflow path coverage and public Blueprint JSON Schema
+validation added; exact-head result pending. Render CLI/API semantic validation
+is not run in CI because it requires a configured workspace/API context that
+has not been authorized or connected.
 
 The exact-SHA readiness workflow now runs when `render.yaml`, `docs/**`,
 `SECURITY_LIMITATIONS.md`, source, tests, or the workflow itself changes. It
-installs a checksum-verified, pinned Render CLI release and runs
-`render blueprints validate render.yaml`. This validates Blueprint structure
-and platform semantics without syncing a Blueprint or creating resources.
+installs pinned `check-jsonschema` and validates `render.yaml` against Render's
+public JSON Schema. This checks YAML structure, required fields and types
+without workspace credentials, syncing a Blueprint or creating resources.
 
 Acceptance evidence:
 
 1. A change to `render.yaml` or `docs/**` triggers the exact-SHA workflow.
-2. The pinned Render CLI archive passes its SHA-256 check.
-3. `render blueprints validate render.yaml` succeeds on the exact branch SHA.
+2. The pinned schema validator installs successfully.
+3. Public Render Blueprint JSON Schema validation succeeds on the exact branch SHA.
 4. The workflow performs no Blueprint sync, resource creation or deployment.
+5. Render CLI/API semantic validation remains a separate workspace-authorized
+   check before any Blueprint sync.
 ### F-DEP-05 — Medium: prove complete persistent-storage coverage
 
 **Status:** Code-path review completed; integration proof pending.
