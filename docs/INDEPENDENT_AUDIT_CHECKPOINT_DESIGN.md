@@ -1,12 +1,12 @@
-# Independent audit checkpoint: local candidate design
+# Independent audit checkpoint design: S3 sandbox enforcement
 
 ## Decision status
 
-**Design and proof-of-boundary only. Not implemented as an operational dependency. Not enabled.**
+**Sandbox v1 integration implemented on the PR #54 feature branch; operational custody and deployment are not yet verified.**
 
-The current approval workflows continue to use their existing audit verification behavior. No approval, denial, consumption, execution, or sandbox lifecycle operation is changed by this design record.
+The sandbox approval lifecycle now requires read-only retrieval and verification of an independently retained S3 candidate checkpoint and operator-accepted trusted floor before create, decide, inspect, decision retrieval or consume operations. Missing configuration, unavailable custody, rollback or policy failure pauses the operation. The main approval audit's existing S3 helper remains optional and is not changed by this sandbox integration. No production S3 bucket, IAM policy, operator identity or runtime configuration is provisioned by this code change.
 
-The initial zero-cost candidate is a local checkpoint file controlled by a separate operator identity on a Linux host. It is not a second directory owned by the application account.
+The local operator-owned filesystem checkpoint described in the original proposal is superseded for the PR #54 sandbox integration by the S3 candidate/trusted-floor design. The Linux two-UID test remains evidence for that filesystem proof only; it is not evidence of S3 IAM or production custody.
 
 ## Current implementation findings
 
@@ -21,43 +21,26 @@ The initial zero-cost candidate is a local checkpoint file controlled by a separ
 ### Sandbox approval audit
 
 - `sandbox_approval.verify_audit_log()` verifies only the local sandbox audit hash chain.
-- Sandbox approval lifecycle operations have no independent checkpoint retrieval or comparison path.
-- Its chain has its own event sequence and last hash, so it needs a distinct authority identifier and checkpoint state. A main-approval checkpoint must never be accepted for the sandbox log, or vice versa.
+- The sandbox chain has its own event sequence and last hash, so it requires a distinct authority identifier and checkpoint state. A main-approval checkpoint must never be accepted for the sandbox log, or vice versa.
+- PR #54 wires the existing versioned checkpoint envelope and policy verifier to separate S3 candidate and trusted-floor objects for the sandbox authority. The application reads both objects; operator credentials publish them.
+- Runtime operation requires an operator-provisioned store ID, S3 bucket and object keys, explicit maximum checkpoint age and maximum unanchored suffix. These values have no code defaults and missing configuration fails closed.
 
 ### Storage boundary
 
-The existing private-storage helpers require files and directories to be owned by the effective application UID and use owner-only permissions. They are appropriate for application-owned private data, but cannot directly read a checkpoint owned by a separate operator UID.
+The existing private-storage helpers protect the local file-backed audit store. They do not establish the independent checkpoint boundary. For PR #54, that boundary is a separately administered S3 bucket and operator identity; a separate object key or directory under the same application credentials is not independent custody.
 
-The current Termux environment uses one Android application identity for both the application process and operator activity. A different local path under that identity does not provide a separate authorization boundary.
+## Current S3 trust boundary
 
-## Candidate threat model
+The PR #54 sandbox integration reads two distinct S3 objects before every lifecycle operation:
 
-The local candidate can protect against an attacker who has compromised the application process or application UID but has not compromised the operator UID or host root.
+- **Candidate checkpoint:** an immutable S3 object version containing the operator-published statement of the sandbox audit head.
+- **Trusted-floor manifest:** the last checkpoint explicitly accepted by the operator, plus the exact candidate S3 VersionId and its checkpoint ID, sequence, head hash and creation time.
 
-It does **not** protect against:
-- host root or kernel compromise;
-- compromise of the operator account or its credentials;
-- physical access that permits booting or modifying the host outside the operating system controls;
-- a malicious operator advancing the checkpoint after approving a rewritten history.
+The application retrieves the candidate using the exact VersionId pinned in the manifest; it does not trust the mutable latest-object pointer. The application role needs s3:GetObject on the manifest and s3:GetObjectVersion on the candidate object, with no write, delete, list or IAM administration permissions. Publication and manifest/floor advancement use separate operator credentials. The code does not provision the bucket, IAM policy, operator identity, version retention, backup process, or runtime policy values.
 
-The operator identity, its login path, and its ability to publish checkpoint updates are part of the trusted computing base. If the application and operator share a UID, the candidate is rejected as non-independent.
+This boundary assumes the AWS account, operator identity, and host/runtime remain trusted. It does not protect against compromise of an administrator able to replace or delete both trust anchors, compromise of the operator credentials, host root/kernel compromise, or loss of every independent trusted-floor copy. S3 versioning alone is not immutable retention against an administrator with version-delete privileges.
 
-## Candidate filesystem layout and permissions
-
-On a Linux host only, the proposed layout is:
-
-- a dedicated operator-owned checkpoint directory;
-- directory owner: operator UID; directory group: a read-only group containing the application UID; mode `0750`;
-- checkpoint file owner: operator UID; group: the same read-only application group; mode `0640`;
-- no group or other write permission on either directory or file;
-- application process receives read access only to the exact checkpoint file;
-- application process is not a member of any group with write access to the checkpoint path;
-- operator publishes updates through a same-directory temporary file, fsync, atomic rename, and directory fsync;
-- the application never creates, repairs, rotates, replaces, or deletes checkpoint files.
-
-The path must be provisioned by the operator before the application starts. Application startup must not create missing checkpoint directories or files. Symlinks, non-regular files, unexpected ownership, unexpected modes, extra hard links, and writable ancestors must be rejected.
-
-This permission model is only a candidate until a real two-UID integration test proves that the application UID can read but cannot create, replace, rename, chmod, or delete the checkpoint.
+The original local operator-owned filesystem proposal is retained only as historical design context; it is not the implemented PR #54 checkpoint transport. The Linux two-UID proof does not establish the S3/IAM boundary.
 
 ## Checkpoint envelope
 
@@ -69,7 +52,7 @@ Use a strict, versioned envelope with exact fields:
 - `sequence`: the authority-specific sequence number;
 - `head_hash`: SHA-256 hash at that sequence;
 - `legacy_entries`: main approval legacy-prefix count; zero for the sandbox authority;
-- `created_at`: operator publication time in UTC epoch seconds;
+- `created_at`: checkpoint snapshot creation time in UTC epoch seconds;
 - `checkpoint_id`: unique publication identifier.
 
 Reject duplicate JSON keys, unknown or missing fields, booleans in integer fields, invalid hashes, non-finite timestamps, invalid authority/store identifiers, and files above a small fixed size limit. The two authorities must use separate checkpoint files or separately keyed envelopes and must never share sequence state.
@@ -89,27 +72,29 @@ Therefore:
 3. The operational policy must define a maximum unanchored suffix and publication cadence before any enforcement decision.
 4. If exact current-head anchoring is required for every approval-sensitive operation, the checkpoint must match the current head. A manual operator publication process cannot provide this continuously without blocking operations between publications.
 5. A stale or lower-sequence checkpoint must not be replaced automatically. Checkpoint rollback or unexplained sequence regression requires operator investigation.
-6. A local file alone cannot prove its own monotonic history against an operator/root attacker who can restore an older file. The trust claim is limited to the application-UID threat model.
+6. The trusted-floor manifest pins the candidate's exact S3 VersionId and content identity. The application requests that exact version, so changing the mutable latest pointer or replacing the latest candidate cannot silently substitute an older candidate. The manifest itself remains an operator-controlled trust anchor; rollback or replacement of the manifest is outside the application's authority and must be addressed through operator IAM, version retention, Object Lock/retention policy where appropriate, and external recovery evidence.
 
 No freshness duration or publication cadence is selected in this document. That requires an explicit operational decision based on the expected approval volume and acceptable unanchored suffix.
 
-## Publication and recovery protocol
+## S3 publication and recovery protocol
 
-1. The operator reads and verifies the complete relevant audit history using the authority-specific verifier.
+1. The operator reads and verifies the complete sandbox audit history using the authority-specific verifier.
 2. The operator reviews the current head and any unresolved integrity/recovery findings.
-3. The operator exports a checkpoint for that exact authority, store, sequence, and head hash.
-4. The operator validates the exported envelope and publishes it atomically to the operator-owned read-only path.
-5. The operator confirms ownership, group, modes, file identity, and the published content after replacement.
-6. The application reads the checkpoint without write capability and compares it with the correct audit history.
-7. If the checkpoint is missing, unreadable, malformed, stale under the eventual policy, rolled back, or inconsistent, the system reports an integrity failure. It does not generate a replacement.
-8. Recovery preserves all audit bytes and checkpoint artifacts. An operator investigates from the last known trusted checkpoint, verifies archived segments and active history, and records the recovery decision before publishing any new checkpoint.
-9. If the trusted checkpoint is lost and no independently retained copy exists, the history cannot be silently re-established as trusted by exporting the current head. That would bless potentially rewritten history.
+3. The application identity emits an in-memory candidate for the exact authority, store, sequence and head hash.
+4. The operator independently reviews the candidate and publishes it as a new version of the candidate S3 object using the separate operator AWS identity.
+5. The operator captures the returned VersionId and updates the trusted-floor manifest with that exact VersionId and the candidate's checkpoint ID, sequence, head hash and creation time. The application retrieves that exact version with s3:GetObjectVersion. Until the manifest update succeeds, the application continues using the previous pinned version and the suffix/freshness policy may pause operations.
+6. The trusted-floor checkpoint fields are advanced only after explicit operator acceptance. The application role retrieves the manifest and pinned candidate version and compares both with the local audit history. The application cannot publish or advance either object.
+7. If either object is missing, unreadable, malformed, stale, rolled back or inconsistent, the system reports an integrity failure. It does not generate a replacement.
+8. Recovery preserves all audit bytes, S3 object versions and external investigation evidence. An operator investigates from the last known trusted floor, verifies archived segments and active history, and records the recovery decision before publishing any new candidate/floor pair.
+9. If every trusted-floor copy is lost, the history cannot be silently re-established as trusted by exporting the current head. That would bless potentially rewritten history.
 
-Crash tests must cover interruption before temporary-file fsync, after file fsync but before rename, after rename but before directory fsync, and after publication but before operator confirmation. Recovery must distinguish an old valid checkpoint from a newly published but durability-uncertain checkpoint. It must never infer success from a partially completed publication.
+The current integration pins candidate S3 object-version IDs in the trusted-floor manifest and requests the exact version on every verification. The manifest itself is not immutable by code; bucket versioning, retention, IAM, protection against manifest rollback and separate operator custody must therefore be independently verified. This remains an operational gate, not a code-level PASS. A lifecycle operation uses the manifest version it read at the start of verification. A concurrent manifest update does not cancel an operation already in flight; strict cutover or emergency revocation requires pausing approval routes and draining in-flight operations before publishing the new manifest.
 
-## Proof gates before implementation can be considered independent
+## Historical filesystem-candidate proof gates (superseded)
 
-### Filesystem and identity proof
+The following UID and filesystem checks apply only to the earlier local-file candidate. They must not be presented as proof of the current S3 trust boundary.
+
+### Historical filesystem and identity proof
 
 - Run the application under a dedicated non-privileged UID.
 - Run checkpoint publication under a different operator UID.
@@ -119,7 +104,7 @@ Crash tests must cover interruption before temporary-file fsync, after file fsyn
 - Reject same-UID configurations and writable parent directories.
 - Repeat on the actual intended host filesystem; unit tests that run both roles as the same UID are not proof.
 
-### Integrity and policy proof
+### Integrity and policy proof for the current S3 integration
 
 For both audit authorities, test:
 - missing, malformed, duplicate-key, oversized, wrong-authority, wrong-store, and tampered checkpoints;
@@ -128,10 +113,10 @@ For both audit authorities, test:
 - altered history before the checkpoint;
 - rewritten unanchored suffix after the checkpoint, demonstrating the known detection gap;
 - stale checkpoint, sequence regression, and restoration of an older checkpoint;
-- checkpoint path symlink, hard link, ownership, group, and mode violations;
+- S3 candidate/floor object missing, malformed, wrong-version, unreadable and cross-store substitution;
 - independent checkpoint substitution between main and sandbox logs.
 
-### Recovery proof
+### Historical filesystem publication recovery proof (superseded)
 
 - Simulate each publication interruption point.
 - Preserve the prior checkpoint when publication fails.
@@ -142,13 +127,16 @@ For both audit authorities, test:
 
 ## Enforcement gate
 
-Mandatory checkpoint enforcement remains **disabled** until all of the following are true:
+For the sandbox approval API, checkpoint verification is now enforced in the PR #54 code path and missing/unavailable trust anchors fail closed. This is not evidence that the feature branch is deployed or that its external custody is provisioned. The main approval authority remains outside this enforcement change.
 
-1. The actual host provides a demonstrated application/operator UID separation.
-2. Both main and sandbox audit authorities have authority-specific checkpoint verification.
-3. The accepted freshness and unanchored-suffix policy is explicitly chosen.
-4. Rollback, tampering, stale/missing checkpoint, crash, and recovery tests pass.
-5. The full CI matrix and coverage gate pass.
-6. A human reviews the security boundary and approves a separate enforcement change.
+Before sandbox F-03 can be considered operationally closed, all of the following must be true:
+
+1. The actual deployment has a separately administered checkpoint bucket and operator identity.
+2. The application role is proven read-only for the exact candidate and trusted-floor objects.
+3. The stable store ID and explicit freshness/unanchored-suffix policy are selected and configured.
+4. The initial candidate and trusted floor are reviewed and independently published.
+5. Rollback, tampering, stale/missing checkpoint, S3 outage, crash and recovery tests pass against the intended storage boundary.
+6. The deployed runtime configuration is independently verified.
+7. A human reviews the security boundary and the owner accepts the remaining operational risks.
 
 This design record does not authorize a deployment, account provisioning, paid service, destructive rotation, audit truncation, or a change to the Cloudflare prototype.

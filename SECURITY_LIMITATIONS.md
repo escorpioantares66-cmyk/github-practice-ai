@@ -121,3 +121,48 @@ single-host only; do not share the approval directory over NFS or across
 independent hosts. It is not a multi-host or highly available authorization
 service. See docs/sandbox-approval-authority.md for the full API, configuration
 and key-rotation contract.
+
+
+## Sandbox approval credential assurance and audit recovery
+
+The versioned sandbox approval API accepts only explicitly named requester and
+approver principals with secrets of at least 32 ASCII characters. Operators must generate
+independent random values and protect their custody. The parser rejects malformed or duplicate entries and rejects a
+secret reused across requester and approver roles. These are machine-enforced
+credential requirements; the configured principal name remains an operator-
+assigned label and does not prove a natural person's identity or MFA status.
+
+Credential custody, independent human approver identity, step-up authentication,
+and verified revocation procedures must be established before production
+approval workflows. See `docs/sandbox-approval-authority.md`.
+
+The authority reconciles a record whose audit completion marker was not saved
+only when the durable hash-chained audit proves the exact expected lifecycle
+and matches the record's scope, actors, receipt and consumption details. Missing
+or conflicting evidence remains fail-closed.
+
+Sandbox approval lifecycle operations additionally require an independently
+retained S3 checkpoint and operator-accepted trusted floor. The application
+role retrieves both objects and verifies the sandbox authority, store identity,
+sequence, head hash, checkpoint age and maximum unanchored suffix before
+creating, deciding, inspecting, retrieving or consuming an approval. Missing
+configuration, unavailable S3 custody, a stale or conflicting checkpoint, or
+an audit rollback pauses approval operations for operator review. The
+application role must have `s3:GetObject` access to the exact trusted-floor
+manifest and `s3:GetObjectVersion` access to the exact candidate object ARN;
+it must not have write, delete, list or IAM administration permissions. The
+manifest pins the candidate VersionId and checkpoint content identity, so the
+application retrieves that exact version rather than trusting the mutable
+latest-object pointer. Checkpoint publication and manifest/floor advancement
+use separate operator credentials. The application never creates, advances,
+repairs or replaces these trust anchors.
+
+The checkpoint and floor are not provisioned by this code change. Operators
+must establish the bucket, read-only application IAM policy, independent
+operator custody, stable sandbox store ID, maximum checkpoint age, maximum
+unanchored suffix and initial reviewed checkpoint before enabling the service.
+The values are required configuration with no code defaults. See
+`docs/SANDBOX_AUDIT_CHECKPOINT_RUNBOOK.md`. Until this external custody and
+runtime configuration are verified, this is implementation evidence rather
+than proof of a live deployment. The authority remains single-host and
+file-backed, not a multi-host transactional service.

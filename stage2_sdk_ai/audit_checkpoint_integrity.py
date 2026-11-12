@@ -317,6 +317,13 @@ _FLOOR_FIELDS = {
     "created_at",
     "checkpoint_id",
 }
+_CANDIDATE_PIN_FIELDS = {
+    "candidate_version_id",
+    "candidate_checkpoint_id",
+    "candidate_sequence",
+    "candidate_head_hash",
+    "candidate_created_at",
+}
 
 def validate_trusted_checkpoint_floor(
     floor: Any,
@@ -326,7 +333,10 @@ def validate_trusted_checkpoint_floor(
 ) -> dict[str, Any]:
     """Validate the last operator-accepted checkpoint retained independently."""
     _validate_identity(authority, store_id)
-    if not isinstance(floor, dict) or set(floor) != _FLOOR_FIELDS:
+    if not isinstance(floor, dict) or set(floor) not in (
+        _FLOOR_FIELDS,
+        _FLOOR_FIELDS | _CANDIDATE_PIN_FIELDS,
+    ):
         raise AuditCheckpointIntegrityError(
             "trusted checkpoint floor has an invalid schema"
         )
@@ -348,6 +358,32 @@ def validate_trusted_checkpoint_floor(
         raise AuditCheckpointIntegrityError(
             "trusted checkpoint floor contains invalid fields"
         )
+    if _CANDIDATE_PIN_FIELDS.issubset(floor):
+        version_id = floor["candidate_version_id"]
+        candidate_sequence = floor["candidate_sequence"]
+        if (
+            not isinstance(version_id, str)
+            or not version_id
+            or version_id == "null"
+            or len(version_id) > 1024
+            or any(ord(char) < 0x21 or ord(char) > 0x7E for char in version_id)
+            or not isinstance(floor["candidate_checkpoint_id"], str)
+            or not _CHECKPOINT_ID_RE.fullmatch(floor["candidate_checkpoint_id"])
+            or isinstance(candidate_sequence, bool)
+            or not isinstance(candidate_sequence, int)
+            or candidate_sequence < floor["sequence"]
+            or not isinstance(floor["candidate_head_hash"], str)
+            or not _HASH_RE.fullmatch(floor["candidate_head_hash"])
+            or not _positive_finite_timestamp(floor["candidate_created_at"])
+        ):
+            raise AuditCheckpointIntegrityError(
+                "trusted checkpoint candidate pin contains invalid fields"
+            )
+        if authority == SANDBOX_AUTHORITY and candidate_sequence == 0:
+            if floor["candidate_head_hash"] != "0" * 64:
+                raise AuditCheckpointIntegrityError(
+                    "empty sandbox candidate pin has an invalid head hash"
+                )
     if authority == SANDBOX_AUTHORITY:
         if floor["legacy_entries"] != 0:
             raise AuditCheckpointIntegrityError(
@@ -368,6 +404,8 @@ def verify_checkpoint_with_policy(
     now: float,
     max_age_seconds: float,
     max_unanchored_suffix: int,
+    reserve_unanchored_events: int = 0,
+    candidate_version_id: str | None = None,
 ) -> dict[str, Any]:
     """Verify a checkpoint against audit history, freshness, and an operator floor.
 
@@ -393,10 +431,29 @@ def verify_checkpoint_with_policy(
         raise AuditCheckpointPolicyError(
             "maximum unanchored suffix must be a non-negative integer"
         )
+    if (
+        isinstance(reserve_unanchored_events, bool)
+        or not isinstance(reserve_unanchored_events, int)
+        or reserve_unanchored_events < 0
+    ):
+        raise AuditCheckpointPolicyError(
+            "reserved unanchored event count must be a non-negative integer"
+        )
 
     floor = validate_trusted_checkpoint_floor(
         trusted_floor, authority=authority, store_id=store_id
     )
+    if candidate_version_id is not None:
+        if (
+            not isinstance(candidate_version_id, str)
+            or not candidate_version_id
+            or candidate_version_id == "null"
+            or candidate_version_id != floor.get("candidate_version_id")
+            or checkpoint is None
+        ):
+            raise AuditCheckpointRollbackError(
+                "candidate S3 object version does not match the trusted operator pin"
+            )
     if isinstance(checkpoint, (bytes, str)):
         envelope = parse_checkpoint(
             checkpoint, authority=authority, store_id=store_id
@@ -408,6 +465,15 @@ def verify_checkpoint_with_policy(
 
     candidate_sequence = envelope["sequence"]
     floor_sequence = floor["sequence"]
+    if candidate_version_id is not None and (
+        envelope["checkpoint_id"] != floor.get("candidate_checkpoint_id")
+        or candidate_sequence != floor.get("candidate_sequence")
+        or envelope["head_hash"] != floor.get("candidate_head_hash")
+        or envelope["created_at"] != floor.get("candidate_created_at")
+    ):
+        raise AuditCheckpointRollbackError(
+            "candidate checkpoint content does not match the trusted S3 version pin"
+        )
     if candidate_sequence < floor_sequence:
         raise AuditCheckpointRollbackError(
             "checkpoint sequence regressed behind the trusted operator floor"
@@ -448,9 +514,13 @@ def verify_checkpoint_with_policy(
     age_seconds = now - envelope["created_at"]
     if age_seconds > max_age_seconds:
         raise AuditCheckpointPolicyError("checkpoint is older than the permitted age")
-    if verification["unanchored_suffix"] > max_unanchored_suffix:
+    if (
+        verification["unanchored_suffix"] + reserve_unanchored_events
+        > max_unanchored_suffix
+    ):
         raise AuditCheckpointPolicyError(
-            "unanchored audit suffix exceeds the permitted event limit"
+            "unanchored audit suffix plus reserved transition event "
+            "exceeds the permitted event limit"
         )
 
     return {
@@ -459,7 +529,9 @@ def verify_checkpoint_with_policy(
         "freshness_age_seconds": age_seconds,
         "max_age_seconds": max_age_seconds,
         "max_unanchored_suffix": max_unanchored_suffix,
+        "reserved_unanchored_events": reserve_unanchored_events,
         "trusted_floor_sequence": floor_sequence,
         "trusted_floor_verified": True,
         "trusted_floor_unanchored_suffix": floor_verification["unanchored_suffix"],
+        "candidate_version_pinned": candidate_version_id is not None,
     }

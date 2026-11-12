@@ -1,18 +1,32 @@
 """Security and recovery tests for the external sandbox approval authority."""
+import base64
+import errno
 import hashlib
+import io
 import json
+import os
+import subprocess
+import sys
+import types
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
-from stage2_sdk_ai import auth, sandbox_approval
+from stage2_sdk_ai import (
+    audit_checkpoint_integrity,
+    audit_checkpoint_store,
+    auth,
+    sandbox_approval,
+)
 from stage2_sdk_ai.api import app
 
-REQUESTER_KEY = "sandbox-requester-secret"
-APPROVER_KEY = "sandbox-approver-secret"
+REQUESTER_KEY = "sandbox-requester-secret-for-tests-00000000000000000001"
+APPROVER_KEY = "sandbox-approver-secret-for-tests-00000000000000000002"
 ISSUER = "github-practice-ai"
 AUDIENCE = "second-brain"
 
@@ -44,13 +58,82 @@ def _configure_keys(monkeypatch, active_kid="key-1"):
 
 @pytest.fixture
 def authority(monkeypatch, tmp_path):
-    monkeypatch.setenv("SANDBOX_APPROVALS_DIR", str(tmp_path / "sandbox-approvals"))
+    store_dir = tmp_path / "sandbox-approvals"
+    store_dir.mkdir(mode=0o700)
+    os.chmod(store_dir, 0o700)
+    audit_path = store_dir / "audit.jsonl"
+    audit_path.touch(mode=0o600)
+    os.chmod(audit_path, 0o600)
+    monkeypatch.setenv("SANDBOX_APPROVALS_DIR", str(store_dir))
     monkeypatch.setenv("SANDBOX_APPROVAL_ISSUER", ISSUER)
     monkeypatch.setenv("SANDBOX_APPROVAL_AUDIENCE", AUDIENCE)
     monkeypatch.setenv("AGENT_API_KEYS", f"automation={REQUESTER_KEY}")
     monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={APPROVER_KEY}")
+    monkeypatch.setenv("AGENT_AUDIT_CHECKPOINT_S3_BUCKET", "synthetic-audit-bucket")
+    monkeypatch.setenv(
+        "AGENT_SANDBOX_AUDIT_CHECKPOINT_S3_KEY",
+        "audit-checkpoints/sandbox/latest.json",
+    )
+    monkeypatch.setenv(
+        "AGENT_SANDBOX_AUDIT_CHECKPOINT_FLOOR_S3_KEY",
+        "audit-checkpoints/sandbox/trusted-floor.json",
+    )
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_STORE_ID", "sandbox-contract-test-store")
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_CHECKPOINT_MAX_AGE_SECONDS", "86400")
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX", "1000")
     _configure_keys(monkeypatch)
+
+    envelope = audit_checkpoint_integrity.create_checkpoint_envelope(
+        audit_checkpoint_integrity.SANDBOX_AUTHORITY,
+        "sandbox-contract-test-store",
+    )
+    candidate_key = "audit-checkpoints/sandbox/latest.json"
+    candidate_version_id = "synthetic-candidate-version-1"
+    floor_fields = {
+        "authority", "store_id", "sequence", "head_hash",
+        "legacy_entries", "created_at", "checkpoint_id",
+    }
+    floor = {key: envelope[key] for key in floor_fields}
+    floor.update({
+        "candidate_version_id": candidate_version_id,
+        "candidate_checkpoint_id": envelope["checkpoint_id"],
+        "candidate_sequence": envelope["sequence"],
+        "candidate_head_hash": envelope["head_hash"],
+        "candidate_created_at": envelope["created_at"],
+    })
+
+    class FakeS3:
+        def __init__(self):
+            self.objects = {
+                candidate_key: json.dumps(envelope).encode("utf-8"),
+                "audit-checkpoints/sandbox/trusted-floor.json": json.dumps(floor).encode("utf-8"),
+            }
+            candidate_payload = self.objects[candidate_key]
+            self.version_ids = {candidate_key: candidate_version_id}
+            self.version_objects = {
+                candidate_key: {candidate_version_id: candidate_payload}
+            }
+            self.unavailable = False
+
+        def get_object(self, *, Bucket, Key, VersionId=None):
+            if self.unavailable or Bucket != "synthetic-audit-bucket" or Key not in self.objects:
+                raise OSError("synthetic checkpoint store unavailable")
+            if VersionId is not None:
+                payload = self.version_objects.get(Key, {}).get(VersionId)
+                if payload is None:
+                    raise OSError("synthetic S3 object version is unavailable")
+                actual_version = VersionId
+            else:
+                payload = self.objects[Key]
+                actual_version = self.version_ids.get(Key)
+            return {"Body": io.BytesIO(payload), "VersionId": actual_version}
+
+    fake_s3 = FakeS3()
+    monkeypatch.setitem(
+        sys.modules, "boto3", types.SimpleNamespace(client=lambda *_args, **_kwargs: fake_s3)
+    )
     monkeypatch.setattr(auth, "check_rate_limit", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(sandbox_approval, "_test_checkpoint_store", fake_s3, raising=False)
     return tmp_path
 
 
@@ -81,6 +164,144 @@ def _approve(created):
     )
 
 
+
+def test_sandbox_approval_credentials_require_named_minimum_length_principals(
+    authority, monkeypatch
+):
+    monkeypatch.setenv("AGENT_API_KEYS", "automation=short-requester")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", "reviewer=short-approver")
+    assert auth.sandbox_requester_identity("short-requester") is None
+    assert not auth.verify_sandbox_approver_key("short-approver")
+
+    requester_secret = "r" * 40
+    approver_secret = "a" * 40
+    monkeypatch.setenv("AGENT_API_KEYS", f"automation={requester_secret}")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={approver_secret}")
+    assert auth.sandbox_requester_identity(requester_secret) == "automation"
+    assert auth.verify_sandbox_approver_key(approver_secret)
+    assert auth.sandbox_approver_identity(approver_secret) == "reviewer"
+
+    # A secret duplicated across roles disables both approval principals.
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={requester_secret}")
+    assert not auth.verify_api_key(requester_secret)
+    assert not auth.verify_sandbox_approver_key(requester_secret)
+
+
+
+def test_requester_and_approver_rotation_revokes_previous_credentials(
+    authority, monkeypatch
+):
+    old_requester = REQUESTER_KEY
+    old_approver = APPROVER_KEY
+    new_requester = "new-requester-secret-for-rotation-tests-000000000001"
+    new_approver = "new-approver-secret-for-rotation-tests-000000000002"
+
+    monkeypatch.setenv("AGENT_API_KEYS", f"automation={old_requester}")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={old_approver}")
+    assert auth.sandbox_requester_identity(old_requester) == "automation"
+    assert auth.verify_sandbox_approver_key(old_approver)
+
+    # The single-entry named configuration is a coordinated cutover: once the
+    # replacement is active, the previous values no longer authenticate.
+    monkeypatch.setenv("AGENT_API_KEYS", f"automation={new_requester}")
+    monkeypatch.setenv("AGENT_APPROVER_KEYS", f"reviewer={new_approver}")
+    assert auth.sandbox_requester_identity(old_requester) is None
+    assert not auth.verify_api_key(old_requester)
+    assert not auth.verify_sandbox_approver_key(old_approver)
+    assert auth.sandbox_requester_identity(new_requester) == "automation"
+    assert auth.verify_sandbox_approver_key(new_approver)
+
+
+def test_request_record_reconciles_after_process_stops_after_audit_commit(
+    authority, scope, monkeypatch
+):
+    append = sandbox_approval._append_audit
+
+    def append_then_interrupt(*args, **kwargs):
+        append(*args, **kwargs)
+        raise SystemExit("simulated process termination after durable audit append")
+
+    monkeypatch.setattr(sandbox_approval, "_append_audit", append_then_interrupt)
+    with pytest.raises(SystemExit):
+        _create(authority, scope)
+    monkeypatch.setattr(sandbox_approval, "_append_audit", append)
+
+    approval_id = next(
+        path.stem for path in (authority / "sandbox-approvals").glob("*.json")
+    )
+    state = sandbox_approval.inspect(approval_id, requester="automation")
+    assert state["status"] == "pending"
+    assert state["audit_status"] == "written"
+    assert [event["action"] for event in state["audit_history"]] == [
+        "request_created"
+    ]
+
+
+def test_decision_record_reconciles_after_process_stops_after_audit_commit(
+    authority, scope, monkeypatch
+):
+    created = _create(authority, scope)
+    append = sandbox_approval._append_audit
+
+    def append_then_interrupt(*args, **kwargs):
+        append(*args, **kwargs)
+        raise SystemExit("simulated process termination after durable audit append")
+
+    monkeypatch.setattr(sandbox_approval, "_append_audit", append_then_interrupt)
+    with pytest.raises(SystemExit):
+        _approve(created)
+    monkeypatch.setattr(sandbox_approval, "_append_audit", append)
+
+    receipt = sandbox_approval.get_decision(
+        created["approval_id"], requester="automation"
+    )
+    assert receipt["claims"]["decision"] == "approved"
+    state = sandbox_approval.inspect(
+        created["approval_id"], requester="automation"
+    )
+    assert state["status"] == "approved"
+    assert state["audit_status"] == "written"
+
+
+def test_consumption_retry_recovers_after_process_stops_after_audit_commit(
+    authority, scope, monkeypatch
+):
+    created = _create(authority, scope)
+    nonce = _approve(created)["receipt"]["claims"]["nonce"]
+    request_id = str(uuid.uuid4())
+    append = sandbox_approval._append_audit
+
+    def append_then_interrupt(*args, **kwargs):
+        append(*args, **kwargs)
+        if args[1] == "consumed":
+            raise SystemExit("simulated process termination after durable audit append")
+
+    monkeypatch.setattr(sandbox_approval, "_append_audit", append_then_interrupt)
+    with pytest.raises(SystemExit):
+        sandbox_approval.consume(
+            created["approval_id"],
+            requester="automation",
+            request_id=request_id,
+            nonce=nonce,
+            scope=scope,
+        )
+    monkeypatch.setattr(sandbox_approval, "_append_audit", append)
+
+    outcome = sandbox_approval.consume(
+        created["approval_id"],
+        requester="automation",
+        request_id=request_id,
+        nonce=nonce,
+        scope=scope,
+    )
+    assert outcome["status"] == "consumed"
+    state = sandbox_approval.inspect(
+        created["approval_id"], requester="automation"
+    )
+    assert state["status"] == "consumed"
+    assert state["audit_status"] == "written"
+
+
 def test_signed_decision_is_bound_to_expected_issuer_audience_and_scope(
     authority, scope
 ):
@@ -101,6 +322,32 @@ def test_signed_decision_is_bound_to_expected_issuer_audience_and_scope(
     )
     assert not sandbox_approval.verify_receipt(
         receipt, expected_issuer=ISSUER, expected_audience="another-client"
+    )
+
+
+
+def test_receipt_verification_rejects_validly_signed_self_approval(
+    authority, scope
+):
+    receipt = _approve(_create(authority, scope))["receipt"]
+    claims = dict(receipt["claims"])
+    claims["approver"] = claims["requester"]
+    private_key = serialization.load_pem_private_key(
+        os.environ["SANDBOX_APPROVAL_SIGNING_PRIVATE_KEY"].encode("ascii"),
+        password=None,
+    )
+    signature = private_key.sign(sandbox_approval._canonical(claims))
+    self_approved = {
+        **receipt,
+        "claims": claims,
+        "signature": base64.urlsafe_b64encode(signature)
+        .decode("ascii")
+        .rstrip("="),
+    }
+    assert not sandbox_approval.verify_receipt(
+        self_approved,
+        expected_issuer=ISSUER,
+        expected_audience=AUDIENCE,
     )
 
 
@@ -465,6 +712,152 @@ def test_wrong_nonce_cannot_consume_approval(authority, scope):
         )
 
 
+
+@pytest.mark.parametrize("transition", ["request", "decision", "consumption"])
+def test_real_process_exit_after_audit_commit_recovers_exact_outcome(
+    authority, scope, transition
+):
+    created = None if transition == "request" else _create(authority, scope)
+    nonce = None
+    request_id = None
+    if transition == "consumption":
+        nonce = _approve(created)["receipt"]["claims"]["nonce"]
+        request_id = str(uuid.uuid4())
+
+    script = r"""
+import json
+import os
+import sys
+from stage2_sdk_ai import sandbox_approval
+
+# This subprocess test isolates process-crash recovery; the independent S3
+# checkpoint gate is exercised by the parent-process integration tests.
+sandbox_approval._verify_independent_audit_checkpoint = lambda **_kwargs: {}
+real_append = sandbox_approval._append_audit
+
+def append_then_exit(*args, **kwargs):
+    real_append(*args, **kwargs)
+    os._exit(86)
+
+sandbox_approval._append_audit = append_then_exit
+approval_id, transition = sys.argv[1], sys.argv[2]
+if transition == "request":
+    sandbox_approval.create_request(
+        json.loads(os.environ["TEST_APPROVAL_SCOPE"]),
+        requester="automation",
+        issuer=os.environ["SANDBOX_APPROVAL_ISSUER"],
+        audience=os.environ["SANDBOX_APPROVAL_AUDIENCE"],
+    )
+elif transition == "decision":
+    sandbox_approval.decide(
+        approval_id,
+        approver_key=os.environ["TEST_APPROVER_KEY"],
+        decision="approved",
+    )
+else:
+    sandbox_approval.consume(
+        approval_id,
+        requester="automation",
+        request_id=os.environ["TEST_REQUEST_ID"],
+        nonce=os.environ["TEST_APPROVAL_NONCE"],
+        scope=json.loads(os.environ["TEST_APPROVAL_SCOPE"]),
+    )
+"""
+    env = os.environ.copy()
+    env["TEST_APPROVER_KEY"] = APPROVER_KEY
+    env["TEST_REQUEST_ID"] = request_id or ""
+    env["TEST_APPROVAL_NONCE"] = nonce or ""
+    env["TEST_APPROVAL_SCOPE"] = json.dumps(scope)
+    approval_id = created["approval_id"] if created else "created-in-child"
+    result = subprocess.run(
+        [sys.executable, "-c", script, approval_id, transition],
+        cwd=os.getcwd(),
+        env=env,
+        check=False,
+        timeout=20,
+    )
+    assert result.returncode == 86
+
+    if transition == "request":
+        approval_files = list(
+            (authority / "sandbox-approvals").glob("*.json")
+        )
+        assert len(approval_files) == 1
+        approval_id = approval_files[0].stem
+        state = sandbox_approval.inspect(
+            approval_id, requester="automation"
+        )
+        assert state["status"] == "pending"
+        assert state["audit_status"] == "written"
+        assert [event["action"] for event in state["audit_history"]] == [
+            "request_created"
+        ]
+    elif transition == "decision":
+        receipt = sandbox_approval.get_decision(
+            created["approval_id"], requester="automation"
+        )
+        assert receipt["claims"]["decision"] == "approved"
+        state = sandbox_approval.inspect(
+            created["approval_id"], requester="automation"
+        )
+        assert state["audit_status"] == "written"
+        assert state["status"] == "approved"
+    else:
+        outcome = sandbox_approval.consume(
+            created["approval_id"],
+            requester="automation",
+            request_id=request_id,
+            nonce=nonce,
+            scope=scope,
+        )
+        assert outcome["status"] == "consumed"
+        state = sandbox_approval.inspect(
+            created["approval_id"], requester="automation"
+        )
+        assert state["audit_status"] == "written"
+        assert state["status"] == "consumed"
+
+
+def test_audit_checkpoint_detects_rollback_to_an_earlier_valid_prefix(
+    authority, scope
+):
+    created = _create(authority, scope)
+    nonce = _approve(created)["receipt"]["claims"]["nonce"]
+    sandbox_approval.consume(
+        created["approval_id"],
+        requester="automation",
+        request_id=str(uuid.uuid4()),
+        nonce=nonce,
+        scope=scope,
+    )
+    audit_state = sandbox_approval.verify_audit_log()
+    checkpoint = {
+        "sequence": audit_state["events"],
+        "head_hash": audit_state["last_hash"],
+    }
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    entries = audit_path.read_text(encoding="utf-8").splitlines()
+    audit_path.write_text("\n".join(entries[:2]) + "\n", encoding="utf-8")
+
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="truncated or diverges from checkpoint",
+    ):
+        sandbox_approval.verify_audit_log(expected_checkpoint=checkpoint)
+
+
+def test_audit_incomplete_final_record_fails_closed(authority, scope):
+    _create(authority, scope)
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    with audit_path.open("a", encoding="utf-8") as handle:
+        handle.write('{"partial":')
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="incomplete final record",
+    ):
+        sandbox_approval.verify_audit_log()
+
+
 def test_audit_chain_records_request_decision_and_consumption(authority, scope):
     created = _create(authority, scope)
     nonce = _approve(created)["receipt"]["claims"]["nonce"]
@@ -636,11 +1029,12 @@ def test_audit_history_prevents_second_approval_after_record_rollback(
     with pytest.raises(sandbox_approval.SandboxApprovalConflict):
         monkeypatch.setenv(
             "AGENT_APPROVER_KEYS",
-            f"reviewer={APPROVER_KEY},second-reviewer=second-approver-secret",
+            f"reviewer={APPROVER_KEY},"
+            "second-reviewer=sandbox-second-approver-secret-for-tests-0000000000000003",
         )
         sandbox_approval.decide(
             created["approval_id"],
-            approver_key="second-approver-secret",
+            approver_key="sandbox-second-approver-secret-for-tests-0000000000000003",
             decision="approved",
         )
 
@@ -808,11 +1202,12 @@ def test_http_read_and_consume_routes_enforce_requester_ownership(
 ):
     monkeypatch.setenv(
         "AGENT_API_KEYS",
-        f"automation={REQUESTER_KEY},intruder=other-requester-secret",
+        f"automation={REQUESTER_KEY},"
+        "intruder=other-requester-secret-for-tests-00000000000000000003",
     )
     client = TestClient(app)
     owner_headers = {"X-API-Key": REQUESTER_KEY}
-    intruder_headers = {"X-API-Key": "other-requester-secret"}
+    intruder_headers = {"X-API-Key": "other-requester-secret-for-tests-00000000000000000003"}
     created = client.post(
         "/v1/sandbox/approvals",
         json={"scope": scope},
@@ -1220,3 +1615,491 @@ def test_consumption_recovery_rejects_conflicting_terminal_decision_event(
             nonce=nonce,
             scope=scope,
         )
+
+def test_sandbox_approval_fails_closed_when_independent_checkpoint_is_unavailable(
+    authority, scope
+):
+    sandbox_approval._test_checkpoint_store.unavailable = True
+    with pytest.raises(sandbox_approval.SandboxApprovalError, match="Independent sandbox audit"):
+        _create(authority, scope)
+
+
+def test_sandbox_approval_rejects_full_audit_rollback_behind_operator_checkpoint(
+    authority, scope
+):
+    created = _create(authority, scope)
+    checkpoint = audit_checkpoint_store.create_sandbox_audit_checkpoint(
+        "sandbox-contract-test-store"
+    )
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    candidate_key = "audit-checkpoints/sandbox/latest.json"
+    candidate_version_id = "synthetic-candidate-version-2"
+    floor_fields = {
+        "authority", "store_id", "sequence", "head_hash",
+        "legacy_entries", "created_at", "checkpoint_id",
+    }
+    floor = {key: checkpoint[key] for key in floor_fields}
+    floor.update({
+        "candidate_version_id": candidate_version_id,
+        "candidate_checkpoint_id": checkpoint["checkpoint_id"],
+        "candidate_sequence": checkpoint["sequence"],
+        "candidate_head_hash": checkpoint["head_hash"],
+        "candidate_created_at": checkpoint["created_at"],
+    })
+    candidate_payload = json.dumps(checkpoint).encode("utf-8")
+    fake_s3.objects[candidate_key] = candidate_payload
+    fake_s3.version_ids[candidate_key] = candidate_version_id
+    fake_s3.version_objects[candidate_key][candidate_version_id] = candidate_payload
+    fake_s3.objects["audit-checkpoints/sandbox/trusted-floor.json"] = json.dumps(
+        floor
+    ).encode("utf-8")
+
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    audit_path.write_bytes(b"")
+    os.chmod(audit_path, 0o600)
+
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="Independent sandbox audit checkpoint verification failed",
+    ):
+        sandbox_approval.inspect(created["approval_id"], requester="automation")
+
+
+
+def test_sandbox_checkpoint_reads_exact_operator_pinned_s3_version(
+    authority, scope
+):
+    created = _create(authority, scope)
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    candidate_key = "audit-checkpoints/sandbox/latest.json"
+    pinned_version = fake_s3.version_ids[candidate_key]
+
+    # Simulate the mutable latest key being pointed at an older version.
+    # The operator-pinned immutable version remains retrievable by VersionId.
+    fake_s3.objects[candidate_key] = b'{"sequence":0,"head_hash":"'
+    fake_s3.objects[candidate_key] += b'0' * 64 + b'"}'
+    fake_s3.version_ids[candidate_key] = "synthetic-older-current-version"
+
+    inspected = sandbox_approval.inspect(
+        created["approval_id"], requester="automation"
+    )
+    assert inspected["approval_id"] == created["approval_id"]
+    assert fake_s3.version_objects[candidate_key][pinned_version]
+
+
+
+def test_sandbox_checkpoint_rejects_manifest_candidate_content_mismatch(
+    authority, scope
+):
+    created = _create(authority, scope)
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    floor_key = "audit-checkpoints/sandbox/trusted-floor.json"
+    floor = json.loads(fake_s3.objects[floor_key].decode("utf-8"))
+    floor["candidate_head_hash"] = "f" * 64
+    fake_s3.objects[floor_key] = json.dumps(floor).encode("utf-8")
+
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="Independent sandbox audit checkpoint verification failed",
+    ):
+        sandbox_approval.inspect(created["approval_id"], requester="automation")
+
+def test_sandbox_checkpoint_fails_closed_when_pinned_s3_version_is_missing(
+    authority, scope
+):
+    _create(authority, scope)
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    candidate_key = "audit-checkpoints/sandbox/latest.json"
+    fake_s3.version_objects[candidate_key].clear()
+
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="Independent sandbox audit checkpoint verification failed",
+    ):
+        _create(authority, scope)
+
+def test_sandbox_approval_requires_explicit_checkpoint_policy(authority, scope, monkeypatch):
+    monkeypatch.delenv("AGENT_SANDBOX_AUDIT_CHECKPOINT_MAX_AGE_SECONDS")
+    with pytest.raises(sandbox_approval.SandboxApprovalError, match="Independent sandbox audit"):
+        _create(authority, scope)
+
+
+def test_legacy_approval_identity_labels_keep_existing_parser_compatibility(
+    authority, monkeypatch
+):
+    requester_secret = "legacy-requester-secret"
+    approver_secret = "legacy-approver-secret"
+    for identity in ("team reviewer", "-owner", "team/reviewer", "x" * 129):
+        monkeypatch.setenv("AGENT_API_KEYS", f"{identity}={requester_secret}")
+        monkeypatch.setenv("AGENT_APPROVER_KEYS", f"{identity}={approver_secret}")
+        assert auth._configured_approval_requester_keys() == [(identity, requester_secret)]
+        assert auth._configured_approver_keys() == [(identity, approver_secret)]
+        assert auth._configured_sandbox_requester_keys() == []
+        assert auth._configured_sandbox_approver_keys() == []
+
+
+def test_checkpoint_suffix_limit_is_enforced_across_concurrent_creates(
+    authority, scope, monkeypatch
+):
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX", "2")
+    def create_one(index):
+        try:
+            return _create(authority, dict(scope, sandbox_id=f"sbx-{index:016x}"))
+        except sandbox_approval.SandboxApprovalError as exc:
+            return exc
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        outcomes = list(executor.map(create_one, range(12)))
+    created = [item for item in outcomes if isinstance(item, dict)]
+    rejected = [
+        item
+        for item in outcomes
+        if isinstance(item, sandbox_approval.SandboxApprovalError)
+    ]
+    assert len(created) == 2
+    assert len(rejected) == 10
+    assert sandbox_approval.verify_audit_log()["events"] == 2
+    assert all(
+        sandbox_approval._load(item["approval_id"])["audit_status"] == "written"
+        for item in created
+    )
+    # Read-only inspection remains available at the cap; mutations reserve one
+    # additional audit event and are blocked until the operator advances a checkpoint.
+    assert (
+        sandbox_approval.inspect(created[0]["approval_id"], requester="automation")[
+            "status"
+        ]
+        == "pending"
+    )
+
+
+@pytest.mark.parametrize(
+    "operation", ["create", "approve", "deny", "inspect", "decision", "consume"]
+)
+def test_http_lifecycle_routes_fail_closed_without_checkpoint_and_do_not_transition(
+    authority, scope, operation
+):
+    client = TestClient(app)
+    requester_headers = {"X-API-Key": REQUESTER_KEY}
+    approver_headers = {"X-Approver-Key": APPROVER_KEY}
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    if operation == "create":
+        fake_s3.unavailable = True
+        response = client.post(
+            "/v1/sandbox/approvals",
+            json={"scope": scope},
+            headers=requester_headers,
+        )
+        assert response.status_code == 503
+        assert list((authority / "sandbox-approvals").glob("*.json")) == []
+        assert sandbox_approval.verify_audit_log()["events"] == 0
+        return
+    created_response = client.post(
+        "/v1/sandbox/approvals",
+        json={"scope": scope},
+        headers=requester_headers,
+    )
+    assert created_response.status_code == 200
+    approval_id = created_response.json()["approval_id"]
+    if operation in {"approve", "deny"}:
+        fake_s3.unavailable = True
+        response = client.post(
+            f"/v1/sandbox/approvals/{approval_id}/{operation}",
+            headers=approver_headers,
+        )
+        expected_status, expected_events = "pending", 1
+    else:
+        approved = client.post(
+            f"/v1/sandbox/approvals/{approval_id}/approve",
+            headers=approver_headers,
+        )
+        assert approved.status_code == 200
+        receipt = approved.json()["receipt"]
+        fake_s3.unavailable = True
+        expected_status, expected_events = "approved", 2
+        if operation == "inspect":
+            response = client.get(
+                f"/v1/sandbox/approvals/{approval_id}",
+                headers=requester_headers,
+            )
+        elif operation == "decision":
+            response = client.get(
+                f"/v1/sandbox/approvals/{approval_id}/decision",
+                headers=requester_headers,
+            )
+        else:
+            response = client.post(
+                f"/v1/sandbox/approvals/{approval_id}/consume",
+                json={
+                    "request_id": str(uuid.uuid4()),
+                    "nonce": receipt["claims"]["nonce"],
+                    "scope": scope,
+                },
+                headers=requester_headers,
+            )
+    assert response.status_code == 503
+    record = sandbox_approval._load(approval_id)
+    assert record["status"] == expected_status
+    assert record["audit_status"] == "written"
+    assert sandbox_approval.verify_audit_log()["events"] == expected_events
+
+
+def test_checkpoint_is_rechecked_after_per_approval_lock_is_acquired(
+    authority, scope, monkeypatch
+):
+    created = _create(authority, scope)
+    original_locked = sandbox_approval._locked
+    fake_s3 = sandbox_approval._test_checkpoint_store
+    @contextmanager
+    def unavailable_after_lock(path):
+        with original_locked(path):
+            fake_s3.unavailable = True
+            yield
+    monkeypatch.setattr(sandbox_approval, "_locked", unavailable_after_lock)
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="Independent sandbox audit checkpoint verification failed",
+    ):
+        _approve(created)
+    record = sandbox_approval._load(created["approval_id"])
+    assert record["status"] == "pending"
+    assert record["audit_status"] == "written"
+    assert sandbox_approval.verify_audit_log()["events"] == 1
+
+
+def _is_audit_file_descriptor(fd, audit_path):
+    try:
+        return os.fstat(fd).st_ino == audit_path.stat().st_ino
+    except OSError:
+        return False
+
+
+def test_audit_fsync_failure_remains_operator_review_state(authority, scope, monkeypatch):
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    real_fsync = os.fsync
+    def fail_audit_fsync(fd):
+        if _is_audit_file_descriptor(fd, audit_path):
+            raise OSError(errno.EIO, "simulated audit fsync failure")
+        return real_fsync(fd)
+    monkeypatch.setattr(sandbox_approval.os, "fsync", fail_audit_fsync)
+    with pytest.raises(OSError, match="simulated audit fsync failure"):
+        _create(authority, scope)
+    monkeypatch.setattr(sandbox_approval.os, "fsync", real_fsync)
+    approval_id = next(path.stem for path in (authority / "sandbox-approvals").glob("*.json"))
+    record = sandbox_approval._load(approval_id)
+    assert record["status"] == "pending"
+    assert record["audit_status"] == "failed"
+    assert sandbox_approval.verify_audit_log()["events"] == 1
+    with pytest.raises(sandbox_approval.SandboxApprovalError, match="Request audit is incomplete"):
+        sandbox_approval.decide(approval_id, approver_key=APPROVER_KEY, decision="approved")
+
+
+def test_audit_enospc_before_append_remains_operator_review_state(authority, scope, monkeypatch):
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    real_write = os.write
+    def fail_audit_write(fd, data):
+        if _is_audit_file_descriptor(fd, audit_path):
+            raise OSError(errno.ENOSPC, "simulated audit disk full")
+        return real_write(fd, data)
+    monkeypatch.setattr(sandbox_approval.os, "write", fail_audit_write)
+    with pytest.raises(OSError, match="simulated audit disk full"):
+        _create(authority, scope)
+    monkeypatch.setattr(sandbox_approval.os, "write", real_write)
+    approval_id = next(path.stem for path in (authority / "sandbox-approvals").glob("*.json"))
+    record = sandbox_approval._load(approval_id)
+    assert record["audit_status"] == "failed"
+    assert sandbox_approval.verify_audit_log()["events"] == 0
+    with pytest.raises(sandbox_approval.SandboxApprovalError, match="Request audit is incomplete"):
+        sandbox_approval.decide(approval_id, approver_key=APPROVER_KEY, decision="approved")
+
+
+def test_torn_audit_append_is_detected_and_never_reconciled(authority, scope, monkeypatch):
+    audit_path = authority / "sandbox-approvals" / "audit.jsonl"
+    real_write = os.write
+    interrupted = False
+    def write_half_then_enospc(fd, data):
+        nonlocal interrupted
+        if _is_audit_file_descriptor(fd, audit_path) and not interrupted:
+            interrupted = True
+            real_write(fd, data[: max(1, len(data) // 2)])
+            raise OSError(errno.ENOSPC, "simulated disk full during audit append")
+        return real_write(fd, data)
+    monkeypatch.setattr(sandbox_approval.os, "write", write_half_then_enospc)
+    with pytest.raises(OSError, match="simulated disk full during audit append"):
+        _create(authority, scope)
+    monkeypatch.setattr(sandbox_approval.os, "write", real_write)
+    approval_id = next(path.stem for path in (authority / "sandbox-approvals").glob("*.json"))
+    record = sandbox_approval._load(approval_id)
+    assert record["audit_status"] == "failed"
+    with pytest.raises(sandbox_approval.SandboxApprovalError, match="incomplete final record"):
+        sandbox_approval.verify_audit_log()
+    with pytest.raises(sandbox_approval.SandboxApprovalError):
+        sandbox_approval.inspect(approval_id, requester="automation")
+
+
+@pytest.mark.parametrize("transition", ["request", "decision", "consumption"])
+def test_process_exit_before_audit_append_never_reconciles_unproven_state(
+    authority, scope, transition
+):
+    created = None if transition == "request" else _create(authority, scope)
+    nonce = None
+    request_id = None
+    if transition == "consumption":
+        nonce = _approve(created)["receipt"]["claims"]["nonce"]
+        request_id = str(uuid.uuid4())
+
+    script = r"""
+import json
+import os
+import sys
+from stage2_sdk_ai import sandbox_approval
+
+sandbox_approval._verify_independent_audit_checkpoint = lambda **_kwargs: {}
+sandbox_approval._append_audit = lambda *_args, **_kwargs: os._exit(87)
+approval_id, transition = sys.argv[1], sys.argv[2]
+scope = json.loads(os.environ["TEST_APPROVAL_SCOPE"])
+if transition == "request":
+    sandbox_approval.create_request(
+        scope,
+        requester="automation",
+        issuer=os.environ["SANDBOX_APPROVAL_ISSUER"],
+        audience=os.environ["SANDBOX_APPROVAL_AUDIENCE"],
+    )
+elif transition == "decision":
+    sandbox_approval.decide(
+        approval_id,
+        approver_key=os.environ["TEST_APPROVER_KEY"],
+        decision="approved",
+    )
+else:
+    sandbox_approval.consume(
+        approval_id,
+        requester="automation",
+        request_id=os.environ["TEST_REQUEST_ID"],
+        nonce=os.environ["TEST_APPROVAL_NONCE"],
+        scope=scope,
+    )
+"""
+    env = os.environ.copy()
+    env["TEST_APPROVER_KEY"] = APPROVER_KEY
+    env["TEST_REQUEST_ID"] = request_id or ""
+    env["TEST_APPROVAL_NONCE"] = nonce or ""
+    env["TEST_APPROVAL_SCOPE"] = json.dumps(scope)
+    approval_id = created["approval_id"] if created else "created-in-child"
+    result = subprocess.run(
+        [sys.executable, "-c", script, approval_id, transition],
+        cwd=os.getcwd(),
+        env=env,
+        check=False,
+        timeout=20,
+    )
+    assert result.returncode == 87
+
+    if transition == "request":
+        approval_files = list(
+            (authority / "sandbox-approvals").glob("*.json")
+        )
+        assert len(approval_files) == 1
+        approval_id = approval_files[0].stem
+        expected_status = "pending"
+        expected_events = 0
+    elif transition == "decision":
+        expected_status = "approved"
+        expected_events = 1
+    else:
+        expected_status = "consumed"
+        expected_events = 2
+
+    record = sandbox_approval._load(approval_id)
+    assert record["status"] == expected_status
+    assert record["audit_status"] == "pending"
+    reconciled = sandbox_approval._reconcile_pending_audit(approval_id, record)
+    assert reconciled["status"] == expected_status
+    assert reconciled["audit_status"] == "pending"
+    assert sandbox_approval.verify_audit_log()["events"] == expected_events
+
+
+def test_decision_reserves_suffix_capacity_before_changing_record(
+    authority, scope, monkeypatch
+):
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX", "1")
+    created = _create(authority, scope)
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="Independent sandbox audit checkpoint verification failed",
+    ):
+        _approve(created)
+    record = sandbox_approval._load(created["approval_id"])
+    assert record["status"] == "pending"
+    assert record["audit_status"] == "written"
+    assert sandbox_approval.verify_audit_log()["events"] == 1
+
+
+def test_consumption_reserves_suffix_capacity_before_changing_record(
+    authority, scope, monkeypatch
+):
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX", "2")
+    created = _create(authority, scope)
+    nonce = _approve(created)["receipt"]["claims"]["nonce"]
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="Independent sandbox audit checkpoint verification failed",
+    ):
+        sandbox_approval.consume(
+            created["approval_id"],
+            requester="automation",
+            request_id=str(uuid.uuid4()),
+            nonce=nonce,
+            scope=scope,
+        )
+    record = sandbox_approval._load(created["approval_id"])
+    assert record["status"] == "approved"
+    assert record["audit_status"] == "written"
+    assert sandbox_approval.verify_audit_log()["events"] == 2
+
+
+def test_consumption_idempotent_retry_succeeds_at_suffix_cap(
+    authority, scope, monkeypatch
+):
+    monkeypatch.setenv("AGENT_SANDBOX_AUDIT_MAX_UNANCHORED_SUFFIX", "3")
+    created = _create(authority, scope)
+    nonce = _approve(created)["receipt"]["claims"]["nonce"]
+    request_id = str(uuid.uuid4())
+    original = sandbox_approval.consume(
+        created["approval_id"],
+        requester="automation",
+        request_id=request_id,
+        nonce=nonce,
+        scope=scope,
+    )
+    assert sandbox_approval.verify_audit_log()["events"] == 3
+    retried = sandbox_approval.consume(
+        created["approval_id"],
+        requester="automation",
+        request_id=request_id,
+        nonce=nonce,
+        scope=scope,
+    )
+    assert retried == original
+    assert sandbox_approval.verify_audit_log()["events"] == 3
+
+
+def test_create_checkpoint_loss_after_record_lock_leaves_no_empty_record(
+    authority, scope, monkeypatch
+):
+    original_locked = sandbox_approval._locked
+    fake_s3 = sandbox_approval._test_checkpoint_store
+
+    @contextmanager
+    def unavailable_after_lock(path):
+        with original_locked(path):
+            fake_s3.unavailable = True
+            yield
+
+    monkeypatch.setattr(sandbox_approval, "_locked", unavailable_after_lock)
+    with pytest.raises(
+        sandbox_approval.SandboxApprovalError,
+        match="Independent sandbox audit checkpoint verification failed",
+    ):
+        _create(authority, scope)
+    assert list((authority / "sandbox-approvals").glob("*.json")) == []
+    assert sandbox_approval.verify_audit_log()["events"] == 0

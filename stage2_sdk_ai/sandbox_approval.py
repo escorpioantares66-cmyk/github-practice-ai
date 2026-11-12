@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import fcntl
+import functools
 import hashlib
 import json
 import math
@@ -23,6 +24,7 @@ from uuid import UUID
 from . import auth
 from .secure_storage import (
     ensure_private_directory,
+    fsync_directory,
     open_private_file,
     write_text_atomically,
 )
@@ -58,6 +60,28 @@ class SandboxApprovalForbidden(SandboxApprovalConflict):
 
 class SandboxApprovalConfigurationError(SandboxApprovalError):
     pass
+
+
+def _verify_independent_audit_checkpoint(
+    *, reserve_unanchored_events: int = 0
+) -> dict[str, Any]:
+    """Fail closed unless the sandbox audit matches independently retained custody.
+
+    Mutating lifecycle operations reserve one event before their append so the
+    configured suffix limit is never exceeded by the transition being checked.
+    """
+    from .audit_checkpoint_store import verify_sandbox_audit_log_from_s3
+
+    try:
+        return verify_sandbox_audit_log_from_s3(
+            reserve_unanchored_events=reserve_unanchored_events
+        )
+    except Exception as exc:
+        raise SandboxApprovalError(
+            "Independent sandbox audit checkpoint verification failed; "
+            "approval operations are paused for operator review"
+        ) from exc
+
 
 
 def _canonical(value: dict[str, Any]) -> bytes:
@@ -105,6 +129,27 @@ def _locked(path: Path):
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _serialize_checkpoint_policy(operation):
+    """Serialize checkpoint verification and lifecycle transitions on this host.
+
+    The suffix policy is checked against the current audit head. Without one
+    shared lock, concurrent requests for different approval IDs can all pass
+    the same suffix check and collectively append beyond the configured cap.
+    """
+    @functools.wraps(operation)
+    def wrapped(*args, **kwargs):
+        directory = _ensure_store()
+        lock_path = directory / ".checkpoint-policy.lock"
+        fd = open_private_file(lock_path, os.O_RDWR | os.O_CREAT)
+        with os.fdopen(fd, "r+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                return operation(*args, **kwargs)
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    return wrapped
 
 
 def _read_private_text(path: Path) -> str:
@@ -282,6 +327,128 @@ def _events_for(approval_id: str) -> list[dict[str, Any]]:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def _reconcile_pending_audit(
+    approval_id: str, record: dict[str, Any]
+) -> dict[str, Any]:
+    """Complete a record marker only when the durable audit proves the transition.
+
+    The audit append is the commit evidence. A restart may observe the event
+    after the process stopped before saving audit_status="written". Reconcile
+    only an exact, complete lifecycle; missing, conflicting, or corrupt evidence
+    remains fail-closed for operator review.
+    """
+    # Explicit write failures remain operator-review states. Only a process
+    # interruption that left the marker pending may be reconciled from a
+    # complete durable event; a caught fsync/write error is never auto-cleared.
+    if record.get("audit_status") != "pending":
+        return record
+
+    events = _events_for(approval_id)
+    if not events:
+        return record
+
+    scope_hash = hashlib.sha256(_canonical(record["scope"])).hexdigest()
+    if (
+        events[0].get("action") != "request_created"
+        or events[0].get("actor") != record.get("requester")
+        or events[0].get("details")
+        != {
+            "nonce": record.get("nonce"),
+            "created_at": record.get("created_at"),
+            "expires_at": record.get("expires_at"),
+            "issuer": record.get("issuer"),
+            "audience": record.get("audience"),
+        }
+        or any(event.get("scope_sha256") != scope_hash for event in events)
+    ):
+        return record
+
+    status = record.get("status")
+    actions = [event.get("action") for event in events]
+    if status == "pending":
+        valid = actions == ["request_created"]
+    elif status in {"approved", "denied", "expired"}:
+        valid = actions == ["request_created", status]
+        if valid:
+            event = events[1]
+            if status == "expired":
+                valid = (
+                    event.get("actor") == "system"
+                    and isinstance(event.get("time"), (int, float))
+                    and event.get("time") >= record.get("expires_at", float("inf"))
+                )
+            else:
+                valid = event.get("actor") == record.get("approver")
+            if status in {"approved", "denied"}:
+                event_time = event.get("time")
+                created_at = record.get("created_at")
+                expires_at = record.get("expires_at")
+                valid = (
+                    valid
+                    and isinstance(event_time, (int, float))
+                    and math.isfinite(event_time)
+                    and isinstance(created_at, (int, float))
+                    and math.isfinite(created_at)
+                    and isinstance(expires_at, (int, float))
+                    and math.isfinite(expires_at)
+                    and created_at <= event_time < expires_at
+                )
+            if status == "approved":
+                valid = valid and event.get("details", {}).get(
+                    "receipt"
+                ) == record.get("receipt") and _receipt_matches_record(
+                    record, now=event.get("time")
+                )
+            elif status == "denied":
+                valid = valid and record.get("receipt") is None
+    elif status == "consumed":
+        valid = actions == ["request_created", "approved", "consumed"]
+        if valid:
+            decision_event, consumed_event = events[1], events[2]
+            consumption = record.get("consumption") or {}
+            details = consumed_event.get("details", {})
+            decision_time = decision_event.get("time")
+            consumed_time = consumed_event.get("time")
+            created_at = record.get("created_at")
+            expires_at = record.get("expires_at")
+            expected_outcome = {
+                "approval_id": approval_id,
+                "status": "consumed",
+                "request_id": consumption.get("request_id"),
+                "payload_sha256": consumption.get("payload_sha256"),
+            }
+            valid = (
+                decision_event.get("actor") == record.get("approver")
+                and decision_event.get("details", {}).get("receipt")
+                == record.get("receipt")
+                and consumed_event.get("actor") == record.get("requester")
+                and details.get("request_id") == consumption.get("request_id")
+                and details.get("payload_sha256")
+                == consumption.get("payload_sha256")
+                and details.get("outcome") == expected_outcome
+                and consumption.get("outcome") == expected_outcome
+                and consumed_time == consumption.get("consumed_at")
+                and isinstance(decision_time, (int, float))
+                and math.isfinite(decision_time)
+                and isinstance(consumed_time, (int, float))
+                and math.isfinite(consumed_time)
+                and isinstance(created_at, (int, float))
+                and math.isfinite(created_at)
+                and isinstance(expires_at, (int, float))
+                and math.isfinite(expires_at)
+                and created_at <= decision_time <= consumed_time < expires_at
+                and decision_event.get("seq") < consumed_event.get("seq")
+                and _receipt_matches_record(record, now=consumed_time)
+            )
+    else:
+        valid = False
+
+    if valid:
+        record["audit_status"] = "written"
+        _save(approval_id, record)
+    return record
+
+
 def verify_audit_log(
     expected_checkpoint: dict[str, Any] | None = None,
     *,
@@ -380,9 +547,15 @@ def _append_audit(
             encoded = (
                 json.dumps(entry, sort_keys=True, separators=(",", ":")) + "\n"
             ).encode("ascii")
-            fd = open_private_file(
-                audit_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND
-            )
+            created = False
+            try:
+                fd = open_private_file(audit_path, os.O_WRONLY | os.O_APPEND)
+            except FileNotFoundError:
+                fd = open_private_file(
+                    audit_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND,
+                )
+                created = True
             with os.fdopen(fd, "ab") as audit_handle:
                 view = memoryview(encoded)
                 while view:
@@ -391,6 +564,8 @@ def _append_audit(
                         raise OSError("sandbox audit append made no progress")
                     view = view[written:]
                 os.fsync(audit_handle.fileno())
+            if created:
+                fsync_directory(directory)
         finally:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
@@ -511,6 +686,7 @@ def verify_receipt(
             or not claims["requester"].strip()
             or not isinstance(claims["approver"], str)
             or not claims["approver"].strip()
+            or claims["requester"] == claims["approver"]
             or not _ID_RE.fullmatch(claims["approval_id"])
             or not _NONCE_RE.fullmatch(claims["nonce"])
         ):
@@ -561,6 +737,7 @@ def _receipt_matches_record(
     return receipt.get("claims") == _claims(record)
 
 
+@_serialize_checkpoint_policy
 def create_request(
     scope: dict[str, Any],
     *,
@@ -578,6 +755,7 @@ def create_request(
         raise SandboxApprovalConfigurationError("Invalid approval audience")
     validated_scope = _validate_scope(scope)
     _validate_signing_configuration()
+    _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
     _ensure_store()
     created = time.time() if now is None else now
     approval_id = None
@@ -611,9 +789,30 @@ def create_request(
         "audit_status": "pending",
     }
     with _locked(_record_path(approval_id)):
+        try:
+            _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
+        except Exception:
+            try:
+                _record_path(approval_id).unlink()
+            except OSError:
+                pass
+            raise
         _save(approval_id, record)
         try:
-            _append_audit(approval_id, "request_created", requester, validated_scope, created)
+            _append_audit(
+                approval_id,
+                "request_created",
+                requester,
+                validated_scope,
+                created,
+                details={
+                    "nonce": record["nonce"],
+                    "created_at": record["created_at"],
+                    "expires_at": record["expires_at"],
+                    "issuer": issuer,
+                    "audience": audience,
+                },
+            )
         except Exception:
             record["audit_status"] = "failed"
             try:
@@ -631,6 +830,7 @@ def create_request(
     }
 
 
+@_serialize_checkpoint_policy
 def decide(
     approval_id: str,
     *,
@@ -639,10 +839,10 @@ def decide(
     now: float | None = None,
 ) -> dict[str, Any]:
     """Record one decision after independently authenticating the approver."""
-    if not auth.verify_approver_key(approver_key):
+    if not auth.verify_sandbox_approver_key(approver_key):
         raise SandboxApprovalForbidden("Configured approver credentials are required")
     try:
-        approver = auth.approver_identity(approver_key)
+        approver = auth.sandbox_approver_identity(approver_key)
     except ValueError as exc:
         raise SandboxApprovalForbidden(
             "Configured approver identity is unavailable"
@@ -651,7 +851,10 @@ def decide(
         raise SandboxApprovalError("Invalid decision")
     path = _record_path(approval_id)
     with _locked(path):
-        record = _load(approval_id)
+        _verify_independent_audit_checkpoint()
+        record = _reconcile_pending_audit(
+            approval_id, _load(approval_id)
+        )
         current = time.time() if now is None else now
         if record.get("audit_status") != "written":
             raise SandboxApprovalError("Request audit is incomplete; operator review required")
@@ -661,6 +864,14 @@ def decide(
             not events
             or events[0].get("action") != "request_created"
             or events[0].get("actor") != record["requester"]
+            or events[0].get("details")
+            != {
+                "nonce": record.get("nonce"),
+                "created_at": record.get("created_at"),
+                "expires_at": record.get("expires_at"),
+                "issuer": record.get("issuer"),
+                "audience": record.get("audience"),
+            }
             or events[0].get("scope_sha256") != expected_scope_hash
             or any(event.get("scope_sha256") != expected_scope_hash for event in events)
         ):
@@ -676,6 +887,7 @@ def decide(
             record["created_at"] > current + MAX_CLOCK_SKEW_SECONDS
             or record["expires_at"] <= current
         ):
+            _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
             record["status"] = "expired"
             record["decision"] = "expired"
             record["audit_status"] = "pending"
@@ -686,6 +898,7 @@ def decide(
             raise SandboxApprovalConflict("Approval request expired")
         if approver == record["requester"]:
             raise SandboxApprovalForbidden("Self-approval is forbidden")
+        _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
         record["approver"] = approver
         record["decision"] = decision
         record["status"] = decision
@@ -719,8 +932,13 @@ def decide(
         }
 
 
+@_serialize_checkpoint_policy
 def get_decision(approval_id: str, *, requester: str) -> dict[str, Any]:
-    record = _load(approval_id)
+    with _locked(_record_path(approval_id)):
+        _verify_independent_audit_checkpoint()
+        record = _reconcile_pending_audit(
+            approval_id, _load(approval_id)
+        )
     if record.get("requester") != requester:
         raise SandboxApprovalForbidden("Approval belongs to another requester")
     if (
@@ -735,8 +953,13 @@ def get_decision(approval_id: str, *, requester: str) -> dict[str, Any]:
     return record["receipt"]
 
 
+@_serialize_checkpoint_policy
 def inspect(approval_id: str, *, requester: str) -> dict[str, Any]:
-    record = _load(approval_id)
+    with _locked(_record_path(approval_id)):
+        _verify_independent_audit_checkpoint()
+        record = _reconcile_pending_audit(
+            approval_id, _load(approval_id)
+        )
     if record.get("requester") != requester:
         raise SandboxApprovalForbidden("Approval belongs to another requester")
     events = _events_for(approval_id)
@@ -756,6 +979,7 @@ def inspect(approval_id: str, *, requester: str) -> dict[str, Any]:
     }
 
 
+@_serialize_checkpoint_policy
 def consume(
     approval_id: str,
     *,
@@ -785,7 +1009,10 @@ def consume(
     ).hexdigest()
     path = _record_path(approval_id)
     with _locked(path):
-        record = _load(approval_id)
+        _verify_independent_audit_checkpoint()
+        record = _reconcile_pending_audit(
+            approval_id, _load(approval_id)
+        )
         if record.get("requester") != requester:
             raise SandboxApprovalForbidden("Approval belongs to another requester")
         if not secrets.compare_digest(record.get("nonce", ""), nonce):
@@ -796,6 +1023,14 @@ def consume(
             not events
             or events[0].get("action") != "request_created"
             or events[0].get("actor") != record["requester"]
+            or events[0].get("details")
+            != {
+                "nonce": record.get("nonce"),
+                "created_at": record.get("created_at"),
+                "expires_at": record.get("expires_at"),
+                "issuer": record.get("issuer"),
+                "audience": record.get("audience"),
+            }
             or events[0].get("scope_sha256") != expected_scope_hash
             or any(event.get("scope_sha256") != expected_scope_hash for event in events)
         ):
@@ -925,6 +1160,7 @@ def consume(
             "request_id": normalized_request_id,
             "payload_sha256": fingerprint,
         }
+        _verify_independent_audit_checkpoint(reserve_unanchored_events=1)
         record["status"] = "consumed"
         record["audit_status"] = "pending"
         record["consumption"] = {
