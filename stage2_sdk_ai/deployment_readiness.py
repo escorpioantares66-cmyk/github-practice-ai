@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import importlib.util
 import os
-from pathlib import Path
 from typing import Any
+
+from stage2_sdk_ai.storage_paths import data_root
 
 REQUIRED_APPROVAL_ENV = (
     "AGENT_API_KEYS",
@@ -24,28 +25,31 @@ REQUIRED_APPROVAL_ENV = (
 )
 
 
+def persistent_storage_ready() -> bool:
+    """Check that the configured persistent data root is safe and available."""
+    raw_root = os.getenv("APP_DATA_DIR", "").strip()
+    if not raw_root:
+        return False
+    try:
+        root = data_root()
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return (
+        root.is_dir()
+        and not root.is_symlink()
+        and os.access(root, os.W_OK | os.X_OK)
+    )
+
+
 def readiness_report() -> dict[str, Any]:
     """Report missing deployment prerequisites without exposing secret values."""
-    raw_root = os.getenv("APP_DATA_DIR", "").strip()
-    root_ok = False
-    if raw_root:
-        root = Path(raw_root).expanduser()
-        root_ok = (
-            root.is_absolute()
-            and root.is_dir()
-            and not root.is_symlink()
-            and os.access(root, os.W_OK | os.X_OK)
-        )
-        if root_ok and os.getenv("APP_REQUIRE_MOUNTED_DATA_DIR", "").lower() == "true":
-            root_ok = os.path.ismount(root)
-
     missing = [key for key in REQUIRED_APPROVAL_ENV if not os.getenv(key, "").strip()]
     if not (os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")):
         missing.append("AWS_REGION")
     boto3_available = importlib.util.find_spec("boto3") is not None
 
     checks = {
-        "persistent_data_directory": root_ok,
+        "persistent_data_directory": persistent_storage_ready(),
         "approval_configuration": not missing,
         "s3_client_dependency": boto3_available,
     }
