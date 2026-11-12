@@ -20,13 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      TARGET_SHA: 614a81557afa01d1869856c3c309e7d17404b9db
+      TARGET_SHA: ${{ github.sha }}
       IMAGE_NAME: github-practice-ai:render-readiness-exact-sha
     steps:
       - name: Checkout the immutable target revision
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 614a81557afa01d1869856c3c309e7d17404b9db
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Verify exact revision and clean checkout
@@ -102,14 +102,15 @@ jobs:
         shell: bash
         run: |
           {
-            echo "## Exact-SHA Render Readiness Evidence"
-            echo
-            echo "- Target source SHA: `$TARGET_SHA`"
-            echo "- Workflow revision: `$GITHUB_SHA`"
-            echo "- Repository: `$GITHUB_REPOSITORY`"
-            echo "- Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            echo
-            echo "The job checks out the fixed target SHA, runs the full test suite and Ruff, builds the Docker image, and verifies the startup process identity and persistent-root permissions inside that image."
-            echo
-            echo "No deployment, cloud provisioning, production credentials, or repository write permissions are used."
+            printf '%s\\n' \
+              "## Exact-SHA Render Readiness Evidence" \
+              "" \
+              "- Target source SHA: \`$TARGET_SHA\`" \
+              "- Workflow revision: \`$GITHUB_SHA\`" \
+              "- Repository: \`$GITHUB_REPOSITORY\`" \
+              "- Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              "" \
+              "The job checks out the exact SHA associated with this push event, runs Ruff and the full test suite, builds the Docker image, and verifies startup identity and persistent-root permissions inside that image." \
+              "" \
+              "No deployment, cloud provisioning, production credentials, or repository write permissions are used."
           } >> "$GITHUB_STEP_SUMMARY"
