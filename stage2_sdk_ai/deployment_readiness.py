@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from pathlib import Path
 from typing import Any
 
 from stage2_sdk_ai.storage_paths import data_root
@@ -10,6 +11,7 @@ from stage2_sdk_ai.storage_paths import data_root
 REQUIRED_APPROVAL_ENV = (
     "AGENT_API_KEYS",
     "AGENT_APPROVER_KEYS",
+    "OPENAI_API_KEY",
     "SANDBOX_APPROVAL_ACTIVE_KID",
     "SANDBOX_APPROVAL_SIGNING_PRIVATE_KEY",
     "SANDBOX_APPROVAL_VERIFY_KEYS",
@@ -41,6 +43,22 @@ def persistent_storage_ready() -> bool:
     )
 
 
+def _path_is_within_data_root(raw_path: str) -> bool:
+    """Require configured durable stores to resolve beneath the persistent root."""
+    raw_root = os.getenv("APP_DATA_DIR", "").strip()
+    if not raw_root or not raw_path.strip():
+        return False
+    try:
+        root = Path(raw_root).expanduser().resolve(strict=True)
+        target = Path(raw_path).expanduser()
+        if not target.is_absolute():
+            return False
+        resolved = target.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return resolved != root and root in resolved.parents
+
+
 def readiness_report() -> dict[str, Any]:
     """Report missing deployment prerequisites without exposing secret values."""
     missing = [key for key in REQUIRED_APPROVAL_ENV if not os.getenv(key, "").strip()]
@@ -52,6 +70,12 @@ def readiness_report() -> dict[str, Any]:
         "persistent_data_directory": bool(os.getenv("APP_DATA_DIR", "").strip())
         and persistent_storage_ready(),
         "approval_configuration": not missing,
+        "sandbox_store_within_persistent_data": _path_is_within_data_root(
+            os.getenv("SANDBOX_APPROVALS_DIR", "")
+        ),
+        "quota_database_within_persistent_data": _path_is_within_data_root(
+            os.getenv("AGENT_QUOTA_DB_PATH", "")
+        ),
         "s3_client_dependency": boto3_available,
     }
     ready = all(checks.values())
