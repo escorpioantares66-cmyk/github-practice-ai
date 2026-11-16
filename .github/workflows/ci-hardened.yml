@@ -140,7 +140,7 @@ jobs:
           test ! -e "$original_root/nested-build"
       - name: Upload reproducible SDK assessment evidence
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: sdk-3.46.0-evidence-python-${{ matrix.python-version }}
           path: artifacts/sdk-3.46.0/
