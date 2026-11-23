@@ -10,7 +10,7 @@
 
 ## 1. Role and authority
 
-`github-practice-ai` is the ecosystem's **Central Approval Authority**. It independently authenticates the requester and Founder approver, evaluates the approval decision within the configured approval policy, issues verifiable signed approval evidence and maintains the authoritative approval validity/revocation state.
+`github-practice-ai` is the ecosystem's **Central Approval Authority**. Its current v1 implementation authenticates named requester and approver credentials for the narrow sandbox workflow; those configured labels do not establish natural-person identity or MFA. The broader Founder-authentication ceremony, company-action policy evaluation, and company-wide approval validity/revocation service described in this contract are future v2 capabilities, not claims about the current v1 implementation.
 
 It is not the Boss, business registry, identity root, general policy/capability enforcement plane, execution dispatcher, provider adapter or Delta.
 
