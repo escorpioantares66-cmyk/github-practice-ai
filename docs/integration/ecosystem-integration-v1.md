@@ -55,7 +55,7 @@ The authority derives principal and company/business context from the verified a
 
 Required identity context:
 - stable principal ID and type (`human` or `service`);
-- `company_id` and `business_id` where applicable;
+- `company_id`, mandatory ASP `tenant_id`, and `business_id` where applicable;
 - `agent_id` for service/agent principals;
 - credential ID, token ID/JTI, issuer, audience and bounded validity;
 - current authorization/approver eligibility resolved by the authority.
@@ -67,7 +67,7 @@ The current v1 API continues to use its named requester/approver credentials. Do
 ### 4.2 Canonical approval scope
 
 A company-action approval request must bind:
-- `company_id`, `business_id`;
+- `company_id`, `tenant_id`, `business_id`;
 - authenticated requester principal/type and requesting agent/service identity;
 - `task_id`, `plan_id` and delegation reference;
 - action identifier and canonical resource identity;
@@ -78,7 +78,7 @@ A company-action approval request must bind:
 
 Any change to principal, business, agent, action, resource, material parameter, canonical payload digest, policy version or intended audience requires a new approval. A caller-provided digest is not a substitute for server-side canonicalization.
 
-No `tenant_id` is mandated by this v1 ecosystem contract. The tenant-scoped ADR proposed on PR #52 and the Second Brain SaaS ADR proposed on PR #20 are not accepted decisions. If a customer-tenant model is later approved, it must be added through a new versioned contract and isolation review.
+The ASP security `tenant_id` is mandatory in company-action v2 because it is part of the ASP typed scope and AUTH-10 tenant registry. V1 has one Founder-controlled company tenant; this does not imply a customer-facing multi-tenant SaaS product. GAI PR #52's proposed tenant-scoped persistence/service architecture and Second Brain PR #20's proposed independently owned customer tenants remain unaccepted; this contract does not accept their proposed storage topology or delivery model.
 
 ### 4.3 Logical operations
 
@@ -152,7 +152,7 @@ For v1 sandbox approvals, preserve existing local hash-chain and external checkp
 | Boss maturity | Treat Second Brain as requester/coordinator only; do not assume task proposals are executable or approved. |
 | Delta | Accept independent findings/containment status as inputs; cannot approve. ASP enforces interrupt. No Delta repo was visible. |
 | Identity | ASP is the identity issuer; GAI verifies v2 assertions. Existing v1 named credentials remain unchanged. |
-| Risk | Enforce the ASP-selected risk/policy version; never lower risk based on caller claims. |
+| Risk | Enforce the ASP-selected risk/policy version, including the ASP R0–R3 semantics; never lower risk based on caller claims. |
 | GOA | ASP GOA owns v2 canonical consumption with dispatch start; preserve the narrow v1 consume route for the sandbox API. |
 | Transport/deployment | Logical contract is transport-neutral; no new hosting or multi-host assumption. |
 
