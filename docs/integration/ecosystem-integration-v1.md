@@ -72,8 +72,8 @@ A company-action approval request must bind:
 - `task_id`, `plan_id` and delegation reference;
 - action identifier and canonical resource identity;
 - exact canonical payload digest, derived/verified by the authority from validated content;
-- policy version selected by the authoritative policy service;
-- risk tier, required Founder approver eligibility/limit and any resource envelope;
+- the policy decision reference and version selected by the ASP Authorization Authority;
+- the ASP-resolved risk tier, required Founder approver eligibility/limit and resource envelope;
 - approval ID, unpredictable nonce, issuer, intended enforcement audience, issue time and expiry.
 
 Any change to principal, business, agent, action, resource, material parameter, canonical payload digest, policy version or intended audience requires a new approval. A caller-provided digest is not a substitute for server-side canonicalization.
@@ -102,7 +102,13 @@ If ticket verification, current policy, containment, GOA state or the commit out
 
 ## 5. Approval decision policy boundary
 
-GAI checks approver eligibility, separation of duties, exact action/resource scope, limits, expiry and current approval policy. ASP remains authoritative for identity lifecycle, agent capabilities, business status, action admission and execution enforcement.
+For company-action v2, **ASP is the policy authority; GAI is the approval decision authority.** ASP's Authorization Authority resolves the applicable policy version, classifies the operation's risk, determines whether Founder approval is required, and supplies the authoritative approval requirements and resource/limit envelope. GAI must not author, select, version, or weaken that policy.
+
+Using authenticated, integrity-protected policy context supplied by ASP, GAI performs the approval-specific checks within AUTH-03: independently authenticates the Founder approver under the required ceremony, enforces requester/approver separation, confirms the approver satisfies the supplied eligibility and limit requirements, and binds the decision/ticket to the exact canonical action and scope. GAI may reject an incomplete, stale, contradictory, or unverifiable policy context; it must not substitute a locally chosen policy or silently reinterpret the risk tier.
+
+ASP remains authoritative for identity lifecycle, agent capabilities, business status, policy selection and evaluation, action admission, execution enforcement, and GOA dispatch ordering. A valid GAI approval is necessary where policy requires it, but is never an ASP admission decision or execution capability.
+
+This v2 division is a target integration contract, not a claim that the current sandbox v1 API consumes ASP policy context. V1 retains its existing named requester/approver credential and narrow prepare_pull_request workflow unchanged.
 
 GAI must not:
 - let the Boss approve its own action;
@@ -152,7 +158,7 @@ For v1 sandbox approvals, preserve existing local hash-chain and external checkp
 | Boss maturity | Treat Second Brain as requester/coordinator only; do not assume task proposals are executable or approved. |
 | Delta | Accept independent findings/containment status as inputs; cannot approve. ASP enforces interrupt. No Delta repo was visible. |
 | Identity | ASP is the identity issuer; GAI verifies v2 assertions. Existing v1 named credentials remain unchanged. |
-| Risk | Enforce the ASP-selected risk/policy version, including the ASP R0–R3 semantics; never lower risk based on caller claims. |
+| Risk and policy | ASP selects and versions policy, classifies risk and supplies approval requirements; GAI applies AUTH-03 approver authentication/separation and exact-scope decision checks against that authenticated context. Neither may redefine the other's authority. |
 | GOA | ASP GOA owns v2 canonical consumption with dispatch start; preserve the narrow v1 consume route for the sandbox API. |
 | Transport/deployment | Logical contract is transport-neutral; no new hosting or multi-host assumption. |
 
